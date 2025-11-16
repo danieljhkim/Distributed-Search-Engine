@@ -4,10 +4,10 @@ import com.dk.search.common.model.SearchDocument;
 import com.dk.search.indexnode.index.IndexManager;
 import com.dk.search.indexnode.index.ShardIndex;
 import com.dk.search.proto.index.*;
-import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -42,11 +42,7 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
             responseObserver.onCompleted();
         } catch (IOException e) {
             LOGGER.log(Level.SEVERE, "IndexDocument failed", e);
-            responseObserver.onError(
-                    Status.INTERNAL
-                            .withDescription("IndexDocument failed: " + e.getMessage())
-                            .asRuntimeException()
-            );
+            throw new UncheckedIOException(e);
         }
     }
 
@@ -91,11 +87,7 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
             responseObserver.onCompleted();
         } catch (IOException e) {
             LOGGER.log(Level.SEVERE, "DeleteDocument failed", e);
-            responseObserver.onError(
-                    Status.INTERNAL
-                            .withDescription("DeleteDocument failed: " + e.getMessage())
-                            .asRuntimeException()
-            );
+            throw new UncheckedIOException(e);
         }
     }
 
