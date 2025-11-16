@@ -9,6 +9,8 @@ message QueryRequest {
   string query_string = 1;
   repeated int32 shard_ids = 2;   // which shards to search
   int32 top_k = 3;
+  int32 page = 4;
+  int32 size = 5;
 }
 
 message SearchHit {
@@ -20,6 +22,8 @@ message QueryResponse {
   repeated SearchHit hits = 1;
   int64 total_hits = 2;
   int64 took_millis = 3;
+  int32 page = 4;
+  int32 size = 5;
 }
 
 service QueryService {

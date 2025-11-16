@@ -18,8 +18,14 @@ public class SearchRequestDto {
 
     private List<Integer> shardIds;
 
-    @Min(value = 0, message = "topk must be >= 0")
-    private int topK = 0;
+    @Min(value = 1, message = "topK must be > 0")
+    private int topK = 30;
+
+    @Min(value = 0, message = "page must be >= 0")
+    private int page = 0;
+
+    @Min(value = 1, message = "pageSize must be > 0")
+    private int pageSize = 10;
 
     public SearchRequestDto() {
     }

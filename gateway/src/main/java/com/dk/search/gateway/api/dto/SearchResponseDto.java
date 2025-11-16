@@ -12,6 +12,8 @@ public class SearchResponseDto {
     private List<SearchHitDto> hits;
     private long totalHits;
     private long tookMillis;
+    private int page;
+    private int pageSize;
 
     public SearchResponseDto() {
     }
@@ -20,6 +22,16 @@ public class SearchResponseDto {
         this.hits = hits;
         this.totalHits = totalHits;
         this.tookMillis = tookMillis;
+        this.page = 0;
+        this.pageSize = hits.size();
+    }
+
+    public SearchResponseDto(List<SearchHitDto> hits, long totalHits, long tookMillis, int page) {
+        this.hits = hits;
+        this.totalHits = totalHits;
+        this.tookMillis = tookMillis;
+        this.page = page;
+        this.pageSize = hits.size();
     }
 
     @Setter

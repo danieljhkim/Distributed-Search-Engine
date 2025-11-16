@@ -24,7 +24,9 @@ public class GatewaySearchService {
     public SearchResponseDto search(SearchRequestDto request) {
         QueryRequest.Builder grpcReqBuilder = QueryRequest.newBuilder()
                 .setQueryString(request.getQuery())
-                .setTopK(request.getTopK());
+                .setTopK(request.getTopK())
+                .setPage(request.getPage())
+                .setSize(request.getPageSize());
 
         grpcReqBuilder.addAllShardIds(request.getShardIds() != null ? request.getShardIds() : Collections.emptyList());
         QueryResponse grpcResp = queryStub.search(grpcReqBuilder.build());
@@ -37,7 +39,8 @@ public class GatewaySearchService {
         return new SearchResponseDto(
                 hits,
                 grpcResp.getTotalHits(),
-                grpcResp.getTookMillis()
+                grpcResp.getTookMillis(),
+                grpcResp.getPage()
         );
     }
 }

@@ -1,5 +1,6 @@
 package com.dk.search.querynode.grpc;
 
+import com.dk.search.common.exception.ParseGoneWrongException;
 import com.dk.search.common.model.SearchResult;
 import com.dk.search.proto.query.QueryRequest;
 import com.dk.search.proto.query.QueryResponse;
@@ -9,8 +10,6 @@ import com.dk.search.querynode.search.SearchExecutor;
 import io.grpc.stub.StreamObserver;
 import org.apache.lucene.queryparser.classic.ParseException;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -30,15 +29,17 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
         String queryString = request.getQueryString();
         List<Integer> shardIds = request.getShardIdsList();
         int topK = request.getTopK() > 0 ? request.getTopK() : 10;
-
+        int page = request.getPage();
+        int size = request.getSize();
         try {
-            SearchResult result = searchExecutor.search(queryString, shardIds, topK);
-
+            SearchResult result = searchExecutor.search(queryString, shardIds, page, size, topK);
             QueryResponse.Builder respBuilder = QueryResponse.newBuilder()
                     .setTotalHits(result.getTotalHits())
-                    .setTookMillis(result.getTookMillis());
+                    .setTookMillis(result.getTookMillis())
+                    .setPage(page)
+                    .setSize(size);
 
-            for (SearchResult.SearchHit hit : result.getHits()) {
+            for (com.dk.search.common.model.SearchHit hit : result.getHits()) {
                 SearchHit protoHit = SearchHit.newBuilder()
                         .setDocId(hit.getDocId())
                         .setScore(hit.getScore())
@@ -48,11 +49,9 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
 
             responseObserver.onNext(respBuilder.build());
             responseObserver.onCompleted();
-        } catch (IOException e) {
-            LOGGER.log(Level.SEVERE, "Search failed", e);
-            throw new UncheckedIOException(e);
         } catch (ParseException e) {
-            throw new RuntimeException(e);
+            LOGGER.log(Level.WARNING, "Failed to parse query: " + queryString, e);
+            throw new ParseGoneWrongException("Failed to parse query: " + queryString, e);
         }
     }
 }
