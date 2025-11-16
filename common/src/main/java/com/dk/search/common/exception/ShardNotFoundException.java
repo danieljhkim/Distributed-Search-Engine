@@ -1,27 +1,15 @@
 package com.dk.search.common.exception;
 
-public class ShardNotFoundException extends RuntimeException {
+public class ShardNotFoundException extends ServiceException {
 
-    Integer shardId;
+    private final String shardId;
 
-    public ShardNotFoundException() {
-        super("Shard not found.");
-    }
-
-    public ShardNotFoundException(String message) {
-        super(message);
-    }
-
-    public ShardNotFoundException(String message, Integer shardId) {
-        super(message);
+    public ShardNotFoundException(String shardId) {
+        super("Shard not found: " + shardId);
         this.shardId = shardId;
     }
 
-    public ShardNotFoundException(String message, Throwable cause) {
-        super(message, cause);
-    }
-
-    public ShardNotFoundException(Throwable cause) {
-        super(cause);
+    public String getShardId() {
+        return shardId;
     }
 }

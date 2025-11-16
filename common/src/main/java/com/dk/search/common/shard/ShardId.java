@@ -3,6 +3,8 @@ package com.dk.search.common.shard;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.util.Objects;
+
 @Setter
 @Getter
 public class ShardId {
@@ -26,7 +28,7 @@ public class ShardId {
 
         ShardId shardId = (ShardId) o;
 
-        return id != null ? id.equals(shardId.id) : shardId.id == null;
+        return Objects.equals(id, shardId.id);
     }
 
     @Override

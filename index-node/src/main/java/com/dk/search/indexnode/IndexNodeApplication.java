@@ -34,7 +34,7 @@ public class IndexNodeApplication {
             }
         }));
 
-        indexNodeServer.start();
         LOGGER.info("IndexNode gRPC server started on port " + port + ", baseDir=" + baseDir);
+        indexNodeServer.start();
     }
 }

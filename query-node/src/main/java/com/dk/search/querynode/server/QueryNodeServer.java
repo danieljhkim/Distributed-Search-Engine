@@ -1,8 +1,8 @@
-package com.dk.search.indexnode.server;
+package com.dk.search.querynode.server;
 
 import com.dk.search.common.grpc.GlobalExceptionInterceptor;
-import com.dk.search.indexnode.grpc.IndexServiceImpl;
-import com.dk.search.indexnode.index.IndexManager;
+import com.dk.search.querynode.grpc.QueryServiceImpl;
+import com.dk.search.querynode.search.SearchExecutor;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import io.grpc.ServerInterceptors;
@@ -10,13 +10,13 @@ import io.grpc.ServerServiceDefinition;
 
 import java.io.IOException;
 
-public class IndexNodeServer {
+public class QueryNodeServer {
 
     private final Server server;
 
-    public IndexNodeServer(int port, IndexManager indexManager) {
-        IndexServiceImpl indexService = new IndexServiceImpl(indexManager);
-        ServerServiceDefinition interceptedService = ServerInterceptors.intercept(indexService, new GlobalExceptionInterceptor());
+    public QueryNodeServer(int port, SearchExecutor searchExecutor) {
+        QueryServiceImpl queryService = new QueryServiceImpl(searchExecutor);
+        ServerServiceDefinition interceptedService = ServerInterceptors.intercept(queryService, new GlobalExceptionInterceptor());
 
         this.server = ServerBuilder
                 .forPort(port)

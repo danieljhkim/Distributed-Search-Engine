@@ -6,10 +6,11 @@ import com.dk.search.proto.query.QueryResponse;
 import com.dk.search.proto.query.QueryServiceGrpc;
 import com.dk.search.proto.query.SearchHit;
 import com.dk.search.querynode.search.SearchExecutor;
-import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
+import org.apache.lucene.queryparser.classic.ParseException;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -49,18 +50,9 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
             responseObserver.onCompleted();
         } catch (IOException e) {
             LOGGER.log(Level.SEVERE, "Search failed", e);
-            responseObserver.onError(
-                    Status.INTERNAL
-                            .withDescription("Search failed: " + e.getMessage())
-                            .asRuntimeException()
-            );
-        } catch (Exception e) {
-            LOGGER.log(Level.SEVERE, "Unexpected error during search", e);
-            responseObserver.onError(
-                    Status.UNKNOWN
-                            .withDescription("Unexpected error: " + e.getMessage())
-                            .asRuntimeException()
-            );
+            throw new UncheckedIOException(e);
+        } catch (ParseException e) {
+            throw new RuntimeException(e);
         }
     }
 }
