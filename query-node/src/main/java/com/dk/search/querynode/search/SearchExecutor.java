@@ -13,17 +13,19 @@ import org.apache.lucene.search.TopDocs;
 import java.io.Closeable;
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class SearchExecutor implements Closeable {
 
-    private final Path baseDir;
-    private final Map<Integer, ShardSearcher> shardSearcherMap = new ConcurrentHashMap<>();
-
     // For simplicity, assume queries search across these fields
     // (these should match the fields you index in Lucene)
-    private static final String[] DEFAULT_SEARCH_FIELDS = new String[] {"title", "body", "content"};
+    private static final String[] DEFAULT_SEARCH_FIELDS = new String[]{"title", "body", "content"};
+    private final Path baseDir;
+    private final Map<Integer, ShardSearcher> shardSearcherMap = new ConcurrentHashMap<>();
 
     public SearchExecutor(Path baseDir) {
         this.baseDir = baseDir;
@@ -101,5 +103,6 @@ public class SearchExecutor implements Closeable {
         }
     }
 
-    private record InternalHit(String docId, float score) {}
+    private record InternalHit(String docId, float score) {
+    }
 }

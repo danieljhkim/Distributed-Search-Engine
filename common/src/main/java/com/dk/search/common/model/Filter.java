@@ -1,4 +1,3 @@
-
 package com.dk.search.common.model;
 
 import lombok.Getter;

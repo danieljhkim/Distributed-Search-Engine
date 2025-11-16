@@ -3,15 +3,7 @@ package com.dk.search.indexnode.grpc;
 import com.dk.search.common.model.SearchDocument;
 import com.dk.search.indexnode.index.IndexManager;
 import com.dk.search.indexnode.index.ShardIndex;
-import com.dk.search.proto.index.IndexDocumentRequest;
-import com.dk.search.proto.index.IndexDocumentResponse;
-import com.dk.search.proto.index.BulkIndexDocumentRequest;
-import com.dk.search.proto.index.BulkIndexDocumentResponse;
-import com.dk.search.proto.index.DeleteDocumentRequest;
-import com.dk.search.proto.index.DeleteDocumentResponse;
-import com.dk.search.proto.index.IndexServiceGrpc;
-import com.dk.search.proto.index.Document;
-import com.dk.search.proto.index.Field;
+import com.dk.search.proto.index.*;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 

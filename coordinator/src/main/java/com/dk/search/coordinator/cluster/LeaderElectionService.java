@@ -1,4 +1,3 @@
-
 package com.dk.search.coordinator.cluster;
 
 import java.util.Optional;

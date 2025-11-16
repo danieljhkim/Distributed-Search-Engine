@@ -1,4 +1,3 @@
-
 package com.dk.search.coordinator.routing;
 
 import com.dk.search.coordinator.cluster.ShardMap;

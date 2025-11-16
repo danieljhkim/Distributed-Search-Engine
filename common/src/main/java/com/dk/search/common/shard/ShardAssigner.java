@@ -1,4 +1,3 @@
-
 package com.dk.search.common.shard;
 
 public class ShardAssigner {

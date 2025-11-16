@@ -1,11 +1,11 @@
 package com.dk.search.querynode.grpc;
 
 import com.dk.search.common.model.SearchResult;
-import com.dk.search.querynode.search.SearchExecutor;
 import com.dk.search.proto.query.QueryRequest;
 import com.dk.search.proto.query.QueryResponse;
 import com.dk.search.proto.query.QueryServiceGrpc;
 import com.dk.search.proto.query.SearchHit;
+import com.dk.search.querynode.search.SearchExecutor;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 

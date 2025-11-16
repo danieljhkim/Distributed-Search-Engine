@@ -2,18 +2,11 @@ package com.dk.search.coordinator.grpc;
 
 import com.dk.search.coordinator.cluster.ClusterMembershipService;
 import com.dk.search.coordinator.cluster.ShardMap;
-import com.dk.search.proto.cluster.ClusterServiceGrpc;
-import com.dk.search.proto.cluster.GetShardMapRequest;
-import com.dk.search.proto.cluster.GetShardMapResponse;
-import com.dk.search.proto.cluster.NodeRole;
-import com.dk.search.proto.cluster.RegisterNodeRequest;
-import com.dk.search.proto.cluster.RegisterNodeResponse;
-import com.dk.search.proto.cluster.ShardLocation;
+import com.dk.search.proto.cluster.*;
 import io.grpc.stub.StreamObserver;
 
 import java.util.Comparator;
 import java.util.List;
-import java.util.stream.Collectors;
 
 public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBase {
 
@@ -79,11 +72,11 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
 
     /**
      * Hash-based shard assignment:
-     *
+     * <p>
      * For each shardId in [0, numShards):
-     *   - Compute index = hash(shardId) % numIndexNodes
-     *   - Assign shard to indexNodes[index]
-     *
+     * - Compute index = hash(shardId) % numIndexNodes
+     * - Assign shard to indexNodes[index]
+     * <p>
      * This is simple, deterministic, and evenly spreads shards
      * (though it does not do consistent hashing).
      */
@@ -93,7 +86,7 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
                 membershipService.getNodes().values().stream()
                         .filter(info -> "NODE_ROLE_INDEX".equals(info.role()))
                         .sorted(Comparator.comparing(ClusterMembershipService.ClusterNodeInfo::nodeId))
-                        .collect(Collectors.toList());
+                        .toList();
 
         if (indexNodes.isEmpty()) {
             // No index nodes; nothing to assign

@@ -1,4 +1,3 @@
-
 package com.dk.search.indexnode;
 
 public class IndexNodeService {

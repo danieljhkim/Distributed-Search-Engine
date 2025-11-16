@@ -2,11 +2,7 @@ package com.dk.search.gateway.service;
 
 import com.dk.search.gateway.api.dto.IndexRequestDto;
 import com.dk.search.gateway.api.dto.IndexResponseDto;
-import com.dk.search.proto.index.Field;
-import com.dk.search.proto.index.IndexDocumentRequest;
-import com.dk.search.proto.index.IndexDocumentResponse;
-import com.dk.search.proto.index.IndexServiceGrpc;
-import com.dk.search.proto.index.Document;
+import com.dk.search.proto.index.*;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;

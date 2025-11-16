@@ -1,4 +1,3 @@
-
 package com.dk.search.gateway;
 
 public class GatewayService {

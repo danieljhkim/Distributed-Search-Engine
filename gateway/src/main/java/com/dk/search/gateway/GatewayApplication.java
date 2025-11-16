@@ -1,4 +1,3 @@
-
 package com.dk.search.gateway;
 
 import org.springframework.boot.SpringApplication;

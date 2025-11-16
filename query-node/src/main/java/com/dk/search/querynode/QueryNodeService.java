@@ -1,4 +1,3 @@
-
 package com.dk.search.querynode;
 
 public class QueryNodeService {
