@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package search.query;
+
+option java_package = "com.dk.search.proto.query";
+option java_multiple_files = true;
+
+message QueryRequest {
+  string query_string = 1;
+  repeated int32 shard_ids = 2;   // which shards to search
+  int32 top_k = 3;
+}
+
+message SearchHit {
+  string doc_id = 1;
+  double score = 2;
+}
+
+message QueryResponse {
+  repeated SearchHit hits = 1;
+  int64 total_hits = 2;
+  int64 took_millis = 3;
+}
+
+service QueryService {
+  rpc Search(QueryRequest) returns (QueryResponse);
+}

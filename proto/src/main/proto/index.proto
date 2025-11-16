@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package search.index;
+
+option java_package = "com.dk.search.proto.index";
+option java_multiple_files = true;
+
+message Field {
+  string name = 1;
+  string value = 2;
+}
+
+message Document {
+  string id = 1;                 // client-generated or server-assigned
+  repeated Field fields = 2;
+}
+
+message IndexDocumentRequest {
+  int32 shard_id = 1;
+  Document document = 2;
+}
+
+message IndexDocumentResponse {
+  string id = 1;
+  bool success = 2;
+}
+
+message BulkIndexDocumentRequest {
+  int32 shard_id = 1;
+  repeated Document documents = 2;
+}
+
+message BulkIndexDocumentResponse {
+  repeated string ids = 1;
+  bool success = 2;
+}
+
+message DeleteDocumentRequest {
+  int32 shard_id = 1;
+  string id = 2;
+}
+
+message DeleteDocumentResponse {
+  bool success = 1;
+}
+
+service IndexService {
+  rpc IndexDocument(IndexDocumentRequest) returns (IndexDocumentResponse);
+  rpc BulkIndexDocument(BulkIndexDocumentRequest) returns (BulkIndexDocumentResponse);
+  rpc DeleteDocument(DeleteDocumentRequest) returns (DeleteDocumentResponse);
+}
