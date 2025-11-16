@@ -9,6 +9,7 @@ import com.dk.search.proto.query.SearchHit;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 @Service
@@ -21,21 +22,11 @@ public class GatewaySearchService {
     }
 
     public SearchResponseDto search(SearchRequestDto request) {
-        int topK = (request.getTopK() != null && request.getTopK() > 0)
-                ? request.getTopK()
-                : 10;
-
         QueryRequest.Builder grpcReqBuilder = QueryRequest.newBuilder()
                 .setQueryString(request.getQuery())
-                .setTopK(topK);
+                .setTopK(request.getTopK());
 
-        if (request.getShardIds() != null && !request.getShardIds().isEmpty()) {
-            grpcReqBuilder.addAllShardIds(request.getShardIds());
-        } else {
-            // simple default: shard 0
-            grpcReqBuilder.addShardIds(0);
-        }
-
+        grpcReqBuilder.addAllShardIds(request.getShardIds() != null ? request.getShardIds() : Collections.emptyList());
         QueryResponse grpcResp = queryStub.search(grpcReqBuilder.build());
 
         List<SearchResponseDto.SearchHitDto> hits = new ArrayList<>();

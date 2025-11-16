@@ -21,8 +21,6 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class SearchExecutor implements Closeable {
 
-    // For simplicity, assume queries search across these fields
-    // (these should match the fields you index in Lucene)
     private static final String[] DEFAULT_SEARCH_FIELDS = new String[]{"title", "body", "content"};
     private final Path baseDir;
     private final Map<Integer, ShardSearcher> shardSearcherMap = new ConcurrentHashMap<>();
@@ -48,10 +46,6 @@ public class SearchExecutor implements Closeable {
 
         if (shardIds == null || shardIds.isEmpty()) {
             shardIds = new ArrayList<>(shardSearcherMap.keySet());
-        }
-
-        if (shardIds == null || shardIds.isEmpty()) {
-            return new SearchResult(List.of(), 0, 0);
         }
 
         List<InternalHit> allHits = new ArrayList<>();
