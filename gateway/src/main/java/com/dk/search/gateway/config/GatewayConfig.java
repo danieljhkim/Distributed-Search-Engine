@@ -3,28 +3,29 @@ package com.dk.search.gateway.config;
 import com.dk.search.common.loadbalancer.NodeClientManager;
 import com.dk.search.proto.index.IndexServiceGrpc;
 import com.dk.search.proto.query.QueryServiceGrpc;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-
-import java.util.List;
 
 @Configuration
 public class GatewayConfig {
 
     @Bean
-    public NodeClientManager<QueryServiceGrpc.QueryServiceBlockingStub> queryNodeClientManager() {
+    public NodeClientManager<QueryServiceGrpc.QueryServiceBlockingStub> queryNodeClientManager(
+            @Qualifier("queryNodeClientProperties") NodePropertiesConfig.NodeProperties queryProperties) {
         return NodeClientManager.forPorts(
-                List.of(6000, 6001),
-                "localhost",
+                queryProperties.getPorts().stream().toList(),
+                queryProperties.getHost(),
                 QueryServiceGrpc::newBlockingStub
         );
     }
 
     @Bean
-    public NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> indexNodeClientManager() {
+    public NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> indexNodeClientManager(
+            @Qualifier("indexNodeClientProperties") NodePropertiesConfig.NodeProperties indexProperties) {
         return NodeClientManager.forPorts(
-                List.of(5000, 5001),
-                "localhost",
+                indexProperties.getPorts().stream().toList(),
+                indexProperties.getHost(),
                 IndexServiceGrpc::newBlockingStub
         );
     }

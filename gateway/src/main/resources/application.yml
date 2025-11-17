@@ -1,0 +1,13 @@
+query-node:
+  client:
+    host: localhost
+    ports:
+      - 6000
+      - 6001
+
+index-node:
+  client:
+    host: localhost
+    ports:
+      - 5000
+      - 5001
