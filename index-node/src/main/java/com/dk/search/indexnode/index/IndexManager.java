@@ -24,12 +24,14 @@ public class IndexManager implements Closeable {
     public void indexDocument(int shardId, SearchDocument doc) throws IOException {
         ShardIndex shardIndex = getOrCreateShard(shardId);
         shardIndex.index(doc);
+        shardIndex.commit();
     }
 
     public void deleteDocument(int shardId, String docId) throws IOException {
         ShardIndex shardIndex = shardIndexes.get(shardId);
         if (shardIndex != null) {
             shardIndex.delete(docId);
+            shardIndex.commit();
         }
     }
 
@@ -42,6 +44,7 @@ public class IndexManager implements Closeable {
     @Override
     public void close() throws IOException {
         for (ShardIndex shardIndex : shardIndexes.values()) {
+            shardIndex.commit();
             shardIndex.close();
         }
     }

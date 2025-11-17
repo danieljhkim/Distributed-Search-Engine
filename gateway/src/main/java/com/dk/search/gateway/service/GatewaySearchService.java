@@ -1,5 +1,6 @@
 package com.dk.search.gateway.service;
 
+import com.dk.search.common.loadbalancer.NodeClientManager;
 import com.dk.search.gateway.api.dto.SearchRequestDto;
 import com.dk.search.gateway.api.dto.SearchResponseDto;
 import com.dk.search.proto.query.QueryRequest;
@@ -15,13 +16,15 @@ import java.util.List;
 @Service
 public class GatewaySearchService {
 
-    private final QueryServiceGrpc.QueryServiceBlockingStub queryStub;
+    private final NodeClientManager<QueryServiceGrpc.QueryServiceBlockingStub> qnClientManager;
 
-    public GatewaySearchService(QueryServiceGrpc.QueryServiceBlockingStub queryStub) {
-        this.queryStub = queryStub;
+    public GatewaySearchService(
+            NodeClientManager<QueryServiceGrpc.QueryServiceBlockingStub> qnClientManager) {
+        this.qnClientManager = qnClientManager;
     }
 
     public SearchResponseDto search(SearchRequestDto request) {
+        QueryServiceGrpc.QueryServiceBlockingStub queryStub = qnClientManager.nextClient();
         QueryRequest.Builder grpcReqBuilder = QueryRequest.newBuilder()
                 .setQueryString(request.getQuery())
                 .setTopK(request.getTopK())

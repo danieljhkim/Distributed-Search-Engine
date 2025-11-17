@@ -1,5 +1,6 @@
 package com.dk.search.gateway.service;
 
+import com.dk.search.common.loadbalancer.NodeClientManager;
 import com.dk.search.gateway.api.dto.IndexRequestDto;
 import com.dk.search.gateway.api.dto.IndexResponseDto;
 import com.dk.search.proto.index.*;
@@ -10,13 +11,15 @@ import java.util.Map;
 @Service
 public class GatewayIndexService {
 
-    private final IndexServiceGrpc.IndexServiceBlockingStub indexStub;
+    private final NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> indexNodeClientManager;
 
-    public GatewayIndexService(IndexServiceGrpc.IndexServiceBlockingStub indexStub) {
-        this.indexStub = indexStub;
+    public GatewayIndexService(
+            NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> indexNodeClientManager) {
+        this.indexNodeClientManager = indexNodeClientManager;
     }
 
     public IndexResponseDto index(IndexRequestDto requestDto) {
+        var indexStub = indexNodeClientManager.nextClient();
         int shardId = requestDto.getShardId() != null ? requestDto.getShardId() : 0;
 
         Document.Builder docBuilder = Document.newBuilder();
@@ -39,9 +42,7 @@ public class GatewayIndexService {
                 .setShardId(shardId)
                 .setDocument(docBuilder.build())
                 .build();
-
         IndexDocumentResponse resp = indexStub.indexDocument(grpcReq);
-
         return new IndexResponseDto(resp.getId(), resp.getSuccess());
     }
 }
