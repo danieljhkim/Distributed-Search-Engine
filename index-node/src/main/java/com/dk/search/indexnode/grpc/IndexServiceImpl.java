@@ -1,6 +1,7 @@
 package com.dk.search.indexnode.grpc;
 
 import com.dk.search.common.model.SearchDocument;
+import com.dk.search.common.model.SearchResult;
 import com.dk.search.indexnode.index.IndexManager;
 import com.dk.search.indexnode.index.ShardIndex;
 import com.dk.search.proto.index.*;
@@ -26,7 +27,7 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
 
     @Override
     public void indexDocument(IndexDocumentRequest request, StreamObserver<IndexDocumentResponse> responseObserver) {
-        int shardId = request.getShardId();
+        String shardId = request.getShardId();
         Document protoDoc = request.getDocument();
         String docId = protoDoc.getId().isEmpty() ? UUID.randomUUID().toString() : protoDoc.getId();
 
@@ -49,7 +50,7 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
     @Override
     public void bulkIndexDocument(BulkIndexDocumentRequest request,
                                   StreamObserver<BulkIndexDocumentResponse> responseObserver) {
-        int shardId = request.getShardId();
+        String shardId = request.getShardId();
         BulkIndexDocumentResponse.Builder respBuilder = BulkIndexDocumentResponse.newBuilder();
         boolean success = true;
 
@@ -75,7 +76,7 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
     @Override
     public void deleteDocument(DeleteDocumentRequest request,
                                StreamObserver<DeleteDocumentResponse> responseObserver) {
-        int shardId = request.getShardId();
+        String shardId = request.getShardId();
         String docId = request.getId();
 
         try {
@@ -87,6 +88,34 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
             responseObserver.onCompleted();
         } catch (IOException e) {
             LOGGER.log(Level.SEVERE, "DeleteDocument failed", e);
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    @Override
+    public void searchIndex(IndexSearchRequest request,
+                            StreamObserver<IndexSearchResponse> responseObserver) {
+        String shardId = request.getShardId();
+        String query = request.getQuery();
+        int from = request.getFrom();
+        int size = request.getSize();
+        try {
+            SearchResult res = indexManager.searchDocument(shardId, query, size, from);
+            IndexSearchResponse.Builder respBuilder = IndexSearchResponse.newBuilder()
+                    .setTotalHits(res.getTotalHits());
+            for (com.dk.search.common.model.SearchHit hit : res.getHits()) {
+                IndexHit protoHit = IndexHit.newBuilder()
+                        .setDocId(hit.getDocId())
+                        .setScore(hit.getScore())
+                        .setContent(hit.getContent())
+                        .build();
+                respBuilder.addHits(protoHit);
+            }
+            IndexSearchResponse response = respBuilder.build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        } catch (IOException e) {
+            LOGGER.log(Level.SEVERE, "searchIndex failed", e);
             throw new UncheckedIOException(e);
         }
     }

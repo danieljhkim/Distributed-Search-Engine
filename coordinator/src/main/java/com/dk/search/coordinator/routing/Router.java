@@ -9,7 +9,7 @@ public class Router {
         this.shardMap = shardMap;
     }
 
-    public String routeRequest(int shardId) {
+    public String routeRequest(String shardId) {
         return shardMap.getNodeForShard(shardId);
     }
 }

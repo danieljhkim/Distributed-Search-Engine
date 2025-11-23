@@ -20,7 +20,7 @@ public class GatewayIndexService {
 
     public IndexResponseDto index(IndexRequestDto requestDto) {
         var indexStub = indexNodeClientManager.nextClient();
-        int shardId = requestDto.getShardId() != null ? requestDto.getShardId() : 0;
+        String shardId = requestDto.getShardId() != null ? requestDto.getShardId() : "default";
 
         Document.Builder docBuilder = Document.newBuilder();
         if (requestDto.getId() != null && !requestDto.getId().isEmpty()) {

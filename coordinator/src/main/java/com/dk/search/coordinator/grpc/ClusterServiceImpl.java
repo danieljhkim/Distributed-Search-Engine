@@ -105,7 +105,7 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
             // hash-based index; using shardId itself here
             int idx = Math.floorMod(Integer.hashCode(shardId), numIndexNodes);
             ClusterMembershipService.ClusterNodeInfo owner = indexNodes.get(idx);
-            shardMap.assignShard(shardId, owner.nodeId());
+            shardMap.assignShard(String.valueOf(shardId), owner.nodeId());
         }
     }
 }

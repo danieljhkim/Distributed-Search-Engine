@@ -8,7 +8,6 @@ import com.dk.search.proto.query.QueryServiceGrpc;
 import com.dk.search.proto.query.SearchHit;
 import com.dk.search.querynode.search.SearchExecutor;
 import io.grpc.stub.StreamObserver;
-import org.apache.lucene.queryparser.classic.ParseException;
 
 import java.util.List;
 import java.util.logging.Level;
@@ -27,10 +26,10 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
     @Override
     public void search(QueryRequest request, StreamObserver<QueryResponse> responseObserver) {
         String queryString = request.getQueryString();
-        List<Integer> shardIds = request.getShardIdsList();
-        int topK = request.getTopK() > 0 ? request.getTopK() : 10;
         int page = request.getPage();
         int size = request.getSize();
+        int topK = request.getTopK();
+        List<String> shardIds = request.getShardIdsList();
         try {
             SearchResult result = searchExecutor.search(queryString, shardIds, page, size, topK);
             QueryResponse.Builder respBuilder = QueryResponse.newBuilder()
@@ -49,9 +48,9 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
 
             responseObserver.onNext(respBuilder.build());
             responseObserver.onCompleted();
-        } catch (ParseException e) {
+        } catch (Exception e) {
             LOGGER.log(Level.WARNING, "Failed to parse query: " + queryString, e);
-            throw new ParseGoneWrongException("Failed to parse query: " + queryString, e);
+            responseObserver.onError(new ParseGoneWrongException("Failed to parse query: " + queryString, e));
         }
     }
 }

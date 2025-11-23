@@ -9,9 +9,9 @@ public class SearchResult {
 
     private final List<SearchHit> hits;
     private final long totalHits;
-    private final long tookMillis;
-    private final int page;
     private final int page_size;
+    private long tookMillis;
+    private int page;
 
     public SearchResult(List<SearchHit> hits, long totalHits, long tookMillis) {
         this.hits = List.copyOf(hits);
@@ -29,4 +29,16 @@ public class SearchResult {
         this.tookMillis = tookMicros / 1000;
     }
 
+    public SearchResult(List<SearchHit> hits, long totalHits) {
+        this.hits = List.copyOf(hits);
+        this.totalHits = totalHits;
+        this.page_size = hits.size();
+    }
+
+    public SearchResult(List<SearchHit> hits, long totalHits, int page) {
+        this.hits = List.copyOf(hits);
+        this.totalHits = totalHits;
+        this.page = page;
+        this.page_size = hits.size();
+    }
 }

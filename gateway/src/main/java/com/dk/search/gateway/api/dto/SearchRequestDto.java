@@ -1,8 +1,8 @@
 package com.dk.search.gateway.api.dto;
 
 import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.Size;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -16,7 +16,7 @@ public class SearchRequestDto {
     @Size(max = 512, message = "query must be at most 512 characters")
     private String query;
 
-    private List<Integer> shardIds;
+    private List<String> shardIds;
 
     @Min(value = 1, message = "topK must be > 0")
     private int topK = 30;

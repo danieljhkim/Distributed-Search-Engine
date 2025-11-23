@@ -12,13 +12,6 @@ import java.util.List;
 @Configuration
 public class NodePropertiesConfig {
 
-    @Setter
-    @Getter
-    public static class NodeProperties {
-        private String host;
-        private List<Integer> ports;
-    }
-
     @Bean
     @ConfigurationProperties(prefix = "query-node.client")
     public NodeProperties queryNodeClientProperties() {
@@ -29,5 +22,12 @@ public class NodePropertiesConfig {
     @ConfigurationProperties(prefix = "index-node.client")
     public NodeProperties indexNodeClientProperties() {
         return new NodeProperties();
+    }
+
+    @Setter
+    @Getter
+    public static class NodeProperties {
+        private String host;
+        private List<Integer> ports;
     }
 }

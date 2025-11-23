@@ -7,7 +7,7 @@ option java_multiple_files = true;
 
 message QueryRequest {
   string query_string = 1;
-  repeated int32 shard_ids = 2;   // which shards to search
+  repeated string shard_ids = 2;   // which shards to search
   int32 top_k = 3;
   int32 page = 4;
   int32 size = 5;
@@ -16,6 +16,7 @@ message QueryRequest {
 message SearchHit {
   string doc_id = 1;
   double score = 2;
+  string content = 3;
 }
 
 message QueryResponse {

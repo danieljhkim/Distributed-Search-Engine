@@ -10,13 +10,13 @@ import java.util.Map;
 public class ShardMap {
 
     private final int numShards;
-    private final Map<Integer, String> shardToNodeId = new HashMap<>();
+    private final Map<String, String> shardToNodeId = new HashMap<>();
 
     public ShardMap(int numShards) {
         this.numShards = numShards;
     }
 
-    public void assignShard(int shardId, String nodeId) {
+    public void assignShard(String shardId, String nodeId) {
         shardToNodeId.put(shardId, nodeId);
     }
 
@@ -24,7 +24,7 @@ public class ShardMap {
         shardToNodeId.clear();
     }
 
-    public String getNodeForShard(int shardId) {
+    public String getNodeForShard(String shardId) {
         return shardToNodeId.get(shardId);
     }
 }

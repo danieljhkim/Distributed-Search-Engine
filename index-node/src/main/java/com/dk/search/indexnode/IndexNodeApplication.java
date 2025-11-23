@@ -15,7 +15,8 @@ public class IndexNodeApplication {
     public static void main(String[] args) throws IOException, InterruptedException {
 
         int port = Integer.parseInt(System.getenv().getOrDefault("INDEX_NODE_PORT", "5000"));
-        String baseDirStr = System.getenv().getOrDefault("INDEX_NODE_BASE_DIR", "./data/index-node");
+        String nodeId = System.getenv().getOrDefault("INDEX_NODE_ID", "index-node-0");
+        String baseDirStr = System.getenv().getOrDefault("INDEX_NODE_BASE_DIR", "./data/" + nodeId);
         Path baseDir = Path.of(baseDirStr);
 
         IndexManager indexManager = new IndexManager(baseDir);

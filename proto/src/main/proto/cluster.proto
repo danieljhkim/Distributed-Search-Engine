@@ -33,7 +33,7 @@ message HeartbeatResponse {
 message GetShardMapRequest {}
 
 message ShardLocation {
-  int32 shard_id = 1;
+  string shard_id = 1;
   string node_id = 2;
   string host = 3;
   int32 port = 4;

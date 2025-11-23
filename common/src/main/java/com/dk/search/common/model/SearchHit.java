@@ -7,11 +7,18 @@ import lombok.Setter;
 @Getter
 public class SearchHit {
     private final String docId;
-    private final double score;
+    private final float score;
+    private String content;
 
-    public SearchHit(String docId, double score) {
+    public SearchHit(String docId, float score) {
         this.docId = docId;
         this.score = score;
+    }
+
+    public SearchHit(String docId, float score, String content) {
+        this.docId = docId;
+        this.score = score;
+        this.content = content;
     }
 
 }
