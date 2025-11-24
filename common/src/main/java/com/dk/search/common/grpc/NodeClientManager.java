@@ -66,7 +66,7 @@ public class NodeClientManager<T> {
     ) {
         List<ManagedChannel> ch = new ArrayList<>();
         Map<String, T> stubsMap =
-                appConfig.getCluster().getIndexShards().stream()
+                appConfig.getCluster().getIndexNodes().stream()
                         .collect(Collectors.toMap(
                                 shard -> String.valueOf(shard.getId()),
                                 shard -> {

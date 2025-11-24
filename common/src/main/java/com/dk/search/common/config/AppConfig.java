@@ -43,19 +43,19 @@ public class AppConfig {
     @Setter
     @Getter
     public static class ClusterConfig {
-        private List<IndexShardConfig> indexShards;
+        private List<IndexNodeConfig> indexNodes;
 
         @Override
         public String toString() {
             return "ClusterConfig{" +
-                    "indexShards=" + indexShards +
+                    "indexNodes=" + indexNodes +
                     '}';
         }
     }
 
     @Setter
     @Getter
-    public static class IndexShardConfig {
+    public static class IndexNodeConfig {
         private String id;
         private String host;
         private int port;

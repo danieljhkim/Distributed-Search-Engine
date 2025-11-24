@@ -59,7 +59,7 @@ The cluster configuration is defined in `cluster-config.yaml`:
 
 ```yaml
 cluster:
-    indexShards:
+    indexNodes:
     - id: 0
       host: "localhost"
       port: 6000

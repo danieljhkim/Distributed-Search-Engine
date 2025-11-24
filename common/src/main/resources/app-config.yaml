@@ -1,5 +1,5 @@
 cluster:
-  indexShards:
+  indexNodes:
     - id: "0"
       host: "localhost"
       port: 5000
