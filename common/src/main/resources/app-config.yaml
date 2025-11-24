@@ -1,0 +1,18 @@
+cluster:
+  indexShards:
+    - id: "0"
+      host: "localhost"
+      port: 5000
+    - id: "1"
+      host: "localhost"
+      port: 5001
+
+queryNode:
+  client:
+    host: "localhost"
+    ports: [ 6000, 6001 ]
+
+indexNode:
+  client:
+    host: "localhost"
+    ports: [ 5000, 5001 ]

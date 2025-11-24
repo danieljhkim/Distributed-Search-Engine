@@ -1,6 +1,6 @@
 package com.dk.search.gateway.service;
 
-import com.dk.search.common.loadbalancer.NodeClientManager;
+import com.dk.search.common.grpc.NodeClientManager;
 import com.dk.search.gateway.api.dto.IndexRequestDto;
 import com.dk.search.gateway.api.dto.IndexResponseDto;
 import com.dk.search.proto.index.*;
@@ -20,7 +20,7 @@ public class GatewayIndexService {
 
     public IndexResponseDto index(IndexRequestDto requestDto) {
         var indexStub = indexNodeClientManager.nextClient();
-        String shardId = requestDto.getShardId() != null ? requestDto.getShardId() : "default";
+        String shardId = requestDto.getShardId() != null ? requestDto.getShardId() : "1";
 
         Document.Builder docBuilder = Document.newBuilder();
         if (requestDto.getId() != null && !requestDto.getId().isEmpty()) {

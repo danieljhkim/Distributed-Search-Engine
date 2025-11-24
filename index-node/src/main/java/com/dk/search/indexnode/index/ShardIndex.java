@@ -54,10 +54,15 @@ public class ShardIndex implements Closeable {
             this.directory = FSDirectory.open(indexPath);
             this.analyzer = new StandardAnalyzer();
             IndexWriterConfig config = new IndexWriterConfig(analyzer);
+            config.setOpenMode(IndexWriterConfig.OpenMode.CREATE_OR_APPEND);
             this.indexWriter = new IndexWriter(directory, config);
+
+            // If there is no Lucene index yet (no segments_N), create an empty one.
+            if (!DirectoryReader.indexExists(directory)) {
+                indexWriter.commit();
+            }
             IndexReader reader = DirectoryReader.open(directory);
             this.searcher = new IndexSearcher(reader);
-
         } catch (IOException e) {
             throw new RuntimeException("Failed to initialize ShardIndex for shard " + shardId, e);
         }

@@ -54,7 +54,7 @@ start_index_nodes() {
   for ((i=0; i< N_INDEX_NODES; i++)); do
     local port=$((INDEX_BASE_PORT + i))
     local node_id="index-$i"
-    local node_data_dir="$DATA_DIR/index-node" # index-node-$i
+    local node_data_dir="$DATA_DIR/index-node-$i"
     mkdir -p "$node_data_dir"
 
     export INDEX_NODE_PORT="$port"
@@ -77,10 +77,8 @@ start_query_nodes() {
   for ((i=0; i< N_QUERY_NODES; i++)); do
     local port=$((QUERY_BASE_PORT + i))
     local node_id="query-$i"
-    local node_data_dir="$DATA_DIR/index-node"
 
     export QUERY_NODE_PORT="$port"
-    export QUERY_NODE_BASE_DIR="$node_data_dir"
     export NODE_ID="$node_id"
     export NODE_ROLE="QUERY"
     export COORDINATOR_HOST="localhost"

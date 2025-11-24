@@ -1,14 +1,14 @@
 package com.dk.search.querynode;
 
-import com.dk.search.common.config.GrpcChannelConfig;
+import com.dk.search.common.config.AppConfig;
+import com.dk.search.common.config.ConfigLoader;
+import com.dk.search.common.grpc.NodeClientManager;
 import com.dk.search.proto.index.IndexServiceGrpc;
 import com.dk.search.querynode.grpc.IndexService;
 import com.dk.search.querynode.search.SearchExecutor;
 import com.dk.search.querynode.server.QueryNodeServer;
-import io.grpc.ManagedChannel;
 
 import java.io.IOException;
-import java.nio.file.Path;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -17,12 +17,10 @@ public class QueryNodeApplication {
     private static final Logger LOGGER = Logger.getLogger(QueryNodeApplication.class.getName());
 
     public static void main(String[] args) throws IOException, InterruptedException {
-        // Config via env or defaults
         int port = Integer.parseInt(System.getenv().getOrDefault("QUERY_NODE_PORT", "6000"));
-        String baseDirStr = System.getenv().getOrDefault("QUERY_NODE_BASE_DIR", "./data/query-node");
-        Path baseDir = Path.of(baseDirStr);
-        ManagedChannel channel = GrpcChannelConfig.getIndexChannel();
-        IndexService indexService = new IndexService(IndexServiceGrpc.newBlockingStub(channel));
+        AppConfig appConfig = ConfigLoader.load("app-config.yaml");
+        NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager = NodeClientManager.forShards(appConfig, IndexServiceGrpc::newBlockingStub);
+        IndexService indexService = new IndexService(nodeClientManager);
         SearchExecutor searchExecutor = new SearchExecutor(indexService);
         QueryNodeServer queryNodeServer = new QueryNodeServer(port, searchExecutor);
 
@@ -38,7 +36,7 @@ public class QueryNodeApplication {
             }
         }));
 
-        LOGGER.info("QueryNode gRPC server started on port " + port + ", baseDir=" + baseDir);
+        LOGGER.info("QueryNode gRPC server started on port " + port);
         queryNodeServer.start();
     }
 }

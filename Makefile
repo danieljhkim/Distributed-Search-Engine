@@ -48,6 +48,7 @@ run-multi:
 
 stop:
 	./scripts/kill_cluster.sh
+	rm -rf logs/*
 
 # ============================
 # Logs & Data Management
