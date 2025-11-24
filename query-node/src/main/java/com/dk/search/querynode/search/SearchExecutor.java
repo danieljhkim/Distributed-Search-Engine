@@ -1,7 +1,9 @@
 package com.dk.search.querynode.search;
 
+import com.dk.search.common.grpc.NodeClientManager;
 import com.dk.search.common.model.SearchHit;
 import com.dk.search.common.model.SearchResult;
+import com.dk.search.proto.index.IndexServiceGrpc;
 import com.dk.search.querynode.grpc.IndexService;
 
 import java.io.Closeable;
@@ -20,16 +22,25 @@ public class SearchExecutor implements Closeable {
     private static final Logger LOGGER = Logger.getLogger(SearchExecutor.class.getName());
     private final ExecutorService shardExecutor;
     private final IndexService indexService;
+    private final NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager;
     private final Duration shardTimeout = Duration.ofSeconds(2);
 
-    public SearchExecutor(ExecutorService shardExecutor, IndexService indexService) {
+    public SearchExecutor(
+            ExecutorService shardExecutor,
+            IndexService indexService,
+            NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager
+    ) {
         this.shardExecutor = shardExecutor;
         this.indexService = indexService;
+        this.nodeClientManager = nodeClientManager;
     }
 
-    public SearchExecutor(IndexService indexService) {
+    public SearchExecutor(
+            IndexService indexService,
+            NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager
+    ) {
         // FIXME: temp fix thread pool size
-        this(Executors.newFixedThreadPool(Math.min(2, Runtime.getRuntime().availableProcessors())), indexService);
+        this(Executors.newFixedThreadPool(Math.min(2, Runtime.getRuntime().availableProcessors())), indexService, nodeClientManager);
     }
 
     /**
@@ -43,7 +54,7 @@ public class SearchExecutor implements Closeable {
      */
     @SuppressWarnings({"all"})
     public SearchResult search(String queryString,
-                               List<String> shardIds,
+                               String shardId,
                                int page,
                                int size,
                                int topK) {
@@ -51,22 +62,16 @@ public class SearchExecutor implements Closeable {
         long startNanos = System.nanoTime();
         if (page < 0) page = 0;
         if (size <= 0) size = 10;
-        if (shardIds == null || shardIds.isEmpty()) {
-            throw new IllegalArgumentException("shardIds must not be null or empty");
-        }
-
         // How many docs we might need globally for this page
         int requiredForPage = (page + 1) * size;
         int perShardLimit = Math.max(topK, requiredForPage);
 
         // One async call per shard → each returns a model.SearchResult
         List<CompletableFuture<SearchResult>> futures = new ArrayList<>();
-        for (String shardId : shardIds) {
-            final String sid = shardId;
-
+        for (String nodeId : nodeClientManager.getStubsMap().keySet()) {
             CompletableFuture<SearchResult> future =
                     CompletableFuture.supplyAsync(() -> {
-                        return indexService.searchShardTopK(queryString, sid, perShardLimit);
+                        return indexService.searchShardTopK(queryString, nodeId, shardId, perShardLimit);
                     }, shardExecutor);
             futures.add(future);
         }

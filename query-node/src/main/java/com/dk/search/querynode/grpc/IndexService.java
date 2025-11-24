@@ -17,9 +17,9 @@ public class IndexService {
         this.nodeClientManager = nodeClientManager;
     }
 
-    public SearchResult search(String queryString, String shardId, int page, int size) {
-        if (!nodeClientManager.getStubsMap().containsKey(shardId)) {
-            throw new IllegalArgumentException("Unknown shardId: " + shardId);
+    public SearchResult search(String queryString, String nodeId, String shardId, int page, int size) {
+        if (!nodeClientManager.getStubsMap().containsKey(nodeId)) {
+            throw new IllegalArgumentException("Unknown nodeId: " + nodeId);
         }
         int from = page * size;
         IndexSearchRequest.Builder grpcReqBuilder = IndexSearchRequest.newBuilder()
@@ -27,7 +27,7 @@ public class IndexService {
                 .setFrom(from)
                 .setSize(size)
                 .setShardId(shardId);
-        IndexServiceGrpc.IndexServiceBlockingStub stub = nodeClientManager.getStubsMap().get(shardId);
+        IndexServiceGrpc.IndexServiceBlockingStub stub = nodeClientManager.getStubsMap().get(nodeId);
         IndexSearchResponse grpcResp = stub.searchIndex(grpcReqBuilder.build());
         List<com.dk.search.common.model.SearchHit> hits = new ArrayList<>();
         for (com.dk.search.proto.index.IndexHit hit : grpcResp.getHitsList()) {
@@ -40,8 +40,8 @@ public class IndexService {
         );
     }
 
-    public SearchResult searchShardTopK(String queryString, String shardId, int topK) {
+    public SearchResult searchShardTopK(String queryString, String nodeId, String shardId, int topK) {
         // page = 0, size = topK → from = 0, size = topK
-        return search(queryString, shardId, 0, topK);
+        return search(queryString, nodeId, shardId, 0, topK);
     }
 }

@@ -1,6 +1,5 @@
 package com.dk.search.gateway.service;
 
-import com.dk.search.common.config.AppConfig;
 import com.dk.search.common.grpc.NodeClientManager;
 import com.dk.search.gateway.api.dto.SearchRequestDto;
 import com.dk.search.gateway.api.dto.SearchResponseDto;
@@ -17,17 +16,10 @@ import java.util.List;
 public class GatewaySearchService {
 
     private final NodeClientManager<QueryServiceGrpc.QueryServiceBlockingStub> qnClientManager;
-    private final AppConfig.ClusterConfig clusterConfig;
-    private final List<String> shardIds;
 
     public GatewaySearchService(
-            NodeClientManager<QueryServiceGrpc.QueryServiceBlockingStub> qnClientManager, AppConfig appConfig) {
+            NodeClientManager<QueryServiceGrpc.QueryServiceBlockingStub> qnClientManager) {
         this.qnClientManager = qnClientManager;
-        this.clusterConfig = appConfig.getCluster();
-        this.shardIds = new ArrayList<>();
-        for (AppConfig.IndexShardConfig shard : clusterConfig.getIndexShards()) {
-            this.shardIds.add(shard.getId());
-        }
     }
 
     public SearchResponseDto search(SearchRequestDto request) {
@@ -36,9 +28,9 @@ public class GatewaySearchService {
                 .setQueryString(request.getQuery())
                 .setTopK(request.getTopK())
                 .setPage(request.getPage())
-                .setSize(request.getPageSize());
+                .setSize(request.getPageSize())
+                .setShardId(request.getShardId());
 
-        grpcReqBuilder.addAllShardIds(getValidShardIds(request.getShardIds()));
         QueryResponse grpcResp = queryStub.search(grpcReqBuilder.build());
 
         List<SearchResponseDto.SearchHitDto> hits = new ArrayList<>();
@@ -54,15 +46,4 @@ public class GatewaySearchService {
         );
     }
 
-    private List<String> getValidShardIds(List<String> requestedShardIds) {
-        if (requestedShardIds == null || requestedShardIds.isEmpty()) {
-            return this.shardIds;
-        }
-        for (String shardId : requestedShardIds) {
-            if (!this.shardIds.contains(shardId)) {
-                throw new IllegalArgumentException("Invalid shard ID: " + shardId);
-            }
-        }
-        return shardIds;
-    }
 }

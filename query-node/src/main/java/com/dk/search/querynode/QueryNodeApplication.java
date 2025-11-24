@@ -21,7 +21,7 @@ public class QueryNodeApplication {
         AppConfig appConfig = ConfigLoader.load("app-config.yaml");
         NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager = NodeClientManager.forShards(appConfig, IndexServiceGrpc::newBlockingStub);
         IndexService indexService = new IndexService(nodeClientManager);
-        SearchExecutor searchExecutor = new SearchExecutor(indexService);
+        SearchExecutor searchExecutor = new SearchExecutor(indexService, nodeClientManager);
         QueryNodeServer queryNodeServer = new QueryNodeServer(port, searchExecutor);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {

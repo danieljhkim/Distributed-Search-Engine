@@ -9,7 +9,6 @@ import com.dk.search.proto.query.SearchHit;
 import com.dk.search.querynode.search.SearchExecutor;
 import io.grpc.stub.StreamObserver;
 
-import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -29,7 +28,7 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
         int page = request.getPage();
         int size = request.getSize();
         int topK = request.getTopK();
-        List<String> shardIds = request.getShardIdsList();
+        String shardIds = request.getShardId();
         try {
             SearchResult result = searchExecutor.search(queryString, shardIds, page, size, topK);
             QueryResponse.Builder respBuilder = QueryResponse.newBuilder()

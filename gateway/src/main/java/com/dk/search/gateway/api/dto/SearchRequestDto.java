@@ -6,8 +6,6 @@ import jakarta.validation.constraints.Size;
 import lombok.Getter;
 import lombok.Setter;
 
-import java.util.List;
-
 @Setter
 @Getter
 public class SearchRequestDto {
@@ -16,7 +14,7 @@ public class SearchRequestDto {
     @Size(max = 512, message = "query must be at most 512 characters")
     private String query;
 
-    private List<String> shardIds;
+    private String shardId;
 
     @Min(value = 1, message = "topK must be > 0")
     private int topK = 30;
