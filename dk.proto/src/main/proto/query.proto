@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package search.query;
+package dsearch.query;
 
-option java_package = "com.dk.search.proto.query";
+option java_package = "com.dk.dsearch.proto.query";
 option java_multiple_files = true;
 
 message QueryRequest {

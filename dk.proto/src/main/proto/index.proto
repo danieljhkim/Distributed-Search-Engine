@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package search.index;
+package dsearch.index;
 
-option java_package = "com.dk.search.proto.index";
+option java_package = "com.dk.dsearch.proto.index";
 option java_multiple_files = true;
 
 message Field {

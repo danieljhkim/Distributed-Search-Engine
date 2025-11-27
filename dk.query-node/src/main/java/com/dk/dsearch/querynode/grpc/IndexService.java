@@ -3,9 +3,9 @@ package com.dk.dsearch.querynode.grpc;
 import com.dk.dsearch.common.model.SearchHit;
 import com.dk.dsearch.common.grpc.NodeClientManager;
 import com.dk.dsearch.common.model.SearchResult;
-import com.dk.search.proto.index.IndexSearchRequest;
-import com.dk.search.proto.index.IndexSearchResponse;
-import com.dk.search.proto.index.IndexServiceGrpc;
+import com.dk.dsearch.proto.index.IndexSearchRequest;
+import com.dk.dsearch.proto.index.IndexSearchResponse;
+import com.dk.dsearch.proto.index.IndexServiceGrpc;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -31,7 +31,7 @@ public class IndexService {
         IndexServiceGrpc.IndexServiceBlockingStub stub = nodeClientManager.getStubsMap().get(nodeId);
         IndexSearchResponse grpcResp = stub.searchIndex(grpcReqBuilder.build());
         List<SearchHit> hits = new ArrayList<>();
-        for (com.dk.search.proto.index.IndexHit hit : grpcResp.getHitsList()) {
+        for (com.dk.dsearch.proto.index.IndexHit hit : grpcResp.getHitsList()) {
             hits.add(new SearchHit(hit.getDocId(), hit.getScore(), hit.getContent()));
         }
         return new SearchResult(

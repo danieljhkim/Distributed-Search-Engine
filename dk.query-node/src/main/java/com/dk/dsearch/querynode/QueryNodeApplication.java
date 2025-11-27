@@ -3,7 +3,7 @@ package com.dk.dsearch.querynode;
 import com.dk.dsearch.common.config.AppConfig;
 import com.dk.dsearch.common.config.ConfigLoader;
 import com.dk.dsearch.common.grpc.NodeClientManager;
-import com.dk.search.proto.index.IndexServiceGrpc;
+import com.dk.dsearch.proto.index.IndexServiceGrpc;
 import com.dk.dsearch.querynode.grpc.IndexService;
 import com.dk.dsearch.querynode.search.SearchExecutor;
 import com.dk.dsearch.querynode.server.QueryNodeServer;

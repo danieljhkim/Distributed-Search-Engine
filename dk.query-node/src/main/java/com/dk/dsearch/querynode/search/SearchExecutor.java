@@ -3,7 +3,7 @@ package com.dk.dsearch.querynode.search;
 import com.dk.dsearch.common.grpc.NodeClientManager;
 import com.dk.dsearch.common.model.SearchHit;
 import com.dk.dsearch.common.model.SearchResult;
-import com.dk.search.proto.index.IndexServiceGrpc;
+import com.dk.dsearch.proto.index.IndexServiceGrpc;
 import com.dk.dsearch.querynode.grpc.IndexService;
 
 import java.io.Closeable;

@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package search.cluster;
+package dsearch.cluster;
 
-option java_package = "com.dk.search.proto.cluster";
+option java_package = "com.dk.dsearch.proto.cluster";
 option java_multiple_files = true;
 
 enum NodeRole {

@@ -5,7 +5,7 @@ import com.dk.dsearch.common.model.SearchHit;
 import com.dk.dsearch.common.model.SearchResult;
 import com.dk.dsearch.indexnode.index.IndexManager;
 import com.dk.dsearch.indexnode.index.ShardIndex;
-import com.dk.search.proto.index.*;
+import com.dk.dsearch.proto.index.*;
 import io.grpc.stub.StreamObserver;
 
 import java.io.IOException;

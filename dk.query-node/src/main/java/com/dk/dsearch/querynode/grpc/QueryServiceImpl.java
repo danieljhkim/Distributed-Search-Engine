@@ -2,10 +2,10 @@ package com.dk.dsearch.querynode.grpc;
 
 import com.dk.dsearch.common.exception.ParseGoneWrongException;
 import com.dk.dsearch.common.model.SearchResult;
-import com.dk.search.proto.query.QueryRequest;
-import com.dk.search.proto.query.QueryResponse;
-import com.dk.search.proto.query.QueryServiceGrpc;
-import com.dk.search.proto.query.SearchHit;
+import com.dk.dsearch.proto.query.QueryRequest;
+import com.dk.dsearch.proto.query.QueryResponse;
+import com.dk.dsearch.proto.query.QueryServiceGrpc;
+import com.dk.dsearch.proto.query.SearchHit;
 import com.dk.dsearch.querynode.search.SearchExecutor;
 import io.grpc.stub.StreamObserver;
 

@@ -3,10 +3,10 @@ package com.dk.dsearch.gateway.service;
 import com.dk.dsearch.common.grpc.NodeClientManager;
 import com.dk.dsearch.gateway.api.dto.SearchRequestDto;
 import com.dk.dsearch.gateway.api.dto.SearchResponseDto;
-import com.dk.search.proto.query.QueryRequest;
-import com.dk.search.proto.query.QueryResponse;
-import com.dk.search.proto.query.QueryServiceGrpc;
-import com.dk.search.proto.query.SearchHit;
+import com.dk.dsearch.proto.query.QueryRequest;
+import com.dk.dsearch.proto.query.QueryResponse;
+import com.dk.dsearch.proto.query.QueryServiceGrpc;
+import com.dk.dsearch.proto.query.SearchHit;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
