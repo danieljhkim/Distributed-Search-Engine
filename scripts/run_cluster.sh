@@ -8,9 +8,9 @@ set -e
 
 BASE_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )/.."
 
-INDEX_NODE_JAR="$BASE_DIR/index-node/target/index-node-1.0-SNAPSHOT.jar"
-QUERY_NODE_JAR="$BASE_DIR/query-node/target/query-node-1.0-SNAPSHOT.jar"
-GATEWAY_JAR="$BASE_DIR/gateway/target/gateway-1.0-SNAPSHOT.jar"
+INDEX_NODE_JAR="$BASE_DIR/dk.index-node/target/dk.index-node-1.0-SNAPSHOT.jar"
+QUERY_NODE_JAR="$BASE_DIR/dk.query-node/target/dk.query-node-1.0-SNAPSHOT.jar"
+GATEWAY_JAR="$BASE_DIR/dk.gateway/target/dk.gateway-1.0-SNAPSHOT.jar"
 
 LOG_DIR="$BASE_DIR/logs"
 DATA_DIR="$BASE_DIR/data"
@@ -38,7 +38,6 @@ start_index_node() {
 start_query_node() {
   echo "Starting Query Node..."
   export QUERY_NODE_PORT=6000
-  export QUERY_NODE_BASE_DIR="$DATA_DIR/index-node"
 
   nohup java -jar "$QUERY_NODE_JAR" \
     > "$LOG_DIR/query-node.log" 2>&1 &
@@ -64,9 +63,9 @@ start_gateway() {
 stop_cluster() {
   echo "Stopping all cluster processes..."
 
-  pkill -f index-node-1.0-SNAPSHOT.jar || true
-  pkill -f query-node-1.0-SNAPSHOT.jar || true
-  pkill -f gateway-1.0-SNAPSHOT.jar || true
+  pkill -f dk.index-node-1.0-SNAPSHOT.jar || true
+  pkill -f dk.query-node-1.0-SNAPSHOT.jar || true
+  pkill -f dk.gateway-1.0-SNAPSHOT.jar || true
 
   echo "Cluster stopped."
 }
