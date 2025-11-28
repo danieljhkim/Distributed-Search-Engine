@@ -39,15 +39,14 @@ public class SearchExecutor implements Closeable {
             IndexService indexService,
             NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager
     ) {
-        // FIXME: temp fix thread pool size
-        this(Executors.newFixedThreadPool(Math.min(2, Runtime.getRuntime().availableProcessors())), indexService, nodeClientManager);
+        this(Executors.newVirtualThreadPerTaskExecutor(), indexService, nodeClientManager);
     }
 
     /**
      * Global search across all shards (or a subset) with pagination.
      *
      * @param queryString user query
-     * @param shardIds    shards to search; MUST be non-null and non-empty
+     * @param shardId     shards to search;
      * @param page        zero-based page index
      * @param size        page size
      * @param topK        max hits to retrieve per shard (used to approximate global top-K)
@@ -62,6 +61,7 @@ public class SearchExecutor implements Closeable {
         long startNanos = System.nanoTime();
         if (page < 0) page = 0;
         if (size <= 0) size = 10;
+
         // How many docs we might need globally for this page
         int requiredForPage = (page + 1) * size;
         int perShardLimit = Math.max(topK, requiredForPage);
@@ -70,28 +70,44 @@ public class SearchExecutor implements Closeable {
         List<CompletableFuture<SearchResult>> futures = new ArrayList<>();
         for (String nodeId : nodeClientManager.getStubsMap().keySet()) {
             CompletableFuture<SearchResult> future =
-                    CompletableFuture.supplyAsync(() -> {
-                        return indexService.searchShardTopK(queryString, nodeId, shardId, perShardLimit);
-                    }, shardExecutor);
+                    CompletableFuture.supplyAsync(() ->
+                                    indexService.searchShardTopK(queryString, nodeId, shardId, perShardLimit),
+                            shardExecutor
+                    );
             futures.add(future);
         }
 
-        long totalHits = 0L;
         List<SearchHit> allHits = new ArrayList<>();
+        long totalHits = 0L;
+        long deadlineNanos = System.nanoTime() + shardTimeout.toNanos(); // GLOBAL timeout budget
+
         for (CompletableFuture<SearchResult> future : futures) {
+            long remainingNanos = deadlineNanos - System.nanoTime();
+            if (remainingNanos <= 0) {
+                LOGGER.log(Level.WARNING, "Global shard search timeout budget exhausted; skipping remaining shards");
+                break;
+            }
             try {
-                SearchResult shardResult = future.get(shardTimeout.toMillis(), TimeUnit.MILLISECONDS);
+                SearchResult shardResult = future.get(remainingNanos, TimeUnit.NANOSECONDS);
                 if (shardResult != null) {
                     totalHits += shardResult.getTotalHits();
                     allHits.addAll(shardResult.getHits());
                 }
             } catch (TimeoutException te) {
-                LOGGER.log(Level.WARNING, "Shard search timed out", te);
+                // This shard didn't finish within the remaining global budget
+                LOGGER.log(Level.WARNING, "Shard search timed out before global deadline", te);
             } catch (ExecutionException ee) {
                 LOGGER.log(Level.SEVERE, "Shard search failed", ee.getCause());
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 LOGGER.log(Level.WARNING, "Shard search interrupted", ie);
+                break;
+            }
+        }
+
+        for (CompletableFuture<SearchResult> future : futures) {
+            if (!future.isDone()) {
+                future.cancel(true); // best-effort interruption of the shard search
             }
         }
 
@@ -99,19 +115,19 @@ public class SearchExecutor implements Closeable {
         allHits.sort(Comparator.comparingDouble(SearchHit::getScore).reversed());
         int fromIndex = page * size;
         int toIndex = Math.min(fromIndex + size, allHits.size());
-        List<SearchHit> pageHits;
 
+        List<SearchHit> pageHits;
         if (fromIndex >= allHits.size()) {
             pageHits = Collections.emptyList();
         } else {
             pageHits = allHits.subList(fromIndex, toIndex);
         }
 
-        long tookMicros = TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - startNanos);
+        long tookMilis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
         return new SearchResult(
                 pageHits,
                 totalHits,
-                tookMicros,
+                tookMilis,
                 page
         );
     }

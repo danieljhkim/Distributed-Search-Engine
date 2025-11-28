@@ -4,11 +4,12 @@ import com.dk.dsearch.common.grpc.GlobalExceptionInterceptor;
 import com.dk.dsearch.indexnode.grpc.IndexServiceImpl;
 import com.dk.dsearch.indexnode.index.IndexManager;
 import io.grpc.Server;
-import io.grpc.ServerBuilder;
 import io.grpc.ServerInterceptors;
 import io.grpc.ServerServiceDefinition;
+import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 
 import java.io.IOException;
+import java.util.concurrent.Executors;
 
 public class IndexNodeServer {
 
@@ -17,10 +18,10 @@ public class IndexNodeServer {
     public IndexNodeServer(int port, IndexManager indexManager) {
         IndexServiceImpl indexService = new IndexServiceImpl(indexManager);
         ServerServiceDefinition interceptedService = ServerInterceptors.intercept(indexService, new GlobalExceptionInterceptor());
-
-        this.server = ServerBuilder
+        this.server = NettyServerBuilder
                 .forPort(port)
                 .addService(interceptedService)
+                .executor(Executors.newVirtualThreadPerTaskExecutor())
                 .build();
     }
 
@@ -31,7 +32,7 @@ public class IndexNodeServer {
 
     public void shutdown() throws InterruptedException {
         if (server != null) {
-            server.shutdown().awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS);
+            server.shutdown().awaitTermination(3, java.util.concurrent.TimeUnit.SECONDS);
         }
     }
 }

@@ -4,11 +4,12 @@ import com.dk.dsearch.common.grpc.GlobalExceptionInterceptor;
 import com.dk.dsearch.querynode.grpc.QueryServiceImpl;
 import com.dk.dsearch.querynode.search.SearchExecutor;
 import io.grpc.Server;
-import io.grpc.ServerBuilder;
 import io.grpc.ServerInterceptors;
 import io.grpc.ServerServiceDefinition;
+import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 
 import java.io.IOException;
+import java.util.concurrent.Executors;
 
 public class QueryNodeServer {
 
@@ -18,9 +19,10 @@ public class QueryNodeServer {
         QueryServiceImpl queryService = new QueryServiceImpl(searchExecutor);
         ServerServiceDefinition interceptedService = ServerInterceptors.intercept(queryService, new GlobalExceptionInterceptor());
 
-        this.server = ServerBuilder
+        this.server = NettyServerBuilder
                 .forPort(port)
                 .addService(interceptedService)
+                .executor(Executors.newVirtualThreadPerTaskExecutor())
                 .build();
     }
 

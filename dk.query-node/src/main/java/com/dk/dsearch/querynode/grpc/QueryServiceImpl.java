@@ -28,9 +28,9 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
         int page = request.getPage();
         int size = request.getSize();
         int topK = request.getTopK();
-        String shardIds = request.getShardId();
+        String shardId = request.getShardId();
         try {
-            SearchResult result = searchExecutor.search(queryString, shardIds, page, size, topK);
+            SearchResult result = searchExecutor.search(queryString, shardId, page, size, topK);
             QueryResponse.Builder respBuilder = QueryResponse.newBuilder()
                     .setTotalHits(result.getTotalHits())
                     .setTookMillis(result.getTookMillis())
