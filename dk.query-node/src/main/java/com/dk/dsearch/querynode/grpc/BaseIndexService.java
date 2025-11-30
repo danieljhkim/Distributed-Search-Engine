@@ -1,5 +1,6 @@
 package com.dk.dsearch.querynode.grpc;
 
+import com.dk.dsearch.common.enums.SearchType;
 import com.dk.dsearch.common.model.SearchHit;
 import com.dk.dsearch.common.model.SearchResult;
 import com.dk.dsearch.proto.index.IndexSearchResponse;
@@ -9,9 +10,9 @@ import java.util.List;
 
 public interface BaseIndexService {
 
-    SearchResult search(String queryString, String nodeId, String shardId, int page, int size, String searchType);
+    SearchResult search(String queryString, String nodeId, String shardId, int page, int size, SearchType searchType);
 
-    default SearchResult searchShardTopK(String queryString, String nodeId, String shardId, int topK, String searchType) {
+    default SearchResult searchShardTopK(String queryString, String nodeId, String shardId, int topK, SearchType searchType) {
         // page = 0, size = topK → from = 0, size = topK
         return search(queryString, nodeId, shardId, 0, topK, searchType);
     }

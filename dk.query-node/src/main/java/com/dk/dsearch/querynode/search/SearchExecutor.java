@@ -1,5 +1,6 @@
 package com.dk.dsearch.querynode.search;
 
+import com.dk.dsearch.common.enums.SearchType;
 import com.dk.dsearch.common.grpc.NodeClientManager;
 import com.dk.dsearch.common.model.SearchHit;
 import com.dk.dsearch.common.model.SearchResult;
@@ -53,7 +54,7 @@ public class SearchExecutor implements Closeable {
                                int page,
                                int size,
                                int topK,
-                               String searchType,
+                               SearchType searchType,
                                BaseIndexService indexService
     ) {
 

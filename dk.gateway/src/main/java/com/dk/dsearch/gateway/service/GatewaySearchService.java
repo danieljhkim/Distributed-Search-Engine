@@ -1,5 +1,6 @@
 package com.dk.dsearch.gateway.service;
 
+import com.dk.dsearch.common.enums.EnumMapper;
 import com.dk.dsearch.common.grpc.NodeClientManager;
 import com.dk.dsearch.gateway.api.dto.SearchRequestDto;
 import com.dk.dsearch.gateway.api.dto.SearchResponseDto;
@@ -32,13 +33,14 @@ public class GatewaySearchService {
     }
 
     private QueryRequest.Builder buildBaseRequest(SearchRequestDto request) {
+        com.dk.dsearch.proto.common.SearchType protoType =
+                EnumMapper.mapToProtoEnum(request.getSearchType());
+
         return QueryRequest.newBuilder()
                 .setQueryString(request.getQuery())
-                .setTopK(request.getTopK())
                 .setPage(request.getPage())
                 .setSize(request.getPageSize())
                 .setShardId(request.getShardId())
-                .setSearchType(request.getSearchType());
+                .setSearchType(protoType);
     }
-
 }

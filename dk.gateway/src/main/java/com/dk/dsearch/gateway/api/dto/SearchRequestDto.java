@@ -1,5 +1,6 @@
 package com.dk.dsearch.gateway.api.dto;
 
+import com.dk.dsearch.common.enums.SearchType;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -16,16 +17,13 @@ public class SearchRequestDto {
 
     private String shardId;
 
-    @Min(value = 1, message = "topK must be > 0")
-    private int topK = 30;
-
     @Min(value = 0, message = "page must be >= 0")
     private int page = 0;
 
     @Min(value = 1, message = "pageSize must be > 0")
     private int pageSize = 10;
 
-    private String searchType = "bm25";
+    private SearchType searchType = SearchType.BM25;
 
     public SearchRequestDto() {
     }

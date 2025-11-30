@@ -1,5 +1,7 @@
 package com.dk.dsearch.querynode.grpc;
 
+import com.dk.dsearch.common.enums.EnumMapper;
+import com.dk.dsearch.common.enums.SearchType;
 import com.dk.dsearch.common.exception.ParseGoneWrongException;
 import com.dk.dsearch.common.model.SearchResult;
 import com.dk.dsearch.proto.query.QueryRequest;
@@ -31,7 +33,7 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
         int size = request.getSize();
         int topK = request.getTopK();
         String shardId = request.getShardId();
-        String searchType = request.getSearchType();
+        SearchType searchType = EnumMapper.mapFromProtoEnum(request.getSearchType());
         try {
             SearchResult result = searchExecutor.search(queryString, shardId, page, size, topK, searchType, indexService);
             QueryResponse response = buildQueryResponse(result, page, size);

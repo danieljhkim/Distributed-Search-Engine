@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package dsearch.common;
+
+option java_package = "com.dk.dsearch.proto.common";
+option java_multiple_files = true;
+
+enum SearchType {
+  SEARCH_TYPE_UNSPECIFIED = 0;
+  BM25 = 1;
+  SEMANTIC = 2;
+  HYBRID = 3;
+}

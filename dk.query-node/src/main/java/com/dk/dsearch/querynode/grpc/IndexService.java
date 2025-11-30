@@ -1,5 +1,7 @@
 package com.dk.dsearch.querynode.grpc;
 
+import com.dk.dsearch.common.enums.EnumMapper;
+import com.dk.dsearch.common.enums.SearchType;
 import com.dk.dsearch.common.grpc.NodeClientManager;
 import com.dk.dsearch.common.model.SearchResult;
 import com.dk.dsearch.proto.index.IndexSearchRequest;
@@ -14,7 +16,7 @@ public class IndexService implements BaseIndexService {
         this.nodeClientManager = nodeClientManager;
     }
 
-    public SearchResult search(String queryString, String nodeId, String shardId, int page, int size, String searchType) {
+    public SearchResult search(String queryString, String nodeId, String shardId, int page, int size, SearchType searchType) {
         if (!nodeClientManager.getStubsMap().containsKey(nodeId)) {
             throw new IllegalArgumentException("Unknown nodeId: " + nodeId);
         }
@@ -24,7 +26,7 @@ public class IndexService implements BaseIndexService {
                 .setFrom(from)
                 .setSize(size)
                 .setShardId(shardId)
-                .setSearchType(searchType);
+                .setSearchType(EnumMapper.mapToProtoEnum(searchType));
         IndexServiceGrpc.IndexServiceBlockingStub stub = nodeClientManager.getStubsMap().get(nodeId);
         IndexSearchResponse grpcResp = stub.searchIndex(grpcReqBuilder.build());
         return mapToSearchResult(grpcResp, page);

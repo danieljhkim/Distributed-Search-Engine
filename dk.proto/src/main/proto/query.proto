@@ -4,14 +4,15 @@ package dsearch.query;
 
 option java_package = "com.dk.dsearch.proto.query";
 option java_multiple_files = true;
+import "common/search_type.proto";
 
 message QueryRequest {
   string query_string = 1;
-  string shard_id = 2;   // which shards to search
+  string shard_id = 2;
   int32 top_k = 3;
   int32 page = 4;
   int32 size = 5;
-  string search_type = 6; // "bm25" or "semantic"
+  dsearch.common.SearchType search_type = 6;
 }
 
 message SearchHit {

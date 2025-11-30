@@ -1,5 +1,7 @@
 package com.dk.dsearch.indexnode.grpc;
 
+import com.dk.dsearch.common.enums.EnumMapper;
+import com.dk.dsearch.common.enums.SearchType;
 import com.dk.dsearch.common.model.SearchDocument;
 import com.dk.dsearch.common.model.SearchHit;
 import com.dk.dsearch.common.model.SearchResult;
@@ -97,11 +99,11 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
                             StreamObserver<IndexSearchResponse> responseObserver) {
         String shardId = request.getShardId();
         String query = request.getQuery();
-        String searchType = request.getSearchType();
+        SearchType protoType = EnumMapper.mapFromProtoEnum(request.getSearchType());
         int from = request.getFrom();
         int size = request.getSize();
         try {
-            SearchResult res = indexManager.searchDocument(shardId, query, size, from, searchType);
+            SearchResult res = indexManager.searchDocument(shardId, query, size, from, protoType);
             IndexSearchResponse.Builder respBuilder = IndexSearchResponse.newBuilder()
                     .setTotalHits(res.getTotalHits());
             for (SearchHit hit : res.getHits()) {
