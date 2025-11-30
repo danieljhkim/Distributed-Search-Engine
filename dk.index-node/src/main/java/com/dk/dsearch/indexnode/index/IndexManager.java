@@ -157,7 +157,13 @@ public class IndexManager implements Closeable {
      * - Newly indexed docs may not be visible until a flush/commit happens.
      * - In most systems, that small delay is acceptable.
      */
-    public SearchResult searchDocument(String shardId, String query, int limit, int from, SearchType searchType) throws IOException {
+    public SearchResult searchDocument(
+            String shardId,
+            String query,
+            int limit,
+            int from,
+            SearchType searchType
+    ) throws IOException {
         ShardIndex shardIndex = shardIndexes.get(shardId);
         if (shardIndex == null) {
             return new SearchResult(new ArrayList<>(), 0);

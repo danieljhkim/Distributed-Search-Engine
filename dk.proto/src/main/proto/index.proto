@@ -59,6 +59,7 @@ message IndexHit {
   float score = 3;
   string content = 4;
   string title = 5;
+  int32 rank = 6;
 }
 
 message IndexSearchResponse {

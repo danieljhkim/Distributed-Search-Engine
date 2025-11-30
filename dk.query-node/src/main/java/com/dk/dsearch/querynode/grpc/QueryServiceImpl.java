@@ -31,11 +31,28 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
         String queryString = request.getQueryString();
         int page = request.getPage();
         int size = request.getSize();
-        int topK = request.getTopK();
         String shardId = request.getShardId();
         SearchType searchType = EnumMapper.mapFromProtoEnum(request.getSearchType());
         try {
-            SearchResult result = searchExecutor.search(queryString, shardId, page, size, topK, searchType, indexService);
+            SearchResult result;
+            if (searchType == SearchType.HYBRID) {
+                result = searchExecutor.searchHybrid(
+                        queryString,
+                        shardId,
+                        page,
+                        size,
+                        indexService
+                );
+            } else {
+                result = searchExecutor.search(
+                        queryString,
+                        shardId,
+                        page,
+                        size,
+                        searchType,
+                        indexService
+                );
+            }
             QueryResponse response = buildQueryResponse(result, page, size);
             responseObserver.onNext(response);
             responseObserver.onCompleted();

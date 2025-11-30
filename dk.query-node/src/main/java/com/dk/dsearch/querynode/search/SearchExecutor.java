@@ -1,5 +1,6 @@
 package com.dk.dsearch.querynode.search;
 
+import com.dk.dsearch.common.enums.HybridFusionStrategy;
 import com.dk.dsearch.common.enums.SearchType;
 import com.dk.dsearch.common.grpc.NodeClientManager;
 import com.dk.dsearch.common.model.SearchHit;
@@ -39,6 +40,58 @@ public class SearchExecutor implements Closeable {
         this(Executors.newVirtualThreadPerTaskExecutor(), nodeClientManager);
     }
 
+    public SearchResult searchHybrid(String queryString,
+                               String shardId,
+                               int page,
+                               int size,
+                               BaseIndexService indexService
+    ) {
+        long startNanos = System.nanoTime();
+        int fetchSize = size * (page + 1);
+        // TODO: fanout search
+        SearchResult bm25Result = search(
+                queryString,
+                shardId,
+                0,
+                fetchSize,
+                SearchType.BM25,
+                indexService
+        );
+        SearchResult semanticResult = search(
+                queryString,
+                shardId,
+                0,
+                fetchSize,
+                SearchType.SEMANTIC,
+                indexService
+        );
+
+        List<SearchHit> res = HybridFusion.fuse(
+                bm25Result,
+                semanticResult,
+                HybridFusionStrategy.RRF,
+                fetchSize,
+                0.5,
+                0.5
+        );
+        // Paginate fused result
+        int fromIndex = page * size;
+        int toIndex = Math.min(fromIndex + size, res.size());
+        List<SearchHit> pageHits;
+        if (fromIndex >= res.size()) {
+            pageHits = Collections.emptyList();
+        } else {
+            pageHits = res.subList(fromIndex, toIndex);
+        }
+        long tookMilis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+        return new SearchResult(
+                pageHits,
+                Math.max(semanticResult.getTotalHits(), bm25Result.getTotalHits()), // FIXME: approximate
+                tookMilis,
+                page
+        );
+    }
+
     /**
      * Global search across all shards (or a subset) with pagination.
      *
@@ -53,18 +106,16 @@ public class SearchExecutor implements Closeable {
                                String shardId,
                                int page,
                                int size,
-                               int topK,
                                SearchType searchType,
                                BaseIndexService indexService
     ) {
-
         long startNanos = System.nanoTime();
         if (page < 0) page = 0;
         if (size <= 0) size = 10;
 
         // How many docs we might need globally for this page
         int requiredForPage = (page + 1) * size;
-        int perShardLimit = Math.max(topK, requiredForPage);
+        int perShardLimit = requiredForPage;
 
         // One async call per shard → each returns a model.SearchResult
         List<CompletableFuture<SearchResult>> futures = new ArrayList<>();
@@ -122,7 +173,6 @@ public class SearchExecutor implements Closeable {
         } else {
             pageHits = allHits.subList(fromIndex, toIndex);
         }
-
         long tookMilis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
         return new SearchResult(
                 pageHits,

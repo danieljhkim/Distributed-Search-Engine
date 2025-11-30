@@ -1,10 +1,12 @@
 package com.dk.dsearch.common.model;
 
 import lombok.Getter;
+import lombok.Setter;
 
 import java.util.List;
 
 @Getter
+@Setter
 public class SearchResult {
 
     private final List<SearchHit> hits;
@@ -24,6 +26,13 @@ public class SearchResult {
     public SearchResult(List<SearchHit> hits, long totalHits) {
         this.hits = List.copyOf(hits);
         this.totalHits = totalHits;
+        this.page_size = hits.size();
+    }
+
+    public SearchResult(List<SearchHit> hits, long totalHits, long tookMillis) {
+        this.hits = List.copyOf(hits);
+        this.totalHits = totalHits;
+        this.tookMillis = tookMillis;
         this.page_size = hits.size();
     }
 

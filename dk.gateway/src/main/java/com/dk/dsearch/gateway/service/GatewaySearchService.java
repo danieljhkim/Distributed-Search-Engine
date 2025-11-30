@@ -9,6 +9,9 @@ import com.dk.dsearch.proto.query.QueryRequest;
 import com.dk.dsearch.proto.query.QueryResponse;
 import com.dk.dsearch.proto.query.QueryServiceGrpc;
 import org.springframework.stereotype.Service;
+import org.springframework.data.domain.*;
+
+import java.util.List;
 
 
 @Service
@@ -25,17 +28,18 @@ public class GatewaySearchService {
         this.mapper = mapper;
     }
 
-    public SearchResponseDto search(SearchRequestDto request) {
+    public Page<SearchResponseDto.SearchHitDto> search(SearchRequestDto request) {
+        Pageable pageable = PageRequest.of(request.getPage(), request.getPageSize());
         QueryServiceGrpc.QueryServiceBlockingStub queryStub = qnClientManager.nextClient();
         QueryRequest.Builder grpcReqBuilder = buildBaseRequest(request);
         QueryResponse grpcResp = queryStub.search(grpcReqBuilder.build());
-        return mapper.toDto(grpcResp);
+        List<SearchResponseDto.SearchHitDto> content = mapper.toDto(grpcResp).getHits();
+        long total = grpcResp.getTotalHits();
+        return new PageImpl<>(content, pageable, total);
     }
 
     private QueryRequest.Builder buildBaseRequest(SearchRequestDto request) {
-        com.dk.dsearch.proto.common.SearchType protoType =
-                EnumMapper.mapToProtoEnum(request.getSearchType());
-
+        com.dk.dsearch.proto.common.SearchType protoType = EnumMapper.mapToProtoEnum(request.getSearchType());
         return QueryRequest.newBuilder()
                 .setQueryString(request.getQuery())
                 .setPage(request.getPage())

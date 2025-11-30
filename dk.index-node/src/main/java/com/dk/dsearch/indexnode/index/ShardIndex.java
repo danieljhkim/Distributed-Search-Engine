@@ -102,9 +102,9 @@ public class ShardIndex implements Closeable {
         try {
             MultiFieldQueryParser parser = new MultiFieldQueryParser(DEFAULT_SEARCH_FIELDS, analyzer);
             Query luceneQuery = parser.parse(queryString);
-
             TopDocs topDocs = searcher.search(luceneQuery, limit + from);
-            return buildPagedResult(topDocs, limit, from);
+            int totalHits = getTotalHits(luceneQuery);
+            return buildPagedResult(topDocs, limit, from, totalHits);
         } catch (IOException e) {
             LOGGER.log(Level.SEVERE, "I/O error searching shard " + shardId, e);
             throw new IndexOperationException("I/O error on shard " + shardId, e);
@@ -125,19 +125,20 @@ public class ShardIndex implements Closeable {
             }
             Query knnQuery = new KnnVectorQuery(FIELD_EMBEDDING, queryEmbedding, limit + from);
             TopDocs topDocs = searcher.search(knnQuery, limit + from);
-            return buildPagedResult(topDocs, limit, from);
+            int totalHits = getTotalHits(knnQuery);
+            return buildPagedResult(topDocs, limit, from, totalHits);
         } catch (IOException e) {
             LOGGER.log(Level.SEVERE, "I/O error during semantic search on shard " + shardId, e);
             throw new IndexOperationException("I/O error on shard " + shardId, e);
         }
     }
 
-    private SearchResult buildPagedResult(TopDocs topDocs, int limit, int from) throws IOException {
+    private SearchResult buildPagedResult(TopDocs topDocs, int limit, int from, int totalHits) throws IOException {
         ScoreDoc[] scoreDocs = topDocs.scoreDocs;
 
         int end = Math.min(scoreDocs.length, from + limit);
         if (from >= scoreDocs.length || from >= end) {
-            return new SearchResult(new ArrayList<>(), topDocs.totalHits.value);
+            return new SearchResult(new ArrayList<>(), totalHits);
         }
 
         List<SearchHit> hits = new ArrayList<>(end - from);
@@ -148,10 +149,10 @@ public class ShardIndex implements Closeable {
             if (docId == null) {
                 continue;
             }
-            hits.add(new SearchHit(docId, doc.get(FIELD_TITLE), doc.get(FIELD_CONTENT), sd.score));
+            hits.add(new SearchHit(docId, doc.get(FIELD_TITLE), doc.get(FIELD_CONTENT), sd.score, i + 1));
         }
 
-        return new SearchResult(hits, topDocs.totalHits.value);
+        return new SearchResult(hits, totalHits);
     }
 
     /**
@@ -187,7 +188,6 @@ public class ShardIndex implements Closeable {
             if (!FIELD_ID.equals(name)) {
                 contentBuilder.append(value).append(' ');
             }
-            // Store title/content separately if present
             if (FIELD_TITLE.equals(name)) {
                 luceneDoc.add(new StoredField(FIELD_TITLE, value));
             }
@@ -209,6 +209,12 @@ public class ShardIndex implements Closeable {
         }
 
         return luceneDoc;
+    }
+
+    private int getTotalHits(Query query) throws IOException { // TODO: optimize by caching
+        TotalHitCountCollector countCollector = new TotalHitCountCollector();
+        searcher.search(query, countCollector);
+        return countCollector.getTotalHits();
     }
 
     @Override
