@@ -9,7 +9,6 @@ import io.grpc.ServerServiceDefinition;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 
 import java.io.IOException;
-import java.util.concurrent.Executors;
 
 public class IndexNodeServer {
 
@@ -21,7 +20,6 @@ public class IndexNodeServer {
         this.server = NettyServerBuilder
                 .forPort(port)
                 .addService(interceptedService)
-                .executor(Executors.newVirtualThreadPerTaskExecutor())
                 .build();
     }
 
