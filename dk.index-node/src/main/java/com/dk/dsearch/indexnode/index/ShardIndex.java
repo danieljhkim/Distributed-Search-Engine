@@ -48,10 +48,9 @@ public class ShardIndex implements Closeable {
     private final Directory directory;
     private final Analyzer analyzer;
     private final IndexWriter indexWriter;
+    private final SearcherManager searcherManager;
     private final TextEmbeddingService embeddingService;
 
-    private DirectoryReader reader;
-    private IndexSearcher searcher;
 
     public ShardIndex(String shardId, Path baseDir) {
         try {
@@ -71,25 +70,25 @@ public class ShardIndex implements Closeable {
             }
 
             this.embeddingService = new TextEmbeddingService();
-            this.reader = DirectoryReader.open(directory);
-            this.searcher = new IndexSearcher(reader);
+            DirectoryReader initialReader = DirectoryReader.open(directory);
+            this.searcherManager = new SearcherManager(initialReader, null);
         } catch (IOException e) {
             throw new RuntimeException("Failed to initialize ShardIndex for shard " + shardId, e);
         }
     }
 
     /**
-     * Upsert a document by id. Synchronized to serialize with commit/search.
+     * Upsert a document by id.
      */
-    public synchronized void index(SearchDocument doc) throws IOException {
+    public void index(SearchDocument doc) throws IOException {
         Document luceneDoc = toLuceneDocument(doc);
         indexWriter.updateDocument(new Term(FIELD_ID, doc.getId()), luceneDoc);
     }
 
     /**
-     * Delete by docId. Synchronized to serialize with commit/search.
+     * Delete by docId.
      */
-    public synchronized void delete(String docId) throws IOException {
+    public void delete(String docId) throws IOException {
         indexWriter.deleteDocuments(new Term(FIELD_ID, docId));
     }
 
@@ -98,42 +97,68 @@ public class ShardIndex implements Closeable {
      * NOTE: this sees only what has been committed. Buffered writes in IndexManager
      * are not visible until a flush/commit happens.
      */
-    public synchronized SearchResult search(String queryString, int limit, int from) {
+    public SearchResult search(String queryString, int limit, int from) {
+        IndexSearcher searcher = null;
         try {
+            searcher = searcherManager.acquire();
             MultiFieldQueryParser parser = new MultiFieldQueryParser(DEFAULT_SEARCH_FIELDS, analyzer);
             Query luceneQuery = parser.parse(queryString);
             TopDocs topDocs = searcher.search(luceneQuery, limit + from);
-            int totalHits = getTotalHits(luceneQuery);
-            return buildPagedResult(topDocs, limit, from, totalHits);
+            int totalHits = getTotalHits(searcher, luceneQuery);
+            return buildPagedResult(searcher, topDocs, limit, from, totalHits);
         } catch (IOException e) {
             LOGGER.log(Level.SEVERE, "I/O error searching shard " + shardId, e);
             throw new IndexOperationException("I/O error on shard " + shardId, e);
         } catch (ParseException e) {
             throw new ParseGoneWrongException("Failed to parse query for shard " + shardId, e);
+        } finally {
+            if (searcher != null) {
+                try {
+                    searcherManager.release(searcher);
+                } catch (IOException e) {
+                    LOGGER.log(Level.WARNING, "Failed to release searcher for shard " + shardId, e);
+                }
+            }
         }
     }
 
     /**
      * Semantic kNN search using pre-computed text embeddings.
+     * Uses SearcherManager for concurrent search access.
      */
-    public synchronized SearchResult semanticSearch(String queryText, int limit, int from) {
+    public SearchResult semanticSearch(String queryText, int limit, int from) {
+        IndexSearcher searcher = null;
         try {
             float[] queryEmbedding = embeddingService.embed(queryText);
             if (queryEmbedding == null || queryEmbedding.length == 0) {
                 LOGGER.warning("Empty embedding for query on shard " + shardId);
                 return new SearchResult(new ArrayList<>(), 0);
             }
+
             Query knnQuery = new KnnVectorQuery(FIELD_EMBEDDING, queryEmbedding, limit + from);
+            searcher = searcherManager.acquire();
             TopDocs topDocs = searcher.search(knnQuery, limit + from);
-            int totalHits = getTotalHits(knnQuery);
-            return buildPagedResult(topDocs, limit, from, totalHits);
+            int totalHits = getTotalHits(searcher, knnQuery);
+            return buildPagedResult(searcher, topDocs, limit, from, totalHits);
         } catch (IOException e) {
             LOGGER.log(Level.SEVERE, "I/O error during semantic search on shard " + shardId, e);
             throw new IndexOperationException("I/O error on shard " + shardId, e);
+        } finally {
+            if (searcher != null) {
+                try {
+                    searcherManager.release(searcher);
+                } catch (IOException e) {
+                    LOGGER.log(Level.WARNING, "Failed to release searcher for shard " + shardId, e);
+                }
+            }
         }
     }
 
-    private SearchResult buildPagedResult(TopDocs topDocs, int limit, int from, int totalHits) throws IOException {
+    private SearchResult buildPagedResult(IndexSearcher searcher,
+                                          TopDocs topDocs,
+                                          int limit,
+                                          int from,
+                                          int totalHits) throws IOException {
         ScoreDoc[] scoreDocs = topDocs.scoreDocs;
 
         int end = Math.min(scoreDocs.length, from + limit);
@@ -156,20 +181,13 @@ public class ShardIndex implements Closeable {
     }
 
     /**
-     * Commit all pending index changes and refresh the NRT reader/searcher so that
+     * Commit all pending index changes and refresh the searcher so that
      * subsequent searches see the new state.
      */
-    public synchronized void commit() throws IOException {
+    public void commit() throws IOException {
         indexWriter.commit();
-
-        // Refresh reader/searcher to reflect new segments.
-        DirectoryReader newReader = DirectoryReader.openIfChanged(reader);
-        if (newReader != null) {
-            DirectoryReader old = reader;
-            reader = newReader;
-            searcher = new IndexSearcher(reader);
-            old.close();
-        }
+        // Refresh SearcherManager to pick up newly committed segments.
+        searcherManager.maybeRefresh();
     }
 
     @SuppressWarnings("all")
@@ -211,25 +229,42 @@ public class ShardIndex implements Closeable {
         return luceneDoc;
     }
 
-    private int getTotalHits(Query query) throws IOException { // TODO: optimize by caching
+    private int getTotalHits(IndexSearcher searcher, Query query) throws IOException { // TODO: optimize by caching
         TotalHitCountCollector countCollector = new TotalHitCountCollector();
         searcher.search(query, countCollector);
         return countCollector.getTotalHits();
     }
 
     @Override
-    public synchronized void close() throws IOException {
+    @SuppressWarnings({"all"})
+    public void close() throws IOException {
+        IOException first = null;
         try {
-            if (reader != null) {
-                reader.close();
+            searcherManager.close();
+        } catch (IOException e) {
+            first = e;
+        }
+        try {
+            indexWriter.close();
+        } catch (IOException e) {
+            if (first == null) {
+                first = e;
+            } else {
+                LOGGER.log(Level.WARNING, "Suppressed exception while closing IndexWriter for shard " + shardId, e);
             }
-        } finally {
-            try {
-                indexWriter.close();
-            } finally {
-                directory.close();
-                analyzer.close();
+        }
+        try {
+            directory.close();
+        } catch (IOException e) {
+            if (first == null) {
+                first = e;
+            } else {
+                LOGGER.log(Level.WARNING, "Suppressed exception while closing Directory for shard " + shardId, e);
             }
+        }
+        analyzer.close();
+        if (first != null) {
+            throw first;
         }
     }
 }
