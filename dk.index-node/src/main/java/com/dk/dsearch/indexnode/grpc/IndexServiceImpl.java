@@ -54,7 +54,6 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
         String shardId = request.getShardId();
         BulkIndexDocumentResponse.Builder respBuilder = BulkIndexDocumentResponse.newBuilder();
         boolean success = true;
-
         try {
             for (Document protoDoc : request.getDocumentsList()) {
                 String docId = protoDoc.getId().isEmpty() ? UUID.randomUUID().toString() : protoDoc.getId();
@@ -98,18 +97,15 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
                             StreamObserver<IndexSearchResponse> responseObserver) {
         String shardId = request.getShardId();
         String query = request.getQuery();
+        String searchType = request.getSearchType();
         int from = request.getFrom();
         int size = request.getSize();
         try {
-            SearchResult res = indexManager.searchDocument(shardId, query, size, from);
+            SearchResult res = indexManager.searchDocument(shardId, query, size, from, searchType);
             IndexSearchResponse.Builder respBuilder = IndexSearchResponse.newBuilder()
                     .setTotalHits(res.getTotalHits());
             for (SearchHit hit : res.getHits()) {
-                IndexHit protoHit = IndexHit.newBuilder()
-                        .setDocId(hit.getDocId())
-                        .setScore(hit.getScore())
-                        .setContent(hit.getContent())
-                        .build();
+                IndexHit protoHit = toIndexHit(hit);
                 respBuilder.addHits(protoHit);
             }
             IndexSearchResponse response = respBuilder.build();
@@ -121,12 +117,24 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
         }
     }
 
+    private IndexHit toIndexHit(SearchHit hit) {
+        IndexHit.Builder builder = IndexHit.newBuilder()
+                .setDocId(hit.getDocId())
+                .setScore(hit.getScore());
+        if (hit.getTitle() != null) {
+            builder.setTitle(hit.getTitle());
+        }
+        if (hit.getContent() != null) {
+            builder.setContent(hit.getContent());
+        }
+        return builder.build();
+    }
+
     private SearchDocument toSearchDocument(String docId, Document protoDoc) {
         Map<String, String> fields = new HashMap<>();
         for (Field field : protoDoc.getFieldsList()) {
             fields.put(field.getName(), field.getValue());
         }
-        // ensure id is available in the map if you want
         fields.putIfAbsent(ShardIndex.FIELD_ID, docId);
         return new SearchDocument(docId, fields);
     }

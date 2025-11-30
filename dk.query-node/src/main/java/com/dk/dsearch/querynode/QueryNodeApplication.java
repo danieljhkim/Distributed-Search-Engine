@@ -4,6 +4,7 @@ import com.dk.dsearch.common.config.AppConfig;
 import com.dk.dsearch.common.config.ConfigLoader;
 import com.dk.dsearch.common.grpc.NodeClientManager;
 import com.dk.dsearch.proto.index.IndexServiceGrpc;
+import com.dk.dsearch.querynode.grpc.BaseIndexService;
 import com.dk.dsearch.querynode.grpc.IndexService;
 import com.dk.dsearch.querynode.search.SearchExecutor;
 import com.dk.dsearch.querynode.server.QueryNodeServer;
@@ -20,9 +21,9 @@ public class QueryNodeApplication {
         int port = Integer.parseInt(System.getenv().getOrDefault("QUERY_NODE_PORT", "6000"));
         AppConfig appConfig = ConfigLoader.load("app-config.yaml");
         NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager = NodeClientManager.forShards(appConfig, IndexServiceGrpc::newBlockingStub);
-        IndexService indexService = new IndexService(nodeClientManager);
-        SearchExecutor searchExecutor = new SearchExecutor(indexService, nodeClientManager);
-        QueryNodeServer queryNodeServer = new QueryNodeServer(port, searchExecutor);
+        SearchExecutor searchExecutor = new SearchExecutor(nodeClientManager);
+        BaseIndexService indexService = new IndexService(nodeClientManager);
+        QueryNodeServer queryNodeServer = new QueryNodeServer(port, searchExecutor, indexService);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             LOGGER.info("Shutting down QueryNode gRPC server...");

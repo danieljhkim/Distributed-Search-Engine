@@ -68,10 +68,10 @@ public class NodeClientManager<T> {
         Map<String, T> stubsMap =
                 appConfig.getCluster().getIndexNodes().stream()
                         .collect(Collectors.toMap(
-                                shard -> String.valueOf(shard.getId()),
-                                shard -> {
+                                node -> String.valueOf(node.getId()),
+                                node -> {
                                     ManagedChannel channel = ManagedChannelBuilder
-                                            .forAddress(shard.getHost(), shard.getPort())
+                                            .forAddress(node.getHost(), node.getPort())
                                             .usePlaintext()
                                             .build();
                                     ch.add(channel);

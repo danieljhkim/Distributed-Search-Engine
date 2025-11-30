@@ -16,3 +16,9 @@ indexNode:
   client:
     host: "localhost"
     ports: [ 5000, 5001 ]
+
+ml:
+  models:
+    textEmbedding:
+      url: "djl://ai.djl.huggingface.pytorch/sentence-transformers/all-MiniLM-L6-v2"
+      engine: "PyTorch"

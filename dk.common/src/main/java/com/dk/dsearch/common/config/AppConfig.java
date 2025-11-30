@@ -14,6 +14,7 @@ public class AppConfig {
     private ClusterConfig cluster;
     private NodeClientWrapper queryNode;
     private NodeClientWrapper indexNode;
+    private MlConfig ml;
 
 
     @Override
@@ -22,6 +23,7 @@ public class AppConfig {
                 "cluster=" + cluster +
                 ", queryNode=" + queryNode +
                 ", indexNode=" + indexNode +
+                ", ml=" + ml +
                 '}';
     }
 
@@ -79,6 +81,49 @@ public class AppConfig {
         public String toString() {
             return "NodeClientWrapper{" +
                     "client=" + client +
+                    '}';
+        }
+    }
+
+    @Setter
+    @Getter
+    public static class MlConfig {
+        private ModelsConfig models;
+
+        @Override
+        public String toString() {
+            return "MlConfig{" +
+                    "models=" + models +
+                    '}';
+        }
+    }
+
+    @Setter
+    @Getter
+    public static class ModelsConfig {
+        private TextEmbeddingConfig textEmbedding;
+
+        @Override
+        public String toString() {
+            return "ModelsConfig{" +
+                    "textEmbedding=" + textEmbedding +
+                    '}';
+        }
+    }
+
+    @Setter
+    @Getter
+    public static class TextEmbeddingConfig {
+        private String id;
+        private String url;
+        private String engine;
+
+        @Override
+        public String toString() {
+            return "TextEmbeddingConfig{" +
+                    "id='" + id + '\'' +
+                    ", url='" + url + '\'' +
+                    ", engine='" + engine + '\'' +
                     '}';
         }
     }

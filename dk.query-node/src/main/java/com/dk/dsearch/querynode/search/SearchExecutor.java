@@ -4,7 +4,7 @@ import com.dk.dsearch.common.grpc.NodeClientManager;
 import com.dk.dsearch.common.model.SearchHit;
 import com.dk.dsearch.common.model.SearchResult;
 import com.dk.dsearch.proto.index.IndexServiceGrpc;
-import com.dk.dsearch.querynode.grpc.IndexService;
+import com.dk.dsearch.querynode.grpc.BaseIndexService;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -21,25 +21,21 @@ public class SearchExecutor implements Closeable {
 
     private static final Logger LOGGER = Logger.getLogger(SearchExecutor.class.getName());
     private final ExecutorService shardExecutor;
-    private final IndexService indexService;
     private final NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager;
     private final Duration shardTimeout = Duration.ofSeconds(2);
 
     public SearchExecutor(
             ExecutorService shardExecutor,
-            IndexService indexService,
             NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager
     ) {
         this.shardExecutor = shardExecutor;
-        this.indexService = indexService;
         this.nodeClientManager = nodeClientManager;
     }
 
     public SearchExecutor(
-            IndexService indexService,
             NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager
     ) {
-        this(Executors.newVirtualThreadPerTaskExecutor(), indexService, nodeClientManager);
+        this(Executors.newVirtualThreadPerTaskExecutor(), nodeClientManager);
     }
 
     /**
@@ -56,7 +52,10 @@ public class SearchExecutor implements Closeable {
                                String shardId,
                                int page,
                                int size,
-                               int topK) {
+                               int topK,
+                               String searchType,
+                               BaseIndexService indexService
+    ) {
 
         long startNanos = System.nanoTime();
         if (page < 0) page = 0;
@@ -71,7 +70,7 @@ public class SearchExecutor implements Closeable {
         for (String nodeId : nodeClientManager.getStubsMap().keySet()) {
             CompletableFuture<SearchResult> future =
                     CompletableFuture.supplyAsync(() ->
-                                    indexService.searchShardTopK(queryString, nodeId, shardId, perShardLimit),
+                                    indexService.searchShardTopK(queryString, nodeId, shardId, perShardLimit, searchType),
                             shardExecutor
                     );
             futures.add(future);

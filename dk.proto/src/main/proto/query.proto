@@ -11,12 +11,14 @@ message QueryRequest {
   int32 top_k = 3;
   int32 page = 4;
   int32 size = 5;
+  string search_type = 6; // "bm25" or "semantic"
 }
 
 message SearchHit {
   string doc_id = 1;
   double score = 2;
   string content = 3;
+  string title = 4;
 }
 
 message QueryResponse {

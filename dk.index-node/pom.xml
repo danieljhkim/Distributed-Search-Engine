@@ -39,6 +39,11 @@
             <artifactId>dk.common</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>com.dk.dsearch</groupId>
+            <artifactId>dk.ml</artifactId>
+            <version>${project.version}</version>
+        </dependency>
 
         <dependency>
             <groupId>org.apache.lucene</groupId>

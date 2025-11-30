@@ -25,6 +25,8 @@ public class SearchRequestDto {
     @Min(value = 1, message = "pageSize must be > 0")
     private int pageSize = 10;
 
+    private String searchType = "bm25";
+
     public SearchRequestDto() {
     }
 

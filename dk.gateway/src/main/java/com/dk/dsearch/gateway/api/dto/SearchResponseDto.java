@@ -39,13 +39,14 @@ public class SearchResponseDto {
     public static class SearchHitDto {
         private String docId;
         private double score;
+        private String title;
+        private String content;
 
-        public SearchHitDto() {
-        }
-
-        public SearchHitDto(String docId, double score) {
+        public SearchHitDto(String docId, String title, String content, double score) {
             this.docId = docId;
             this.score = score;
+            this.title = title;
+            this.content = content;
         }
 
     }

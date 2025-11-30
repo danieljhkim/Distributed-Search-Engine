@@ -1,6 +1,7 @@
 package com.dk.dsearch.querynode.server;
 
 import com.dk.dsearch.common.grpc.GlobalExceptionInterceptor;
+import com.dk.dsearch.querynode.grpc.BaseIndexService;
 import com.dk.dsearch.querynode.grpc.QueryServiceImpl;
 import com.dk.dsearch.querynode.search.SearchExecutor;
 import io.grpc.Server;
@@ -15,8 +16,8 @@ public class QueryNodeServer {
 
     private final Server server;
 
-    public QueryNodeServer(int port, SearchExecutor searchExecutor) {
-        QueryServiceImpl queryService = new QueryServiceImpl(searchExecutor);
+    public QueryNodeServer(int port, SearchExecutor searchExecutor, BaseIndexService indexService) {
+        QueryServiceImpl queryService = new QueryServiceImpl(searchExecutor, indexService);
         ServerServiceDefinition interceptedService = ServerInterceptors.intercept(queryService, new GlobalExceptionInterceptor());
 
         this.server = NettyServerBuilder

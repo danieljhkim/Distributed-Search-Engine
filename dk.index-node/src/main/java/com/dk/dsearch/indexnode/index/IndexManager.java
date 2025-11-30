@@ -44,7 +44,7 @@ public class IndexManager implements Closeable {
     private final ScheduledExecutorService flushScheduler;
 
     public IndexManager(Path baseDir) {
-        this(baseDir, 100, Duration.ofSeconds(60));
+        this(baseDir, 1, Duration.ofSeconds(6));
     }
 
     public IndexManager(Path baseDir, int maxBufferedOpsPerShard, Duration maxFlushInterval) {
@@ -156,12 +156,16 @@ public class IndexManager implements Closeable {
      * - Newly indexed docs may not be visible until a flush/commit happens.
      * - In most systems, that small delay is acceptable.
      */
-    public SearchResult searchDocument(String shardId, String query, int limit, int from) throws IOException {
+    public SearchResult searchDocument(String shardId, String query, int limit, int from, String searchType) throws IOException {
         ShardIndex shardIndex = shardIndexes.get(shardId);
         if (shardIndex == null) {
-            throw new IllegalArgumentException("Unknown shardId: " + shardId);
+            return new SearchResult(new ArrayList<>(), 0);
         }
-        return shardIndex.search(query, limit, from);
+        return switch (searchType) {
+            case "semantic" -> shardIndex.semanticSearch(query, limit, from);
+            case "bm25" -> shardIndex.search(query, limit, from);
+            default -> shardIndex.search(query, limit, from);
+        };
     }
 
     /**
@@ -287,4 +291,5 @@ public class IndexManager implements Closeable {
         int pendingOpsCount = 0;
         long lastFlushNanos = System.nanoTime();
     }
+
 }
