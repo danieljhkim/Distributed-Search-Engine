@@ -115,7 +115,7 @@ To combine both approaches:
   "page": 0,
   "pageSize": 10,
   "shardId": "movies",
-  "searchType": "semantic" // or "bm25" for keyword search
+  "searchType": "SEMANTIC" // BM25 | SEMANTIC | HYBRID
 }
 ```
 

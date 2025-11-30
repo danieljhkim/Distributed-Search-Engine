@@ -149,7 +149,7 @@ public class ShardIndex implements Closeable {
             if (docId == null) {
                 continue;
             }
-            hits.add(new SearchHit(docId, doc.get(FIELD_TITLE), doc.get(FIELD_CONTENT), sd.score, i + 1));
+            hits.add(new SearchHit(docId, doc.get(FIELD_TITLE), doc.get(FIELD_CONTENT), sd.score));
         }
 
         return new SearchResult(hits, totalHits);

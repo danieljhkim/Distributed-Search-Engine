@@ -18,7 +18,6 @@ public class QueryResponseMapper {
         return new SearchResponseDto(
                 hits,
                 grpcResp.getTotalHits(),
-                grpcResp.getTookMillis(),
                 grpcResp.getPage()
         );
     }

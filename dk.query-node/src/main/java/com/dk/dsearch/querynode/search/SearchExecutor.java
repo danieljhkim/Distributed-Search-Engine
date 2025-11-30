@@ -41,12 +41,11 @@ public class SearchExecutor implements Closeable {
     }
 
     public SearchResult searchHybrid(String queryString,
-                               String shardId,
-                               int page,
-                               int size,
-                               BaseIndexService indexService
+                                     String shardId,
+                                     int page,
+                                     int size,
+                                     BaseIndexService indexService
     ) {
-        long startNanos = System.nanoTime();
         int fetchSize = size * (page + 1);
         // TODO: fanout search
         SearchResult bm25Result = search(
@@ -83,11 +82,9 @@ public class SearchExecutor implements Closeable {
         } else {
             pageHits = res.subList(fromIndex, toIndex);
         }
-        long tookMilis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
         return new SearchResult(
                 pageHits,
                 Math.max(semanticResult.getTotalHits(), bm25Result.getTotalHits()), // FIXME: approximate
-                tookMilis,
                 page
         );
     }
@@ -109,7 +106,6 @@ public class SearchExecutor implements Closeable {
                                SearchType searchType,
                                BaseIndexService indexService
     ) {
-        long startNanos = System.nanoTime();
         if (page < 0) page = 0;
         if (size <= 0) size = 10;
 
@@ -173,11 +169,9 @@ public class SearchExecutor implements Closeable {
         } else {
             pageHits = allHits.subList(fromIndex, toIndex);
         }
-        long tookMilis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
         return new SearchResult(
                 pageHits,
                 totalHits,
-                tookMilis,
                 page
         );
     }

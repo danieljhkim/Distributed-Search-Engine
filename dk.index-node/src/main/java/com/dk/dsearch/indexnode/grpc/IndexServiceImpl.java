@@ -122,8 +122,7 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
     private IndexHit toIndexHit(SearchHit hit) {
         IndexHit.Builder builder = IndexHit.newBuilder()
                 .setDocId(hit.getDocId())
-                .setScore(hit.getScore())
-                .setRank(hit.getRank());
+                .setScore(hit.getScore());
         if (hit.getTitle() != null) {
             builder.setTitle(hit.getTitle());
         }

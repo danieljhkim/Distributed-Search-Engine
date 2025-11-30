@@ -65,7 +65,6 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
     private QueryResponse buildQueryResponse(SearchResult result, int page, int size) {
         QueryResponse.Builder respBuilder = QueryResponse.newBuilder()
                 .setTotalHits(result.getTotalHits())
-                .setTookMillis(result.getTookMillis())
                 .setPage(page)
                 .setSize(size);
         for (com.dk.dsearch.common.model.SearchHit hit : result.getHits()) {

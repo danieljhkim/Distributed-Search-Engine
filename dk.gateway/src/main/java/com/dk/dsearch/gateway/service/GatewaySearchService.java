@@ -8,8 +8,11 @@ import com.dk.dsearch.gateway.mapper.QueryResponseMapper;
 import com.dk.dsearch.proto.query.QueryRequest;
 import com.dk.dsearch.proto.query.QueryResponse;
 import com.dk.dsearch.proto.query.QueryServiceGrpc;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
-import org.springframework.data.domain.*;
 
 import java.util.List;
 
@@ -29,12 +32,15 @@ public class GatewaySearchService {
     }
 
     public Page<SearchResponseDto.SearchHitDto> search(SearchRequestDto request) {
+        long startNanos = System.nanoTime();
         Pageable pageable = PageRequest.of(request.getPage(), request.getPageSize());
         QueryServiceGrpc.QueryServiceBlockingStub queryStub = qnClientManager.nextClient();
         QueryRequest.Builder grpcReqBuilder = buildBaseRequest(request);
         QueryResponse grpcResp = queryStub.search(grpcReqBuilder.build());
         List<SearchResponseDto.SearchHitDto> content = mapper.toDto(grpcResp).getHits();
         long total = grpcResp.getTotalHits();
+        long tookMillis = (System.nanoTime() - startNanos) / 1_000_000;
+        System.out.println("Gateway search took " + tookMillis + " ms");
         return new PageImpl<>(content, pageable, total);
     }
 

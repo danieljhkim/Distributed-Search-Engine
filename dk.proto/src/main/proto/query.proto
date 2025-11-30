@@ -25,9 +25,8 @@ message SearchHit {
 message QueryResponse {
   repeated SearchHit hits = 1;
   int64 total_hits = 2;
-  int64 took_millis = 3;
-  int32 page = 4;
-  int32 size = 5;
+  int32 page = 3;
+  int32 size = 4;
 }
 
 service QueryService {
