@@ -7,7 +7,6 @@ SHELL := /bin/bash
 # Default number of nodes for multi-cluster mode
 N_INDEX_NODES ?= 2
 N_QUERY_NODES ?= 2
-NUM_SHARDS ?= 4
 
 .PHONY: help build clean run run-multi stop logs reset wipe-data
 
@@ -43,7 +42,6 @@ run:
 run-multi:
 	N_INDEX_NODES=$(N_INDEX_NODES) \
 	N_QUERY_NODES=$(N_QUERY_NODES) \
-	NUM_SHARDS=$(NUM_SHARDS) \
 	./scripts/run_cluster_multi.sh
 
 stop:
@@ -71,6 +69,3 @@ reset: clean stop wipe-data
 # ============================
 
 restart: stop run
-
-load-test:
-	k6 run ./benchmark/load_test.js

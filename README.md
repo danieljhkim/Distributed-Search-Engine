@@ -1,4 +1,4 @@
-# Easy-Breezy Distributed Search Engine 
+# Distributed Search Engine (dsearch) 
 
 This project contains horizontally scalable, easily maintained, barebones, Lucene-based distributed search engine built in Java.
 
@@ -19,6 +19,12 @@ Once new index nodes are added, gateway component will distribute indexing (writ
 It's a simpler approach for simpler projects, requiring minimal server instances. 
 
 Note that there is no replication layer in this design, so if an index node goes down, the shards on that node will be temporarily unavailable until the node is back up.
+
+### Documentation
+
+- [Quick Start Guid](./docs/QUICKSTART.md)
+- [Benchmarks](./docs/BENCHMARKS.md)
+
 
 --- 
 
@@ -133,7 +139,7 @@ To combine both approaches:
 
 ## Configuration
 
-The cluster configuration is defined in `cluster-config.yaml`:
+The cluster configuration is defined in `app-config.yaml`:
 
 ```yaml
 cluster:
@@ -154,4 +160,10 @@ index-node:
   client:
     host: "localhost"
     ports: [6000, 6001]
+
+ml:
+  models:
+    textEmbedding:
+      url: "djl://ai.djl.huggingface.pytorch/sentence-transformers/all-MiniLM-L6-v2"
+      engine: "PyTorch"
 ```
