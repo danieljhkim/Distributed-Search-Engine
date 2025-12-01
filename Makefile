@@ -71,3 +71,6 @@ reset: clean stop wipe-data
 # ============================
 
 restart: stop run
+
+load-test:
+	k6 run ./benchmark/load_test.js

@@ -1,0 +1,24 @@
+scenarios:
+  - name: gateway-bm25-baseline
+    description: Gateway BM25-only search, small dataset
+    vus: 5
+    duration: 15s
+    searchType: BM25
+
+  - name: gateway-hybrid-light
+    description: Gateway HYBRID search with embeddings, light concurrency
+    vus: 5
+    duration: 15s
+    searchType: HYBRID
+
+  - name: gateway-hybrid-stress
+    description: Gateway HYBRID search under moderate load
+    vus: 20
+    duration: 60s
+    searchType: HYBRID
+
+  - name: querynode-hybrid-grpc
+    description: Direct gRPC calls to QueryNode.hybrid search
+    concurrency: 20
+    requests: 2000
+    searchType: HYBRID
