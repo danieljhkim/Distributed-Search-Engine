@@ -6,7 +6,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.dk.dsearch</groupId>
+        <groupId>com.danieljhkim.dsearch</groupId>
         <artifactId>distributed-search-engine</artifactId>
         <version>1.0-SNAPSHOT</version>
     </parent>
@@ -34,13 +34,13 @@
             <artifactId>grpc-netty-shaded</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.dk.dsearch</groupId>
+            <groupId>com.danieljhkim.dsearch</groupId>
             <artifactId>dk.proto</artifactId>
             <version>${project.version}</version>
         </dependency>
 
         <dependency>
-            <groupId>com.dk.dsearch</groupId>
+            <groupId>com.danieljhkim.dsearch</groupId>
             <artifactId>dk.common</artifactId>
             <version>${project.version}</version>
         </dependency>
@@ -66,7 +66,7 @@
                     </execution>
                 </executions>
                 <configuration>
-                    <mainClass>com.dk.dsearch.gateway.GatewayApplication</mainClass>
+                    <mainClass>com.danieljhkim.dsearch.gateway.GatewayApplication</mainClass>
                 </configuration>
             </plugin>
 
