@@ -4,9 +4,9 @@ import com.danieljhkim.dsearch.common.enums.EnumMapper;
 import com.danieljhkim.dsearch.common.enums.SearchType;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.common.model.SearchResult;
-import com.dk.dsearch.proto.index.IndexSearchRequest;
-import com.dk.dsearch.proto.index.IndexSearchResponse;
-import com.dk.dsearch.proto.index.IndexServiceGrpc;
+import com.danieljhkim.dsearch.proto.index.IndexSearchRequest;
+import com.danieljhkim.dsearch.proto.index.IndexSearchResponse;
+import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
 
 public class IndexService implements BaseIndexService {
 

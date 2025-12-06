@@ -1,24 +1,33 @@
 # Distributed Search Engine (dsearch) 
 
-This project contains horizontally scalable, easily maintained, barebones, Lucene-based distributed search engine built in Java.
+This project contains horizontally scalable, easily maintained, barebones, Lucene-based distributed search engine built in Java. 
+
+It's designed for small to medium-sized applications that require distributed lexical (BM25) and semantic (vector) search capabilities without the complexity of larger search platforms.
+
+---
+
+## Overview
 
 It has three primary components:
-- Gateway Node – HTTP API entrypoint (Spring Boot)
-- Query Nodes – Fan-out and merge layer (gRPC)
-- Index Nodes – Storage + Lucene shard search (gRPC)
+- **Gateway Node**: HTTP API entrypoint (Spring Boot / Load Balancer)
+- **Query Nodes**: Fan-out and merge layer (gRPC)
+- **Index Nodes**: Storage + Lucene shard search (gRPC)
 
-Each index node can host multiple Lucene index shards (for example: `shard-movies`, `shard-shows`, etc.).  
+Each index node can host multiple Lucene index shards (i.e. `shard-movies`, `shard-shows`, etc.).  
 Each shard represents a **categorical or domain-specific segmentation** of your data.
 
-These shards may live on **multiple index nodes simultaneously**—Query Nodes will **fan‑out searches for a given shard/category to all index nodes that host that shard**, gather the partial results, and merge them into a final ranked response.
+When a search request is received, the Query Nodes will **fan‑out searches for a given shard/category to all index nodes**, gather the results, and merge them into a final ranked response.
 
-This architecture lets you scale horizontally simply by adding more index nodes and assigning shards to them. No rebalancing is required.
+These shards are dispersed evenly to all available index nodes. 
+The gateway routes indexing (write) request to an index node that has the least load for that shard.
+Therefore, each index nodes will eventually come to have an even load-distribution across all shards.
 
-You can easily add more index nodes on the fly to increase capacity and distribute load without any re-balancing.
-Once new index nodes are added, gateway component will distribute indexing (write) requests evenly, round-robin style.
-It's a simpler approach for simpler projects, requiring minimal server instances. 
+This architecture lets you scale horizontally without any hassle, simply by adding more index nodes on the fly.
+No manual re-balancing is required; once new index nodes are added, the gateway will automatically distribute indexing requests to the new nodes with the least load.
 
-Note that there is no replication layer in this design, so if an index node goes down, the shards on that node will be temporarily unavailable until the node is back up.
+It's a simpler approach for simpler projects, requiring minimal server instances and operational overhead. 
+
+*Note that there is no replication layer in this design, so if an index node goes down, the shards on that node will be temporarily unavailable until the node is back up.*
 
 ### Documentation
 
@@ -66,8 +75,8 @@ Note that there is no replication layer in this design, so if an index node goes
 
 The search engine supports **two complementary retrieval modes**:
 
-1. **Lexical Search (BM25)** – classic keyword relevance
-2. **Semantic Search (Embeddings + Lucene kNN)** – retrieves results by *meaning*, not words
+1. **Lexical Search (BM25)**: classic keyword relevance
+2. **Semantic Search (Embeddings + Lucene kNN)**: retrieves results by *meaning*, not words
 
 Both retrieval modes can also be **combined into a hybrid ranking**.
 

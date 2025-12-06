@@ -3,7 +3,7 @@ package com.danieljhkim.dsearch.querynode;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.config.ConfigLoader;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
-import com.dk.dsearch.proto.index.IndexServiceGrpc;
+import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
 import com.danieljhkim.dsearch.querynode.grpc.BaseIndexService;
 import com.danieljhkim.dsearch.querynode.grpc.IndexService;
 import com.danieljhkim.dsearch.querynode.search.SearchExecutor;

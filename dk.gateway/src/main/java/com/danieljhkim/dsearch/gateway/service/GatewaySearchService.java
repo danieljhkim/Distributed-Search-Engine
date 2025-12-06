@@ -5,9 +5,9 @@ import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.gateway.api.dto.SearchRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.SearchResponseDto;
 import com.danieljhkim.dsearch.gateway.mapper.QueryResponseMapper;
-import com.dk.dsearch.proto.query.QueryRequest;
-import com.dk.dsearch.proto.query.QueryResponse;
-import com.dk.dsearch.proto.query.QueryServiceGrpc;
+import com.danieljhkim.dsearch.proto.query.QueryRequest;
+import com.danieljhkim.dsearch.proto.query.QueryResponse;
+import com.danieljhkim.dsearch.proto.query.QueryServiceGrpc;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -45,7 +45,7 @@ public class GatewaySearchService {
     }
 
     private QueryRequest.Builder buildBaseRequest(SearchRequestDto request) {
-        com.dk.dsearch.proto.common.SearchType protoType = EnumMapper.mapToProtoEnum(request.getSearchType());
+        com.danieljhkim.dsearch.proto.common.SearchType protoType = EnumMapper.mapToProtoEnum(request.getSearchType());
         return QueryRequest.newBuilder()
                 .setQueryString(request.getQuery())
                 .setPage(request.getPage())

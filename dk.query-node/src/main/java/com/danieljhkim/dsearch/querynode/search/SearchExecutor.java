@@ -5,7 +5,7 @@ import com.danieljhkim.dsearch.common.enums.SearchType;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
-import com.dk.dsearch.proto.index.IndexServiceGrpc;
+import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
 import com.danieljhkim.dsearch.querynode.grpc.BaseIndexService;
 
 import java.io.Closeable;

@@ -3,7 +3,7 @@ package com.danieljhkim.dsearch.gateway.service;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
-import com.dk.dsearch.proto.index.*;
+import com.danieljhkim.dsearch.proto.index.*;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;

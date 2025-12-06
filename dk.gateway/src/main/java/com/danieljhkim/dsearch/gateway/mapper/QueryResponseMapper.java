@@ -1,8 +1,8 @@
 package com.danieljhkim.dsearch.gateway.mapper;
 
 import com.danieljhkim.dsearch.gateway.api.dto.SearchResponseDto;
-import com.dk.dsearch.proto.query.QueryResponse;
-import com.dk.dsearch.proto.query.SearchHit;
+import com.danieljhkim.dsearch.proto.query.QueryResponse;
+import com.danieljhkim.dsearch.proto.query.SearchHit;
 import org.springframework.stereotype.Component;
 
 import java.util.List;

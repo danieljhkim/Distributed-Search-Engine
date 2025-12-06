@@ -19,7 +19,7 @@
             <artifactId>grpc-netty-shaded</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.dk.dsearch</groupId>
+            <groupId>com.danieljhkim.dsearch</groupId>
             <artifactId>dk.proto</artifactId>
             <version>${project.version}</version>
         </dependency>
@@ -45,7 +45,7 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <mainClass>com.dk.dsearch.query.CoordinatorApplication</mainClass>
+                            <mainClass>com.danieljhkim.dsearch.query.CoordinatorApplication</mainClass>
                         </manifest>
                     </archive>
                 </configuration>

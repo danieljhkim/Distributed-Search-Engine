@@ -2,7 +2,7 @@ package com.danieljhkim.dsearch.coordinator.grpc;
 
 import com.danieljhkim.dsearch.coordinator.cluster.ClusterMembershipService;
 import com.danieljhkim.dsearch.coordinator.cluster.ShardMap;
-import com.dk.dsearch.proto.cluster.*;
+import com.danieljhkim.dsearch.proto.cluster.*;
 import io.grpc.stub.StreamObserver;
 
 import java.util.Comparator;

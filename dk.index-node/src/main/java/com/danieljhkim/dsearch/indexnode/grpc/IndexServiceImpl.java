@@ -7,7 +7,7 @@ import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
 import com.danieljhkim.dsearch.indexnode.index.IndexManager;
 import com.danieljhkim.dsearch.indexnode.index.ShardIndex;
-import com.dk.dsearch.proto.index.*;
+import com.danieljhkim.dsearch.proto.index.*;
 import io.grpc.stub.StreamObserver;
 
 import java.io.IOException;

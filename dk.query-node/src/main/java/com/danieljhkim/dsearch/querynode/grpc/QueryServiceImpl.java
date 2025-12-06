@@ -4,10 +4,10 @@ import com.danieljhkim.dsearch.common.enums.EnumMapper;
 import com.danieljhkim.dsearch.common.enums.SearchType;
 import com.danieljhkim.dsearch.common.exception.ParseGoneWrongException;
 import com.danieljhkim.dsearch.common.model.SearchResult;
-import com.dk.dsearch.proto.query.QueryRequest;
-import com.dk.dsearch.proto.query.QueryResponse;
-import com.dk.dsearch.proto.query.QueryServiceGrpc;
-import com.dk.dsearch.proto.query.SearchHit;
+import com.danieljhkim.dsearch.proto.query.QueryRequest;
+import com.danieljhkim.dsearch.proto.query.QueryResponse;
+import com.danieljhkim.dsearch.proto.query.QueryServiceGrpc;
+import com.danieljhkim.dsearch.proto.query.SearchHit;
 import com.danieljhkim.dsearch.querynode.search.SearchExecutor;
 import io.grpc.stub.StreamObserver;
 

@@ -3,7 +3,7 @@ package com.danieljhkim.dsearch.querynode.grpc;
 import com.danieljhkim.dsearch.common.enums.SearchType;
 import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
-import com.dk.dsearch.proto.index.IndexSearchResponse;
+import com.danieljhkim.dsearch.proto.index.IndexSearchResponse;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -19,7 +19,7 @@ public interface BaseIndexService {
 
     default SearchResult mapToSearchResult(IndexSearchResponse grpcResp, int page) {
         List<SearchHit> hits = new ArrayList<>();
-        for (com.dk.dsearch.proto.index.IndexHit hit : grpcResp.getHitsList()) {
+        for (com.danieljhkim.dsearch.proto.index.IndexHit hit : grpcResp.getHitsList()) {
             hits.add(new SearchHit(hit.getDocId(), hit.getTitle(), hit.getContent(), hit.getScore()));
         }
         return new SearchResult(

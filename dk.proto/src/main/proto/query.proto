@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package dsearch.query;
 
-option java_package = "com.dk.dsearch.proto.query";
+option java_package = "com.danieljhkim.dsearch.proto.query";
 option java_multiple_files = true;
 import "common/search_type.proto";
 
