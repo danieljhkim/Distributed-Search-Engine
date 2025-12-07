@@ -27,7 +27,7 @@ public class IndexService implements BaseIndexService {
                 .setSize(size)
                 .setShardId(shardId)
                 .setSearchType(EnumMapper.mapToProtoEnum(searchType));
-        IndexServiceGrpc.IndexServiceBlockingStub stub = nodeClientManager.getStubsMap().get(nodeId);
+        IndexServiceGrpc.IndexServiceBlockingStub stub = nodeClientManager.getStubsMap().get(nodeId).getStub();
         IndexSearchResponse grpcResp = stub.searchIndex(grpcReqBuilder.build());
         return mapToSearchResult(grpcResp, page);
     }

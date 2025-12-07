@@ -1,21 +1,22 @@
-cluster:
-  indexNodes:
+indexNodes:
+  nodes:
     - id: "0"
       host: "localhost"
       port: 5000
     - id: "1"
       host: "localhost"
       port: 5001
+  routingStrategy: "LEAST_LOADED"
 
-queryNode:
-  client:
-    host: "localhost"
-    ports: [ 6000, 6001 ]
-
-indexNode:
-  client:
-    host: "localhost"
-    ports: [ 5000, 5001 ]
+queryNodes:
+  nodes:
+    - id: "0"
+      host: "localhost"
+      port: 6000
+    - id: "1"
+      host: "localhost"
+      port: 6001
+  routingStrategy: "ROUND_ROBIN"
 
 ml:
   models:

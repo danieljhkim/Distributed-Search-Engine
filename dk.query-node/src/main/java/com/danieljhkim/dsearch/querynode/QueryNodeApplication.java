@@ -20,7 +20,7 @@ public class QueryNodeApplication {
     public static void main(String[] args) throws IOException, InterruptedException {
         int port = Integer.parseInt(System.getenv().getOrDefault("QUERY_NODE_PORT", "6000"));
         AppConfig appConfig = ConfigLoader.load("app-config.yaml");
-        NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager = NodeClientManager.forShards(appConfig, IndexServiceGrpc::newBlockingStub);
+        NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager = NodeClientManager.fromConfig(appConfig.getIndexNodes(), IndexServiceGrpc::newBlockingStub);
         SearchExecutor searchExecutor = new SearchExecutor(nodeClientManager);
         BaseIndexService indexService = new IndexService(nodeClientManager);
         QueryNodeServer queryNodeServer = new QueryNodeServer(port, searchExecutor, indexService);

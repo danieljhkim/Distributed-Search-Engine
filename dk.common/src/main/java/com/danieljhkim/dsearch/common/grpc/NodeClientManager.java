@@ -1,12 +1,12 @@
 package com.danieljhkim.dsearch.common.grpc;
 
 import com.danieljhkim.dsearch.common.config.AppConfig;
+import com.danieljhkim.dsearch.common.enums.RoutingStrategy;
 import com.danieljhkim.dsearch.common.loadbalancer.RoundRobin;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import lombok.Getter;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -19,54 +19,29 @@ public class NodeClientManager<T> {
     private static final Logger LOGGER = Logger.getLogger(NodeClientManager.class.getName());
 
     private final RoundRobin<T> rr;
-
     @Getter
-    private final List<T> stubs;
+    private final Map<String, NodeClient<T>> stubsMap;
     private final List<ManagedChannel> channels;
-    @Getter
-    private Map<String, T> stubsMap;
+    private final RoutingStrategy routingStrategy;
 
-    public NodeClientManager(List<T> stubs, List<ManagedChannel> channels) {
-        if (stubs == null || stubs.isEmpty()) {
-            throw new IllegalArgumentException("stubs must not be empty");
-        }
-        this.stubs = List.copyOf(stubs);
-        this.rr = new RoundRobin<>(this.stubs);
-        this.channels = List.copyOf(Objects.requireNonNull(channels, "channels must not be null"));
-        this.stubsMap = Map.of(); // no shard mapping in this ctor
-    }
-
-    public NodeClientManager(Map<String, T> stubsMap, List<ManagedChannel> channels) {
-        this(stubsMap.values().stream().toList(), channels);
-        this.stubsMap = Map.copyOf(Objects.requireNonNull(stubsMap, "stubsMap must not be null"));
-    }
-
-    public static <T> NodeClientManager<T> forPorts(
-            List<Integer> ports,
-            String host,
-            Function<ManagedChannel, T> clientFactory
-    ) {
-        List<ManagedChannel> ch = new ArrayList<>();
-        List<T> stubs = ports.stream()
-                .map(port -> {
-                    ManagedChannel channel = ManagedChannelBuilder.forAddress(host, port)
-                            .usePlaintext()
-                            .build();
-                    ch.add(channel);
-                    return clientFactory.apply(channel);
-                })
+    public NodeClientManager(Map<String, NodeClient<T>> stubsMap, RoutingStrategy routingStrategy) {
+        this.channels = stubsMap.values().stream()
+                .map(NodeClient::getChannel)
                 .toList();
-
-        return new NodeClientManager<>(stubs, ch);
+        List<T> stubs = stubsMap.values().stream()
+                .map(NodeClient::getStub)
+                .toList();
+        this.rr = new RoundRobin<>(stubs);
+        this.stubsMap = Objects.requireNonNull(stubsMap, "stubsMap must not be null");
+        this.routingStrategy = routingStrategy;
     }
 
-    public static <T> NodeClientManager<T> forShards(
-            AppConfig appConfig,
+    public static <T> NodeClientManager<T> fromConfig(
+            AppConfig.NodeGroupConfig appConfig,
             Function<ManagedChannel, T> clientFactory
     ) {
-        List<ManagedChannel> ch = new ArrayList<>();
-        Map<String, T> stubsMap =
-                appConfig.getCluster().getIndexNodes().stream()
+        Map<String, NodeClient<T>> stubsMap =
+                appConfig.getNodes().stream()
                         .collect(Collectors.toMap(
                                 node -> String.valueOf(node.getId()),
                                 node -> {
@@ -74,23 +49,60 @@ public class NodeClientManager<T> {
                                             .forAddress(node.getHost(), node.getPort())
                                             .usePlaintext()
                                             .build();
-                                    ch.add(channel);
-                                    return clientFactory.apply(channel);
+                                    T stub = clientFactory.apply(channel);
+                                    return new NodeClient<>(
+                                            String.valueOf(node.getId()),
+                                            stub,
+                                            channel
+                                    );
                                 }
                         ));
-
-        return new NodeClientManager<>(stubsMap, ch);
+        return new NodeClientManager<>(stubsMap, appConfig.getRoutingStrategy());
     }
 
     /**
-     * Get a client/stub for the next node in round-robin order.
+     * Get a client/stub for the next node in round-robin order or least loaded for WRITE/DEL ops.
+     */
+    public T nextClient(String shardId, boolean isWriteOperation) {
+        LOGGER.info("Routing strategy: " + this.routingStrategy);
+        if (this.routingStrategy == RoutingStrategy.LEAST_LOADED) {
+            return nextLeastLoadedClient(shardId, isWriteOperation);
+        }
+        return this.rr.next();
+    }
+
+    /**
+     * Get a client/stub for the next node in round-robin for READ operations.
      */
     public T nextClient() {
-        return rr.next();
+        return this.rr.next();
+    }
+
+    public T nextLeastLoadedClient(String shardId, boolean isWriteOperation) { // TODO: handle update
+        NodeClient<T> leastLoadedClient = null;
+        long minDocCount = Long.MAX_VALUE;
+        for (NodeClient<T> client : stubsMap.values()) {
+            long shardDocCount = client.getShardDocCount(shardId);
+            LOGGER.info("Client " + client.getNodeId() + " has shard " + shardId + " doc count: " + shardDocCount);
+            if (shardDocCount < minDocCount) {
+                minDocCount = shardDocCount;
+                leastLoadedClient = client;
+            }
+        }
+        if (leastLoadedClient != null) {
+            if (isWriteOperation) {
+                leastLoadedClient.incrementDocToShard(shardId);
+            } else {
+                leastLoadedClient.decrementDocFromShard(shardId);
+            }
+            return leastLoadedClient.getStub();
+        } else {
+            throw new IllegalStateException("No available clients for shard: " + shardId);
+        }
     }
 
     public void shutdown() {
-        for (ManagedChannel channel : channels) {
+        for (ManagedChannel channel : this.channels) {
             if (!channel.isShutdown() && !channel.isTerminated()) {
                 channel.shutdown();
             }

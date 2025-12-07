@@ -4,8 +4,6 @@ This project contains horizontally scalable, easily maintained, barebones, Lucen
 
 It's designed for small to medium-sized applications that require distributed lexical (BM25) and semantic (vector) search capabilities without the complexity of larger search platforms.
 
----
-
 ## Overview
 
 It has three primary components:
@@ -151,28 +149,30 @@ To combine both approaches:
 The cluster configuration is defined in `app-config.yaml`:
 
 ```yaml
-cluster:
-    indexNodes:
-    - id: 0
+indexNodes:
+  nodes:
+    - id: "0"
+      host: "localhost"
+      port: 5000
+    - id: "1"
+      host: "localhost"
+      port: 5001
+  routingStrategy: "LEAST_LOADED"
+
+queryNodes:
+  nodes:
+    - id: "0"
       host: "localhost"
       port: 6000
-    - id: 1
+    - id: "1"
       host: "localhost"
       port: 6001
-
-query-node:
-  client:
-    host: "localhost"
-    ports: [5000, 5001]
-
-index-node:
-  client:
-    host: "localhost"
-    ports: [6000, 6001]
+  routingStrategy: "ROUND_ROBIN"
 
 ml:
   models:
     textEmbedding:
       url: "djl://ai.djl.huggingface.pytorch/sentence-transformers/all-MiniLM-L6-v2"
       engine: "PyTorch"
+
 ```

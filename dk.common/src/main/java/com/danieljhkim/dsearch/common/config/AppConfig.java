@@ -1,6 +1,6 @@
 package com.danieljhkim.dsearch.common.config;
 
-
+import com.danieljhkim.dsearch.common.enums.RoutingStrategy;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -11,76 +11,48 @@ import java.util.List;
 @Getter
 public class AppConfig {
 
-    private ClusterConfig cluster;
-    private NodeClientWrapper queryNode;
-    private NodeClientWrapper indexNode;
+    private NodeGroupConfig indexNodes;
+    private NodeGroupConfig queryNodes;
     private MlConfig ml;
-
 
     @Override
     public String toString() {
         return "AppConfig{" +
-                "cluster=" + cluster +
-                ", queryNode=" + queryNode +
-                ", indexNode=" + indexNode +
+                "indexNodes=" + indexNodes +
+                ", queryNodes=" + queryNodes +
                 ", ml=" + ml +
                 '}';
     }
 
+
     @Setter
     @Getter
-    public static class NodeProperties {
-        private String host;
-        private List<Integer> ports;
+    public static class NodeGroupConfig {
+        private List<NodeConfig> nodes;
+        private RoutingStrategy routingStrategy = RoutingStrategy.LEAST_LOADED;
 
         @Override
         public String toString() {
-            return "NodeProperties{" +
-                    "host='" + host + '\'' +
-                    ", ports=" + ports +
+            return "NodeGroupConfig{" +
+                    "nodes=" + nodes +
+                    ", routingStrategy=" + routingStrategy +
                     '}';
         }
     }
 
     @Setter
     @Getter
-    public static class ClusterConfig {
-        private List<IndexNodeConfig> indexNodes;
-
-        @Override
-        public String toString() {
-            return "ClusterConfig{" +
-                    "indexNodes=" + indexNodes +
-                    '}';
-        }
-    }
-
-    @Setter
-    @Getter
-    public static class IndexNodeConfig {
+    public static class NodeConfig {
         private String id;
         private String host;
         private int port;
 
         @Override
         public String toString() {
-            return "IndexShardConfig{" +
-                    "id=" + id +
+            return "NodeConfig{" +
+                    "id='" + id + '\'' +
                     ", host='" + host + '\'' +
                     ", port=" + port +
-                    '}';
-        }
-    }
-
-    @Setter
-    @Getter
-    public static class NodeClientWrapper {
-        private NodeProperties client;
-
-        @Override
-        public String toString() {
-            return "NodeClientWrapper{" +
-                    "client=" + client +
                     '}';
         }
     }
@@ -114,15 +86,13 @@ public class AppConfig {
     @Setter
     @Getter
     public static class TextEmbeddingConfig {
-        private String id;
         private String url;
         private String engine;
 
         @Override
         public String toString() {
             return "TextEmbeddingConfig{" +
-                    "id='" + id + '\'' +
-                    ", url='" + url + '\'' +
+                    "url='" + url + '\'' +
                     ", engine='" + engine + '\'' +
                     '}';
         }

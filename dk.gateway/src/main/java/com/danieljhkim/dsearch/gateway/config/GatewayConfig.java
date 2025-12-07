@@ -16,18 +16,16 @@ public class GatewayConfig {
 
     @Bean
     public NodeClientManager<QueryServiceGrpc.QueryServiceBlockingStub> queryNodeClientManager(AppConfig appConfig) {
-        return NodeClientManager.forPorts(
-                appConfig.getQueryNode().getClient().getPorts(),
-                appConfig.getQueryNode().getClient().getHost(),
+        return NodeClientManager.fromConfig(
+                appConfig.getQueryNodes(),
                 QueryServiceGrpc::newBlockingStub
         );
     }
 
     @Bean
     public NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> indexNodeClientManager(AppConfig appConfig) {
-        return NodeClientManager.forPorts(
-                appConfig.getIndexNode().getClient().getPorts(),
-                appConfig.getIndexNode().getClient().getHost(),
+        return NodeClientManager.fromConfig(
+                appConfig.getIndexNodes(),
                 IndexServiceGrpc::newBlockingStub
         );
     }
