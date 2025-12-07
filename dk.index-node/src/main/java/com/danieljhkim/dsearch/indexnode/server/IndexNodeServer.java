@@ -12,9 +12,9 @@ import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.prometheus.client.exporter.HTTPServer;
 import io.prometheus.client.hotspot.DefaultExports;
 
+import java.io.IOException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import java.io.IOException;
 
 public class IndexNodeServer {
 
