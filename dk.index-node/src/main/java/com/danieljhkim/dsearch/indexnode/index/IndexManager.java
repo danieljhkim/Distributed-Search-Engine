@@ -116,9 +116,9 @@ public class IndexManager implements Closeable {
      * - we hit maxBufferedOpsPerShard, OR
      * - the background thread sees that maxFlushInterval has passed.
      */
-    public void indexDocument(String shardId, SearchDocument doc) throws IOException {
-        ShardIndex shardIndex = getOrCreateShard(shardId);
-        ShardBuffer buffer = getBuffer(shardId);
+    public void indexDocument(String partitionId, SearchDocument doc) throws IOException {
+        ShardIndex shardIndex = getOrCreateShard(partitionId);
+        ShardBuffer buffer = getBuffer(partitionId);
 
         buffer.lock.lock();
         try {
@@ -126,7 +126,7 @@ public class IndexManager implements Closeable {
             buffer.pendingOpsCount++;
             // Optional: keep a doc counter if you want doc-count-based metrics
             if (buffer.pendingOpsCount >= maxBufferedOpsPerShard) {
-                flushShardBufferLocked(shardId, shardIndex, buffer);
+                flushShardBufferLocked(partitionId, shardIndex, buffer);
             }
         } finally {
             buffer.lock.unlock();
@@ -137,15 +137,15 @@ public class IndexManager implements Closeable {
      * Buffered delete: same semantics as indexDocument — delete ops are buffered
      * and only flushed/committed when thresholds/timeouts are reached.
      */
-    public void deleteDocument(String shardId, String docId) throws IOException {
-        ShardIndex shardIndex = getOrCreateShard(shardId);
-        ShardBuffer buffer = getBuffer(shardId);
+    public void deleteDocument(String partitionId, String docId) throws IOException {
+        ShardIndex shardIndex = getOrCreateShard(partitionId);
+        ShardBuffer buffer = getBuffer(partitionId);
         buffer.lock.lock();
         try {
             buffer.pendingDeletes.add(docId);
             buffer.pendingOpsCount++;
             if (buffer.pendingOpsCount >= maxBufferedOpsPerShard) {
-                flushShardBufferLocked(shardId, shardIndex, buffer);
+                flushShardBufferLocked(partitionId, shardIndex, buffer);
             }
         } finally {
             buffer.lock.unlock();
@@ -158,13 +158,13 @@ public class IndexManager implements Closeable {
      * - In most systems, that small delay is acceptable.
      */
     public SearchResult searchDocument(
-            String shardId,
+            String partitionId,
             String query,
             int limit,
             int from,
             SearchType searchType
     ) throws IOException {
-        ShardIndex shardIndex = shardIndexes.get(shardId);
+        ShardIndex shardIndex = shardIndexes.get(partitionId);
         if (shardIndex == null) {
             return new SearchResult(new ArrayList<>(), 0);
         }
@@ -183,13 +183,13 @@ public class IndexManager implements Closeable {
     public void commitAll() throws IOException {
         // First, flush all buffers
         for (Map.Entry<String, ShardIndex> entry : shardIndexes.entrySet()) {
-            String shardId = entry.getKey();
+            String partitionId = entry.getKey();
             ShardIndex shardIndex = entry.getValue();
-            ShardBuffer buffer = getBuffer(shardId);
+            ShardBuffer buffer = getBuffer(partitionId);
 
             buffer.lock.lock();
             try {
-                flushShardBufferLocked(shardId, shardIndex, buffer);
+                flushShardBufferLocked(partitionId, shardIndex, buffer);
                 // Also ensure a final commit even if there were no buffered ops.
                 shardIndex.commit();
             } finally {
@@ -205,9 +205,9 @@ public class IndexManager implements Closeable {
     private void flushBuffersOnSchedule() {
         long nowNanos = System.nanoTime();
         for (Map.Entry<String, ShardIndex> entry : shardIndexes.entrySet()) {
-            String shardId = entry.getKey();
+            String partitionId = entry.getKey();
             ShardIndex shardIndex = entry.getValue();
-            ShardBuffer buffer = getBuffer(shardId);
+            ShardBuffer buffer = getBuffer(partitionId);
 
             // Avoid blocking the scheduler if a shard is currently being flushed manually
             if (!buffer.lock.tryLock()) {
@@ -220,10 +220,10 @@ public class IndexManager implements Closeable {
                 long elapsedNanos = nowNanos - buffer.lastFlushNanos;
                 if (elapsedNanos >= maxFlushInterval.toNanos()) {
                     try {
-                        flushShardBufferLocked(shardId, shardIndex, buffer);
+                        flushShardBufferLocked(partitionId, shardIndex, buffer);
                     } catch (IOException e) {
                         LOGGER.log(Level.SEVERE,
-                                "Failed to flush shard buffer for shardId=" + shardId, e);
+                                "Failed to flush shard buffer for partitionId=" + partitionId, e);
                     }
                 }
             } finally {
@@ -236,7 +236,7 @@ public class IndexManager implements Closeable {
      * Flushes buffered docs and deletes for a single shard.
      * Assumes buffer.lock is already held.
      */
-    private void flushShardBufferLocked(String shardId, ShardIndex shardIndex, ShardBuffer buffer) throws IOException {
+    private void flushShardBufferLocked(String partitionId, ShardIndex shardIndex, ShardBuffer buffer) throws IOException {
         if (buffer.pendingOpsCount == 0) {
             return;
         }
@@ -255,8 +255,8 @@ public class IndexManager implements Closeable {
         buffer.pendingOpsCount = 0;
         buffer.lastFlushNanos = System.nanoTime();
 
-        LOGGER.fine(() -> "Flushed shard buffer for shardId="
-                + shardId + " at " + buffer.lastFlushNanos);
+        LOGGER.fine(() -> "Flushed shard buffer for partitionId="
+                + partitionId + " at " + buffer.lastFlushNanos);
     }
 
     @Override

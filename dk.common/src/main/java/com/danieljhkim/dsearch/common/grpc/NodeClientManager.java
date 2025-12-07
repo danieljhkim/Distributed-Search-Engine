@@ -78,10 +78,10 @@ public class NodeClientManager<T> {
     /**
      * Get a client/stub for the next node in round-robin order or least loaded for WRITE/DEL ops.
      */
-    public T nextClient(String shardId, boolean isWriteOperation) {
+    public T nextClient(String partitionId, boolean isWriteOperation) {
         LOGGER.info("Routing strategy: " + this.routingStrategy);
         if (this.routingStrategy == RoutingStrategy.LEAST_LOADED) {
-            return nextLeastLoadedClient(shardId, isWriteOperation);
+            return nextLeastLoadedClient(partitionId, isWriteOperation);
         }
         return this.rr.next();
     }
@@ -93,12 +93,12 @@ public class NodeClientManager<T> {
         return this.rr.next();
     }
 
-    public T nextLeastLoadedClient(String shardId, boolean isWriteOperation) { // TODO: handle update
+    public T nextLeastLoadedClient(String partitionId, boolean isWriteOperation) { // TODO: handle update
         NodeClient<T> leastLoadedClient = null;
         long minDocCount = Long.MAX_VALUE;
         for (NodeClient<T> client : clientMap.values()) {
-            long shardDocCount = client.getShardDocCount(shardId);
-            LOGGER.info("Client " + client.getNodeId() + " has shard " + shardId + " doc count: " + shardDocCount);
+            long shardDocCount = client.getShardDocCount(partitionId);
+            LOGGER.info("Client " + client.getNodeId() + " has partition " + partitionId + " doc count: " + shardDocCount);
             if (shardDocCount < minDocCount) {
                 minDocCount = shardDocCount;
                 leastLoadedClient = client;
@@ -106,13 +106,13 @@ public class NodeClientManager<T> {
         }
         if (leastLoadedClient != null) {
             if (isWriteOperation) {
-                leastLoadedClient.incrementDocToShard(shardId);
+                leastLoadedClient.incrementDocToShard(partitionId);
             } else {
-                leastLoadedClient.decrementDocFromShard(shardId);
+                leastLoadedClient.decrementDocFromShard(partitionId);
             }
             return leastLoadedClient.getStub();
         } else {
-            throw new IllegalStateException("No available clients for shard: " + shardId);
+            throw new IllegalStateException("No available clients for shard: " + partitionId);
         }
     }
 
@@ -124,7 +124,7 @@ public class NodeClientManager<T> {
 
             Map<String, Long> shardCounts = new HashMap<>();
             for (ShardState state : client.getShardStates().values()) {
-                shardCounts.put(state.getShardId(), state.getDocumentCount());
+                shardCounts.put(state.getPartitionId(), state.getDocumentCount());
             }
             entry.setShards(shardCounts);
             snapshot.getNodes().add(entry);

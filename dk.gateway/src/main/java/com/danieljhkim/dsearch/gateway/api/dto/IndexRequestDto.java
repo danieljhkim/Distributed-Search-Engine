@@ -10,7 +10,7 @@ import java.util.Map;
 public class IndexRequestDto {
     private String id;                 // optional; if absent, server generates
     private Map<String, String> fields;
-    private String shardId;           // optional; default 0 for now
+    private String partitionId;
 
     public IndexRequestDto() {
     }

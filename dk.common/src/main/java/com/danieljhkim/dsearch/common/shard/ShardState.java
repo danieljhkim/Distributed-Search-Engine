@@ -8,20 +8,22 @@ import java.util.concurrent.atomic.AtomicLong;
 @Getter
 @Setter
 public class ShardState {
-    private final String shardId;
+    private final ShardId shardId;
+    private final String partitionId;
     private final String nodeId;
     private final AtomicLong docCount = new AtomicLong(0);
     private volatile boolean isActive;
 
-    public ShardState(String shardId, String nodeId) {
-        this(shardId, nodeId, 0L);
+    public ShardState(String partitionId, String nodeId) {
+        this(partitionId, nodeId, 0L);
     }
 
-    public ShardState(String shardId, String nodeId, long initialCount) {
-        this.shardId = shardId;
+    public ShardState(String partitionId, String nodeId, long initialCount) {
+        this.partitionId = partitionId;
         this.nodeId = nodeId;
         this.docCount.set(initialCount);
         this.isActive = true;
+        this.shardId = new ShardId(nodeId, partitionId);
     }
 
     public long getDocumentCount() {

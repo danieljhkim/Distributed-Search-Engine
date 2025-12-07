@@ -19,8 +19,8 @@ public class GatewayIndexService {
     }
 
     public IndexResponseDto index(IndexRequestDto requestDto) {
-        String shardId = requestDto.getShardId() != null ? requestDto.getShardId() : "default";
-        var indexStub = indexNodeClientManager.nextClient(shardId, true);
+        String partitionId = requestDto.getPartitionId() != null ? requestDto.getPartitionId() : "default";
+        var indexStub = indexNodeClientManager.nextClient(partitionId, true);
 
         Document.Builder docBuilder = Document.newBuilder();
         if (requestDto.getId() != null && !requestDto.getId().isEmpty()) {
@@ -39,7 +39,7 @@ public class GatewayIndexService {
         }
 
         IndexDocumentRequest grpcReq = IndexDocumentRequest.newBuilder()
-                .setShardId(shardId)
+                .setPartitionId(partitionId)
                 .setDocument(docBuilder.build())
                 .build();
         IndexDocumentResponse resp = indexStub.indexDocument(grpcReq);

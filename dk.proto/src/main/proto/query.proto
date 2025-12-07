@@ -9,7 +9,7 @@ import "common/fusion_strategy.proto";
 
 message QueryRequest {
   string query_string = 1;
-  string shard_id = 2;
+  string partition_id = 2;
   int32 top_k = 3;
   int32 page = 4;
   int32 size = 5;

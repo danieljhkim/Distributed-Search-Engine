@@ -32,7 +32,7 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
         String queryString = request.getQueryString();
         int page = request.getPage();
         int size = request.getSize();
-        String shardId = request.getShardId();
+        String partitionId = request.getPartitionId();
         SearchType searchType = EnumMapper.mapFromProtoEnum(request.getSearchType());
         try {
             SearchResult result;
@@ -40,7 +40,7 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
                 HybridFusionStrategy fusionStrategy = EnumMapper.mapFromProtoEnum(request.getFusionStrategy());
                 result = searchExecutor.searchHybrid(
                         queryString,
-                        shardId,
+                        partitionId,
                         page,
                         size,
                         indexService,
@@ -49,7 +49,7 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
             } else {
                 result = searchExecutor.search(
                         queryString,
-                        shardId,
+                        partitionId,
                         page,
                         size,
                         searchType,

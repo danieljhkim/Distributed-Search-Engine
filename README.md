@@ -31,10 +31,11 @@ The system is composed of three primary components:
   Spring Boot HTTP API entrypoint, load balancing and routing, and system health.
 
 - **Query Nodes**  
-  gRPC services that **fan‑out queries to all index nodes for a given shard**, merge partial results, and apply hybrid fusion strategies.
+  gRPC services that **fan‑out queries to all index nodes for a given partition**, merge partial results, and apply hybrid fusion strategies.
 
 - **Index Nodes**  
-  gRPC services hosting **Lucene shards**. Each index node can host multiple shards (e.g. `shard-movies`, `shard-shows`, …). Each shard is a Lucene index responsible for a categorical or domain‑specific slice of your data.
+  gRPC services hosting **Lucene shards**. Each index node can host multiple partitions (e.g. `shard-movies`, `shard-shows`, …), and sharded across multiple nodes. 
+  Each partition is a Lucene index responsible for a categorical or domain‑specific slice of your data.
 
 ### Sharding & Load Balancing
 
@@ -42,7 +43,7 @@ The system is composed of three primary components:
 - Each shard exists **once per cluster** (no replicas yet).
 - Shards are distributed across index nodes.
 - The Gateway maintains **per‑shard, per‑node document counts** and uses a **least‑loaded routing strategy** for indexing operations:
-  - For a given `(shardId, document)` write/delete, the Gateway picks the index node **with the smallest document count for that shard**.
+  - For a given `(partitionId, document)` write/delete, the Gateway picks the index node **with the smallest document count for that partition**.
   - Over time, this keeps each shard **evenly balanced across index nodes** without a coordinator.
   - Counts are periodically snapshotted to disk so new Gateway instances can restore their view.
 
@@ -176,7 +177,7 @@ make run-multi
   "query": "time travel romance",
   "page": 0,
   "pageSize": 10,
-  "shardId": "movies",
+  "partitionId": "movies",
   "searchType": "HYBRID",  // BM25 | SEMANTIC | HYBRID
   "fusionStrategy": "RRF" // SCORE_SUM | WEIGHTED | RRF
 }
@@ -186,7 +187,7 @@ make run-multi
 
 ```json
 {
-  "shardId": "movies",
+  "partitionId": "movies",
   "id": "movie_001",
   "fields": {
     "title": "Interstellar",

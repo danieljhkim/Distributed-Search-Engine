@@ -17,7 +17,7 @@ message Document {
 }
 
 message IndexDocumentRequest {
-  string shard_id = 1;
+  string partition_id = 1;
   Document document = 2;
 }
 
@@ -27,7 +27,7 @@ message IndexDocumentResponse {
 }
 
 message BulkIndexDocumentRequest {
-  string shard_id = 1;
+  string partition_id = 1;
   repeated Document documents = 2;
 }
 
@@ -37,7 +37,7 @@ message BulkIndexDocumentResponse {
 }
 
 message DeleteDocumentRequest {
-  string shard_id = 1;
+  string partition_id = 1;
   string id = 2;
 }
 
@@ -46,7 +46,7 @@ message DeleteDocumentResponse {
 }
 
 message IndexSearchRequest {
-  string shard_id = 1;
+  string partition_id = 1;
   string query = 2;
   int32 from = 3;
   int32 size = 4;
@@ -54,7 +54,7 @@ message IndexSearchRequest {
 }
 
 message IndexHit {
-  string shard_id = 1;
+  string partition_id = 1;
   string doc_id = 2;
   float score = 3;
   string content = 4;

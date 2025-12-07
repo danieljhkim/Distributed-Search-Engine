@@ -14,6 +14,10 @@ public class ShardId {
         this.id = id;
     }
 
+    public ShardId(String nodeId, String partitionId) {
+        this.id = partitionId + "_" +  nodeId;
+    }
+
     @Override
     public String toString() {
         return "ShardId{" +

@@ -52,7 +52,7 @@ public class GatewaySearchService {
                 .setQueryString(request.getQuery())
                 .setPage(request.getPage())
                 .setSize(request.getPageSize())
-                .setShardId(request.getShardId())
+                .setPartitionId(request.getPartitionId())
                 .setSearchType(protoType)
                 .setFusionStrategy(fusionStrategy);
     }

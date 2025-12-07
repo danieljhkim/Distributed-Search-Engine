@@ -40,7 +40,6 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
         RegisterNodeResponse resp = RegisterNodeResponse.newBuilder()
                 .setSuccess(true)
                 .build();
-
         responseObserver.onNext(resp);
         responseObserver.onCompleted();
     }
@@ -96,7 +95,6 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
 
         // 2) Clear existing assignments
         shardMap.clearAssignments();
-
         int numShards = shardMap.getNumShards();
         int numIndexNodes = indexNodes.size();
 

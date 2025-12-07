@@ -30,13 +30,13 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
 
     @Override
     public void indexDocument(IndexDocumentRequest request, StreamObserver<IndexDocumentResponse> responseObserver) {
-        String shardId = request.getShardId();
+        String partitionId = request.getPartitionId();
         Document protoDoc = request.getDocument();
         String docId = protoDoc.getId().isEmpty() ? UUID.randomUUID().toString() : protoDoc.getId();
 
         try {
             SearchDocument searchDoc = toSearchDocument(docId, protoDoc);
-            indexManager.indexDocument(shardId, searchDoc);
+            indexManager.indexDocument(partitionId, searchDoc);
 
             IndexDocumentResponse response = IndexDocumentResponse.newBuilder()
                     .setId(docId)
@@ -53,14 +53,14 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
     @Override
     public void bulkIndexDocument(BulkIndexDocumentRequest request,
                                   StreamObserver<BulkIndexDocumentResponse> responseObserver) {
-        String shardId = request.getShardId();
+        String partitionId = request.getPartitionId();
         BulkIndexDocumentResponse.Builder respBuilder = BulkIndexDocumentResponse.newBuilder();
         boolean success = true;
         try {
             for (Document protoDoc : request.getDocumentsList()) {
                 String docId = protoDoc.getId().isEmpty() ? UUID.randomUUID().toString() : protoDoc.getId();
                 SearchDocument searchDoc = toSearchDocument(docId, protoDoc);
-                indexManager.indexDocument(shardId, searchDoc);
+                indexManager.indexDocument(partitionId, searchDoc);
                 respBuilder.addIds(docId);
             }
             // optional: commit per bulk call
@@ -78,11 +78,10 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
     @Override
     public void deleteDocument(DeleteDocumentRequest request,
                                StreamObserver<DeleteDocumentResponse> responseObserver) {
-        String shardId = request.getShardId();
+        String partitionId = request.getPartitionId();
         String docId = request.getId();
-
         try {
-            indexManager.deleteDocument(shardId, docId);
+            indexManager.deleteDocument(partitionId, docId);
             DeleteDocumentResponse response = DeleteDocumentResponse.newBuilder()
                     .setSuccess(true)
                     .build();
@@ -97,13 +96,13 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
     @Override
     public void searchIndex(IndexSearchRequest request,
                             StreamObserver<IndexSearchResponse> responseObserver) {
-        String shardId = request.getShardId();
+        String partitionId = request.getPartitionId();
         String query = request.getQuery();
         SearchType protoType = EnumMapper.mapFromProtoEnum(request.getSearchType());
         int from = request.getFrom();
         int size = request.getSize();
         try {
-            SearchResult res = indexManager.searchDocument(shardId, query, size, from, protoType);
+            SearchResult res = indexManager.searchDocument(partitionId, query, size, from, protoType);
             IndexSearchResponse.Builder respBuilder = IndexSearchResponse.newBuilder()
                     .setTotalHits(res.getTotalHits());
             for (SearchHit hit : res.getHits()) {

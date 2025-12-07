@@ -32,7 +32,7 @@ public class IndexController {
         } finally {
             sample.stop(
                     Timer.builder("dsearch.gateway.index.latency")
-                            .tag("shardId", req.getShardId() != null ? req.getShardId() : "UNKNOWN")
+                            .tag("partitionId", req.getPartitionId() != null ? req.getPartitionId() : "UNKNOWN")
                             .register(meterRegistry)
             );
         }

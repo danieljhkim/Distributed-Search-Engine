@@ -16,7 +16,7 @@ public class SearchRequestDto {
     @Size(max = 512, message = "query must be at most 512 characters")
     private String query;
 
-    private String shardId = "default";
+    private String partitionId = "default";
 
     @Min(value = 0, message = "page must be >= 0")
     private int page = 0;
