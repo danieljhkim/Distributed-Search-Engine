@@ -30,12 +30,14 @@ public class AppConfig {
     public static class NodeGroupConfig {
         private List<NodeConfig> nodes;
         private RoutingStrategy routingStrategy = RoutingStrategy.LEAST_LOADED;
+        private String componentLabel;
 
         @Override
         public String toString() {
             return "NodeGroupConfig{" +
                     "nodes=" + nodes +
                     ", routingStrategy=" + routingStrategy +
+                    ", componentLabel='" + componentLabel +
                     '}';
         }
     }

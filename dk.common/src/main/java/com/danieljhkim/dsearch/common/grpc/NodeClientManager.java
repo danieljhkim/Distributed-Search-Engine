@@ -48,6 +48,8 @@ public class NodeClientManager<T> {
             Function<Channel, T> clientFactory
     ) {
         CorrelationIdClientInterceptor tracingInterceptor = new CorrelationIdClientInterceptor();
+        String component = appConfig.getComponentLabel() != null ? appConfig.getComponentLabel() : "gateway";
+        PrometheusGrpcClientInterceptor metricsInterceptor = new PrometheusGrpcClientInterceptor(component);
         Map<String, NodeClient<T>> clientMap =
                 appConfig.getNodes().stream()
                         .collect(Collectors.toMap(
@@ -57,7 +59,11 @@ public class NodeClientManager<T> {
                                             .forAddress(node.getHost(), node.getPort())
                                             .usePlaintext()
                                             .build();
-                                    Channel interceptedChannel = ClientInterceptors.intercept(channel, tracingInterceptor);
+                                    Channel interceptedChannel = ClientInterceptors.intercept(
+                                            channel,
+                                            tracingInterceptor,
+                                            metricsInterceptor
+                                    );
                                     T stub = clientFactory.apply(interceptedChannel);
                                     return new NodeClient<>(
                                             String.valueOf(node.getId()),

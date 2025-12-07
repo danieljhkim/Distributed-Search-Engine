@@ -1,4 +1,6 @@
 indexNodes:
+  routingStrategy: "LEAST_LOADED"
+  componentLabel: "dsearch-index-node"
   nodes:
     - id: "0"
       host: "localhost"
@@ -8,9 +10,10 @@ indexNodes:
       host: "localhost"
       port: 5001
       healthPort: "5101"
-  routingStrategy: "LEAST_LOADED"
 
 queryNodes:
+  routingStrategy: "ROUND_ROBIN"
+  componentLabel: "dsearch-query-node"
   nodes:
     - id: "0"
       host: "localhost"
@@ -20,7 +23,6 @@ queryNodes:
       host: "localhost"
       port: 6001
       healthPort: "6101"
-  routingStrategy: "ROUND_ROBIN"
 
 ml:
   models:
