@@ -7,21 +7,20 @@ import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
 import com.danieljhkim.dsearch.querynode.grpc.BaseIndexService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import java.io.Closeable;
 import java.io.IOException;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.*;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 public class SearchExecutor implements Closeable {
 
-    private static final Logger LOGGER = Logger.getLogger(SearchExecutor.class.getName());
+    private static final Logger LOG = LoggerFactory.getLogger(SearchExecutor.class);
+
     private final ExecutorService shardExecutor;
     private final NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager;
     private final Duration shardTimeout = Duration.ofSeconds(2);
@@ -47,7 +46,7 @@ public class SearchExecutor implements Closeable {
                                      BaseIndexService indexService
     ) {
         int fetchSize = size * (page + 1);
-        // TODO: fanout search
+
         SearchResult bm25Result = search(
                 queryString,
                 shardId,
@@ -73,32 +72,23 @@ public class SearchExecutor implements Closeable {
                 0.5,
                 0.5
         );
-        // Paginate fused result
+
         int fromIndex = page * size;
         int toIndex = Math.min(fromIndex + size, res.size());
-        List<SearchHit> pageHits;
-        if (fromIndex >= res.size()) {
-            pageHits = Collections.emptyList();
-        } else {
-            pageHits = res.subList(fromIndex, toIndex);
-        }
+        List<SearchHit> pageHits =
+                (fromIndex >= res.size()) ? Collections.emptyList() : res.subList(fromIndex, toIndex);
+
         return new SearchResult(
                 pageHits,
-                Math.max(semanticResult.getTotalHits(), bm25Result.getTotalHits()), // FIXME: approximate
+                Math.max(semanticResult.getTotalHits(), bm25Result.getTotalHits()), // approx
                 page
         );
     }
 
     /**
-     * Global search across all shards (or a subset) with pagination.
-     *
-     * @param queryString user query
-     * @param shardId     shards to search;
-     * @param page        zero-based page index
-     * @param size        page size
-     * @param topK        max hits to retrieve per shard (used to approximate global top-K)
+     * Global search across all index nodes for a given shardId.
      */
-    @SuppressWarnings({"all"})
+    @SuppressWarnings("all")
     public SearchResult search(String queryString,
                                String shardId,
                                int page,
@@ -109,29 +99,58 @@ public class SearchExecutor implements Closeable {
         if (page < 0) page = 0;
         if (size <= 0) size = 10;
 
-        // How many docs we might need globally for this page
+        String requestId = MDC.get("requestId"); // set by gRPC server interceptor
+
         int requiredForPage = (page + 1) * size;
         int perShardLimit = requiredForPage;
 
-        // One async call per shard → each returns a model.SearchResult
-        List<CompletableFuture<SearchResult>> futures = new ArrayList<>();
+        // per-node timing (for this shard)
+        Map<String, Long> nodeTimingsMs = new ConcurrentHashMap<>();
+
+        // One async call per index node
+        List<Map.Entry<String, CompletableFuture<SearchResult>>> futures = new ArrayList<>();
         for (String nodeId : nodeClientManager.getClientMap().keySet()) {
+            // capture nodeId & requestId for the lambda
             CompletableFuture<SearchResult> future =
-                    CompletableFuture.supplyAsync(() ->
-                                    indexService.searchShardTopK(queryString, nodeId, shardId, perShardLimit, searchType),
+                    CompletableFuture.supplyAsync(() -> {
+                                // ensure MDC propagation into this async task
+                                if (requestId != null) {
+                                    MDC.put("requestId", requestId);
+                                }
+                                long startNanos = System.nanoTime();
+                                try {
+                                    return indexService.searchShardTopK(
+                                            queryString,
+                                            nodeId,
+                                            shardId,
+                                            perShardLimit,
+                                            searchType
+                                    );
+                                } finally {
+                                    long tookMs = (System.nanoTime() - startNanos) / 1_000_000L;
+                                    nodeTimingsMs.put(nodeId, tookMs);
+                                    LOG.info("Shard search timing: requestId={}, nodeId={}, shardId={}, searchType={}, tookMs={}",
+                                            requestId, nodeId, shardId, searchType, tookMs);
+                                    if (requestId != null) {
+                                        MDC.remove("requestId");
+                                    }
+                                }
+                            },
                             shardExecutor
                     );
-            futures.add(future);
+            futures.add(new AbstractMap.SimpleEntry<>(nodeId, future));
         }
 
         List<SearchHit> allHits = new ArrayList<>();
         long totalHits = 0L;
-        long deadlineNanos = System.nanoTime() + shardTimeout.toNanos(); // GLOBAL timeout budget
+        long deadlineNanos = System.nanoTime() + shardTimeout.toNanos(); // global timeout budget
 
-        for (CompletableFuture<SearchResult> future : futures) {
+        for (Map.Entry<String, CompletableFuture<SearchResult>> entry : futures) {
+            CompletableFuture<SearchResult> future = entry.getValue();
             long remainingNanos = deadlineNanos - System.nanoTime();
             if (remainingNanos <= 0) {
-                LOGGER.log(Level.WARNING, "Global shard search timeout budget exhausted; skipping remaining shards");
+                LOG.warn("Global shard search timeout budget exhausted; skipping remaining nodes; requestId={}, shardId={}, searchType={}",
+                        requestId, shardId, searchType);
                 break;
             }
             try {
@@ -141,20 +160,24 @@ public class SearchExecutor implements Closeable {
                     allHits.addAll(shardResult.getHits());
                 }
             } catch (TimeoutException te) {
-                // This shard didn't finish within the remaining global budget
-                LOGGER.log(Level.WARNING, "Shard search timed out before global deadline", te);
+                LOG.warn("Node search timed out before global deadline; requestId={}, shardId={}, searchType={}",
+                        requestId, shardId, searchType, te);
             } catch (ExecutionException ee) {
-                LOGGER.log(Level.SEVERE, "Shard search failed", ee.getCause());
+                LOG.error("Node search failed; requestId={}, shardId={}, searchType={}",
+                        requestId, shardId, searchType, ee.getCause());
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
-                LOGGER.log(Level.WARNING, "Shard search interrupted", ie);
+                LOG.warn("Node search interrupted; requestId={}, shardId={}, searchType={}",
+                        requestId, shardId, searchType, ie);
                 break;
             }
         }
 
-        for (CompletableFuture<SearchResult> future : futures) {
+        // best-effort cancellation of any remaining futures
+        for (Map.Entry<String, CompletableFuture<SearchResult>> entry : futures) {
+            CompletableFuture<SearchResult> future = entry.getValue();
             if (!future.isDone()) {
-                future.cancel(true); // best-effort interruption of the shard search
+                future.cancel(true);
             }
         }
 
@@ -163,12 +186,14 @@ public class SearchExecutor implements Closeable {
         int fromIndex = page * size;
         int toIndex = Math.min(fromIndex + size, allHits.size());
 
-        List<SearchHit> pageHits;
-        if (fromIndex >= allHits.size()) {
-            pageHits = Collections.emptyList();
-        } else {
-            pageHits = allHits.subList(fromIndex, toIndex);
-        }
+        List<SearchHit> pageHits =
+                (fromIndex >= allHits.size()) ? Collections.emptyList() : allHits.subList(fromIndex, toIndex);
+
+        // log a summary per request
+        long sumMs = nodeTimingsMs.values().stream().mapToLong(Long::longValue).sum();
+        LOG.info("Search fanout summary: requestId={}, shardId={}, searchType={}, totalHits={}, page={}, size={}, totalNodeTimeMs={}, nodeTimingsMs={}",
+                requestId, shardId, searchType, totalHits, page, size, sumMs, nodeTimingsMs);
+
         return new SearchResult(
                 pageHits,
                 totalHits,
@@ -180,5 +205,4 @@ public class SearchExecutor implements Closeable {
     public void close() throws IOException {
         shardExecutor.shutdown();
     }
-
 }

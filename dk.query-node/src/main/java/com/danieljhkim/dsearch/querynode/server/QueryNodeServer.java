@@ -1,6 +1,7 @@
 package com.danieljhkim.dsearch.querynode.server;
 
 import com.danieljhkim.dsearch.common.grpc.GlobalExceptionInterceptor;
+import com.danieljhkim.dsearch.common.tracing.CorrelationIdServerInterceptor;
 import com.danieljhkim.dsearch.querynode.grpc.BaseIndexService;
 import com.danieljhkim.dsearch.querynode.grpc.QueryServiceImpl;
 import com.danieljhkim.dsearch.querynode.search.SearchExecutor;
@@ -22,6 +23,7 @@ public class QueryNodeServer {
         this.server = NettyServerBuilder
                 .forPort(port)
                 .addService(interceptedService)
+                .intercept(new CorrelationIdServerInterceptor())
                 .build();
     }
 

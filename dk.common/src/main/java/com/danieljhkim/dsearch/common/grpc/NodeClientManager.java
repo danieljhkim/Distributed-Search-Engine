@@ -5,6 +5,9 @@ import com.danieljhkim.dsearch.common.enums.RoutingStrategy;
 import com.danieljhkim.dsearch.common.loadbalancer.RoundRobin;
 import com.danieljhkim.dsearch.common.shard.ShardState;
 import com.danieljhkim.dsearch.common.shard.ShardStateStore;
+import com.danieljhkim.dsearch.common.tracing.CorrelationIdClientInterceptor;
+import io.grpc.Channel;
+import io.grpc.ClientInterceptors;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import lombok.Getter;
@@ -27,6 +30,7 @@ public class NodeClientManager<T> {
     private final List<ManagedChannel> channels;
     private final RoutingStrategy routingStrategy;
 
+
     public NodeClientManager(Map<String, NodeClient<T>> clientMap, RoutingStrategy routingStrategy) {
         this.channels = clientMap.values().stream()
                 .map(NodeClient::getChannel)
@@ -41,8 +45,9 @@ public class NodeClientManager<T> {
 
     public static <T> NodeClientManager<T> fromConfig(
             AppConfig.NodeGroupConfig appConfig,
-            Function<ManagedChannel, T> clientFactory
+            Function<Channel, T> clientFactory
     ) {
+        CorrelationIdClientInterceptor tracingInterceptor = new CorrelationIdClientInterceptor();
         Map<String, NodeClient<T>> clientMap =
                 appConfig.getNodes().stream()
                         .collect(Collectors.toMap(
@@ -52,7 +57,8 @@ public class NodeClientManager<T> {
                                             .forAddress(node.getHost(), node.getPort())
                                             .usePlaintext()
                                             .build();
-                                    T stub = clientFactory.apply(channel);
+                                    Channel interceptedChannel = ClientInterceptors.intercept(channel, tracingInterceptor);
+                                    T stub = clientFactory.apply(interceptedChannel);
                                     return new NodeClient<>(
                                             String.valueOf(node.getId()),
                                             stub,

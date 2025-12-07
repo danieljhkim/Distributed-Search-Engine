@@ -16,6 +16,8 @@ GATEWAY_JAR="$BASE_DIR/dk.gateway/target/dk.gateway-1.0-SNAPSHOT.jar"
 LOG_DIR="$BASE_DIR/logs"
 DATA_DIR="$BASE_DIR/data"
 
+JAVA_OPTS="--add-modules jdk.incubator.vector"
+
 mkdir -p "$LOG_DIR"
 mkdir -p "$DATA_DIR"
 
@@ -64,7 +66,7 @@ start_index_nodes() {
     export COORDINATOR_HOST="localhost"
     export COORDINATOR_PORT
 
-    nohup java -jar "$INDEX_NODE_JAR" \
+    nohup java "$JAVA_OPTS" -jar "$INDEX_NODE_JAR" \
       > "$LOG_DIR/index-node-$i.log" 2>&1 &
 
     echo "Index Node #$i started (NODE_ID=$node_id, PORT=$port, DATA=$node_data_dir)"

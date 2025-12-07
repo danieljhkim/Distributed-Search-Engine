@@ -9,3 +9,7 @@ spring:
 shards:
   snapshot:
     interval: ${shard.snapshot.interval:6000} # in milliseconds
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%thread] %logger{36} - [reqId=%X{requestId}] %msg%n"

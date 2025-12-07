@@ -1,6 +1,7 @@
 package com.danieljhkim.dsearch.indexnode.server;
 
 import com.danieljhkim.dsearch.common.grpc.GlobalExceptionInterceptor;
+import com.danieljhkim.dsearch.common.tracing.CorrelationIdServerInterceptor;
 import com.danieljhkim.dsearch.indexnode.grpc.IndexServiceImpl;
 import com.danieljhkim.dsearch.indexnode.index.IndexManager;
 import io.grpc.Server;
@@ -20,6 +21,7 @@ public class IndexNodeServer {
         this.server = NettyServerBuilder
                 .forPort(port)
                 .addService(interceptedService)
+                .intercept(new CorrelationIdServerInterceptor())
                 .build();
     }
 
