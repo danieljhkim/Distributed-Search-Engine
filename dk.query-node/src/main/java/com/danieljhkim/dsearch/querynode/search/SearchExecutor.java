@@ -115,7 +115,7 @@ public class SearchExecutor implements Closeable {
 
         // One async call per shard → each returns a model.SearchResult
         List<CompletableFuture<SearchResult>> futures = new ArrayList<>();
-        for (String nodeId : nodeClientManager.getStubsMap().keySet()) {
+        for (String nodeId : nodeClientManager.getClientMap().keySet()) {
             CompletableFuture<SearchResult> future =
                     CompletableFuture.supplyAsync(() ->
                                     indexService.searchShardTopK(queryString, nodeId, shardId, perShardLimit, searchType),

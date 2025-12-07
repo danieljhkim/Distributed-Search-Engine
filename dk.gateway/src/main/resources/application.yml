@@ -1,6 +1,11 @@
 server:
   port: ${port:8080}
   host: ${host:localhost}
+
 spring:
   application:
     name: gateway-node
+
+shards:
+  snapshot:
+    interval: ${shard.snapshot.interval:6000} # in milliseconds

@@ -17,7 +17,7 @@ public class IndexService implements BaseIndexService {
     }
 
     public SearchResult search(String queryString, String nodeId, String shardId, int page, int size, SearchType searchType) {
-        if (!nodeClientManager.getStubsMap().containsKey(nodeId)) {
+        if (!nodeClientManager.getClientMap().containsKey(nodeId)) {
             throw new IllegalArgumentException("Unknown nodeId: " + nodeId);
         }
         int from = page * size;
@@ -27,7 +27,7 @@ public class IndexService implements BaseIndexService {
                 .setSize(size)
                 .setShardId(shardId)
                 .setSearchType(EnumMapper.mapToProtoEnum(searchType));
-        IndexServiceGrpc.IndexServiceBlockingStub stub = nodeClientManager.getStubsMap().get(nodeId).getStub();
+        IndexServiceGrpc.IndexServiceBlockingStub stub = nodeClientManager.getClientMap().get(nodeId).getStub();
         IndexSearchResponse grpcResp = stub.searchIndex(grpcReqBuilder.build());
         return mapToSearchResult(grpcResp, page);
     }

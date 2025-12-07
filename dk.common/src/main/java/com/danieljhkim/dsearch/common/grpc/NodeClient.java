@@ -23,7 +23,7 @@ public class NodeClient<T> {
 
     public long getShardDocCount(String shardId) {
         ShardState shardState = getOrCreateShardState(shardId);
-        return shardState.getDocCount();
+        return shardState.getDocumentCount();
     }
 
     public void incrementDocToShard(String shardId) {
@@ -36,7 +36,7 @@ public class NodeClient<T> {
         shardState.decrementDocs();
     }
 
-    private ShardState getOrCreateShardState(String shardId) {
-        return shardStates.computeIfAbsent(shardId, ShardState::new);
+    public ShardState getOrCreateShardState(String shardId) {
+        return shardStates.computeIfAbsent(shardId, k -> new ShardState(k, nodeId));
     }
 }
