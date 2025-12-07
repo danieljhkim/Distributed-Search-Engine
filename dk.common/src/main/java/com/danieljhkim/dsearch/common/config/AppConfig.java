@@ -46,13 +46,15 @@ public class AppConfig {
         private String id;
         private String host;
         private int port;
+        private int healthPort;
 
         @Override
         public String toString() {
             return "NodeConfig{" +
                     "id='" + id + '\'' +
                     ", host='" + host + '\'' +
-                    ", port=" + port +
+                    ", port=" + port + '\'' +
+                    ", healthPort=" + healthPort +
                     '}';
         }
     }

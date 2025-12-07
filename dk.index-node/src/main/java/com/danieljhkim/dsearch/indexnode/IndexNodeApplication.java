@@ -1,7 +1,9 @@
 package com.danieljhkim.dsearch.indexnode;
 
+import com.danieljhkim.dsearch.common.health.HealthHttpServer;
 import com.danieljhkim.dsearch.indexnode.index.IndexManager;
 import com.danieljhkim.dsearch.indexnode.server.IndexNodeServer;
+import com.sun.net.httpserver.HttpServer;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -14,19 +16,21 @@ public class IndexNodeApplication {
 
     public static void main(String[] args) throws IOException, InterruptedException {
 
-        int port = Integer.parseInt(System.getenv().getOrDefault("INDEX_NODE_PORT", "5000"));
-        String nodeId = System.getenv().getOrDefault("INDEX_NODE_ID", "index-node-0");
-        String baseDirStr = System.getenv().getOrDefault("INDEX_NODE_BASE_DIR", "./data/" + nodeId);
+        int grpcPort = Integer.parseInt(System.getenv("INDEX_NODE_PORT"));
+        int healthPort = Integer.parseInt(System.getenv("INDEX_NODE_HEALTH_PORT"));
+        String baseDirStr = System.getenv("INDEX_NODE_BASE_DIR");
         Path baseDir = Path.of(baseDirStr);
 
         IndexManager indexManager = new IndexManager(baseDir);
-        IndexNodeServer indexNodeServer = new IndexNodeServer(port, indexManager);
+        IndexNodeServer indexNodeServer = new IndexNodeServer(grpcPort, indexManager);
+        HttpServer healthServer = HealthHttpServer.start(healthPort, "index-node");
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             LOGGER.info("Shutting down IndexNode gRPC server...");
             try {
                 indexManager.close();
                 indexNodeServer.shutdown();
+                healthServer.stop(0);
             } catch (InterruptedException e) {
                 LOGGER.log(Level.SEVERE, "Error during shutdown", e);
                 Thread.currentThread().interrupt();
@@ -35,7 +39,9 @@ public class IndexNodeApplication {
             }
         }));
 
-        LOGGER.info("IndexNode gRPC server started on port " + port + ", baseDir=" + baseDir);
+        LOGGER.info(() -> "IndexNode gRPC server started on port " + grpcPort);
+        LOGGER.info(() -> "IndexNode health endpoint on port " + healthPort + " at /health");
+
         indexNodeServer.start();
     }
 }

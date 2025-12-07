@@ -60,13 +60,14 @@ start_index_nodes() {
     mkdir -p "$node_data_dir"
 
     export INDEX_NODE_PORT="$port"
+    export INDEX_NODE_HEALTH_PORT=$((port + 100))
     export INDEX_NODE_BASE_DIR="$node_data_dir"
     export NODE_ID="$node_id"
     export NODE_ROLE="INDEX"
     export COORDINATOR_HOST="localhost"
     export COORDINATOR_PORT
 
-    nohup java "$JAVA_OPTS" -jar "$INDEX_NODE_JAR" \
+    nohup java $JAVA_OPTS -jar "$INDEX_NODE_JAR" \
       > "$LOG_DIR/index-node-$i.log" 2>&1 &
 
     echo "Index Node #$i started (NODE_ID=$node_id, PORT=$port, DATA=$node_data_dir)"
@@ -84,6 +85,7 @@ start_query_nodes() {
     export NODE_ID="$node_id"
     export NODE_ROLE="QUERY"
     export COORDINATOR_HOST="localhost"
+    export QUERY_NODE_HEALTH_PORT=$((port + 100))
     export COORDINATOR_PORT
 
     nohup java -jar "$QUERY_NODE_JAR" \

@@ -3,9 +3,11 @@ indexNodes:
     - id: "0"
       host: "localhost"
       port: 5000
+      healthPort: "5100"
     - id: "1"
       host: "localhost"
       port: 5001
+      healthPort: "5101"
   routingStrategy: "LEAST_LOADED"
 
 queryNodes:
@@ -13,9 +15,11 @@ queryNodes:
     - id: "0"
       host: "localhost"
       port: 6000
+      healthPort: "6100"
     - id: "1"
       host: "localhost"
       port: 6001
+      healthPort: "6101"
   routingStrategy: "ROUND_ROBIN"
 
 ml:

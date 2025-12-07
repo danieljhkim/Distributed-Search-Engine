@@ -29,8 +29,9 @@ start_index_node() {
   echo "Starting Index Node..."
   export INDEX_NODE_PORT=5000
   export INDEX_NODE_BASE_DIR="$DATA_DIR/index-node"
+  export INDEX_NODE_HEALTH_PORT=5100
 
-  nohup java "$JAVA_OPTS" -jar "$INDEX_NODE_JAR" \
+  nohup java $JAVA_OPTS -jar "$INDEX_NODE_JAR" \
     > "$LOG_DIR/index-node.log" 2>&1 &
 
   INDEX_PID=$!
@@ -40,6 +41,7 @@ start_index_node() {
 start_query_node() {
   echo "Starting Query Node..."
   export QUERY_NODE_PORT=6000
+  export QUERY_NODE_HEALTH_PORT=6100
 
   nohup java -jar "$QUERY_NODE_JAR" \
     > "$LOG_DIR/query-node.log" 2>&1 &
