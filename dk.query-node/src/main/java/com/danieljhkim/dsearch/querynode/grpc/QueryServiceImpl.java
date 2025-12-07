@@ -1,6 +1,7 @@
 package com.danieljhkim.dsearch.querynode.grpc;
 
 import com.danieljhkim.dsearch.common.enums.EnumMapper;
+import com.danieljhkim.dsearch.common.enums.HybridFusionStrategy;
 import com.danieljhkim.dsearch.common.enums.SearchType;
 import com.danieljhkim.dsearch.common.exception.ParseGoneWrongException;
 import com.danieljhkim.dsearch.common.model.SearchResult;
@@ -36,12 +37,14 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
         try {
             SearchResult result;
             if (searchType == SearchType.HYBRID) {
+                HybridFusionStrategy fusionStrategy = EnumMapper.mapFromProtoEnum(request.getFusionStrategy());
                 result = searchExecutor.searchHybrid(
                         queryString,
                         shardId,
                         page,
                         size,
-                        indexService
+                        indexService,
+                        fusionStrategy
                 );
             } else {
                 result = searchExecutor.search(

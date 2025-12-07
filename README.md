@@ -134,9 +134,10 @@ To combine lexical and semantic signals:
 1. Run BM25 search → top K
 2. Run semantic kNN search → top K
 3. Merge hits by document ID
-4. Apply a fusion strategy (currently implemented):
-   - **RRF (Reciprocal Rank Fusion)** – rank‑based blending (seems to work well in practice)
-   - (Pluggable design, easy to extend with `score_sum`, weighted α·BM25 + β·semantic, etc.)
+4. Apply a fusion strategy:
+   - **RRF**: Reciprocal Rank Fusion - rank‑based blending (default)
+   - **score_sum:** bm25Score + semanticScore
+   - **weighted:** α·bm25 + β·semantic
 5. Paginate the fused list and return to the client.
 
 ---
@@ -176,7 +177,8 @@ make run-multi
   "page": 0,
   "pageSize": 10,
   "shardId": "movies",
-  "searchType": "SEMANTIC"  // BM25 | SEMANTIC | HYBRID
+  "searchType": "HYBRID",  // BM25 | SEMANTIC | HYBRID
+  "fusionStrategy": "RRF" // SCORE_SUM | WEIGHTED | RRF
 }
 ```
 

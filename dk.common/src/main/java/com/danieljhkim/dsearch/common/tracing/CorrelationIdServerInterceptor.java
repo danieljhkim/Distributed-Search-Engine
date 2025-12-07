@@ -19,7 +19,6 @@ public class CorrelationIdServerInterceptor implements ServerInterceptor {
         if (requestId == null || requestId.isBlank()) {
             requestId = java.util.UUID.randomUUID().toString();
         }
-
         MDC.put(MDC_KEY, requestId);
         try {
             return new ForwardingServerCallListener.SimpleForwardingServerCallListener<>(

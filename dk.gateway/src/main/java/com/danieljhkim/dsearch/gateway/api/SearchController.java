@@ -36,6 +36,7 @@ public class SearchController {
                     Timer.builder("dsearch.gateway.search.latency")
                             .tag("searchType", req.getSearchType() != null ? req.getSearchType().name() : "UNKNOWN")
                             .tag("shardId", req.getShardId() != null ? req.getShardId() : "UNKNOWN")
+                            .tag("fusionStrategy", req.getFusionStrategy() != null ? req.getFusionStrategy().name() : "UNKNOWN")
                             .register(meterRegistry)
             );
         }

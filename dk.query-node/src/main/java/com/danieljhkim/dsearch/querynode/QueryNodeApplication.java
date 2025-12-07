@@ -24,7 +24,8 @@ public class QueryNodeApplication {
         int healthPort = Integer.parseInt(System.getenv("QUERY_NODE_HEALTH_PORT"));
         AppConfig appConfig = ConfigLoader.load("app-config.yaml");
 
-        NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager = NodeClientManager.fromConfig(appConfig.getIndexNodes(), IndexServiceGrpc::newBlockingStub);
+        NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager =
+                NodeClientManager.fromConfig(appConfig.getIndexNodes(), IndexServiceGrpc::newBlockingStub);
         SearchExecutor searchExecutor = new SearchExecutor(nodeClientManager);
         BaseIndexService indexService = new IndexService(nodeClientManager);
         QueryNodeServer queryNodeServer = new QueryNodeServer(grpcPort, searchExecutor, indexService);

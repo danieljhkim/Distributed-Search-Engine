@@ -18,17 +18,16 @@ public class CorrelationIdFilter extends OncePerRequestFilter {
     public static final String MDC_KEY = "requestId";
 
     @Override
-    protected void doFilterInternal(HttpServletRequest request,
-                                    HttpServletResponse response,
-                                    FilterChain filterChain)
-            throws ServletException, IOException {
-
+    protected void doFilterInternal(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            FilterChain filterChain
+    ) throws ServletException, IOException {
         try {
             String requestId = request.getHeader(HEADER_NAME);
             if (requestId == null || requestId.isBlank()) {
                 requestId = UUID.randomUUID().toString();
             }
-
             // Put into MDC so all logs in this thread see it
             MDC.put(MDC_KEY, requestId);
             response.setHeader(HEADER_NAME, requestId);

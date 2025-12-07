@@ -8,6 +8,7 @@ import com.danieljhkim.dsearch.gateway.mapper.QueryResponseMapper;
 import com.danieljhkim.dsearch.proto.query.QueryRequest;
 import com.danieljhkim.dsearch.proto.query.QueryResponse;
 import com.danieljhkim.dsearch.proto.query.QueryServiceGrpc;
+import com.danieljhkim.dsearch.proto.common.FusionStrategy;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -46,11 +47,13 @@ public class GatewaySearchService {
 
     private QueryRequest.Builder buildBaseRequest(SearchRequestDto request) {
         com.danieljhkim.dsearch.proto.common.SearchType protoType = EnumMapper.mapToProtoEnum(request.getSearchType());
+        FusionStrategy fusionStrategy = EnumMapper.mapToProtoEnum(request.getFusionStrategy());
         return QueryRequest.newBuilder()
                 .setQueryString(request.getQuery())
                 .setPage(request.getPage())
                 .setSize(request.getPageSize())
                 .setShardId(request.getShardId())
-                .setSearchType(protoType);
+                .setSearchType(protoType)
+                .setFusionStrategy(fusionStrategy);
     }
 }

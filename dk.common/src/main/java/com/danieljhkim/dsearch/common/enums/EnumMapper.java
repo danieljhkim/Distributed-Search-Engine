@@ -1,4 +1,5 @@
 package com.danieljhkim.dsearch.common.enums;
+import com.danieljhkim.dsearch.proto.common.FusionStrategy;
 
 public class EnumMapper {
 
@@ -25,6 +26,28 @@ public class EnumMapper {
             case SEMANTIC -> SearchType.SEMANTIC;
             case HYBRID -> SearchType.HYBRID;
             default -> SearchType.BM25;
+        };
+    }
+
+    public static FusionStrategy mapToProtoEnum(HybridFusionStrategy type) {
+        if (type == null) {
+            return FusionStrategy.FUSION_TYPE_UNSPECIFIED;
+        }
+        return switch (type) {
+            case SCORE_SUM -> FusionStrategy.SCORE_SUM;
+            case WEIGHTED -> FusionStrategy.WEIGHTED;
+            case RRF -> FusionStrategy.RRF;
+        };
+    }
+
+    public static HybridFusionStrategy mapFromProtoEnum(FusionStrategy type) {
+        if (type == null || type == FusionStrategy.FUSION_TYPE_UNSPECIFIED) {
+            return HybridFusionStrategy.RRF;
+        }
+        return switch (type) {
+            case SCORE_SUM -> HybridFusionStrategy.SCORE_SUM;
+            case WEIGHTED -> HybridFusionStrategy.WEIGHTED;
+            default -> HybridFusionStrategy.RRF;
         };
     }
 }

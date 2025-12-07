@@ -55,7 +55,7 @@ public class IndexNodeServer {
 
     public void shutdown() throws InterruptedException {
         if (metricsServer != null) {
-            metricsServer.stop();
+            metricsServer.close();
             LOGGER.info("Prometheus metrics server stopped");
         }
         if (server != null) {

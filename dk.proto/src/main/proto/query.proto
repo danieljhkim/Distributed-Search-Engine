@@ -5,6 +5,7 @@ package dsearch.query;
 option java_package = "com.danieljhkim.dsearch.proto.query";
 option java_multiple_files = true;
 import "common/search_type.proto";
+import "common/fusion_strategy.proto";
 
 message QueryRequest {
   string query_string = 1;
@@ -13,6 +14,7 @@ message QueryRequest {
   int32 page = 4;
   int32 size = 5;
   dsearch.common.SearchType search_type = 6;
+  dsearch.common.FusionStrategy fusion_strategy = 7;
 }
 
 message SearchHit {

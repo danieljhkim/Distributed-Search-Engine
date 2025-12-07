@@ -43,7 +43,8 @@ public class SearchExecutor implements Closeable {
                                      String shardId,
                                      int page,
                                      int size,
-                                     BaseIndexService indexService
+                                     BaseIndexService indexService,
+                                     HybridFusionStrategy fusionStrategy
     ) {
         int fetchSize = size * (page + 1);
 
@@ -67,7 +68,7 @@ public class SearchExecutor implements Closeable {
         List<SearchHit> res = HybridFusion.fuse(
                 bm25Result,
                 semanticResult,
-                HybridFusionStrategy.RRF,
+                fusionStrategy,
                 fetchSize,
                 0.5,
                 0.5
@@ -100,7 +101,6 @@ public class SearchExecutor implements Closeable {
         if (size <= 0) size = 10;
 
         String requestId = MDC.get("requestId"); // set by gRPC server interceptor
-
         int requiredForPage = (page + 1) * size;
         int perShardLimit = requiredForPage;
 
