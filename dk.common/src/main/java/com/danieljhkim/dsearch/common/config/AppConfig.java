@@ -10,9 +10,10 @@ import java.util.List;
 @Setter
 @Getter
 public class AppConfig {
-
+    private ServiceDiscoveryConfig serviceDiscovery;
     private NodeGroupConfig indexNodes;
     private NodeGroupConfig queryNodes;
+    private NodeGroupConfig coordinatorNodes;
     private MlConfig ml;
 
     @Override
@@ -24,12 +25,19 @@ public class AppConfig {
                 '}';
     }
 
+    @Setter
+    @Getter
+    public static class ServiceDiscoveryConfig {
+        private boolean enabled = false;
+        private int refreshIntervalSeconds = 30;
+    }
+
 
     @Setter
     @Getter
     public static class NodeGroupConfig {
         private List<NodeConfig> nodes;
-        private RoutingStrategy routingStrategy = RoutingStrategy.LEAST_LOADED;
+        private RoutingStrategy routingStrategy;
         private String componentLabel;
 
         @Override
@@ -49,6 +57,7 @@ public class AppConfig {
         private String host;
         private int port;
         private int healthPort;
+        private String role;
 
         @Override
         public String toString() {

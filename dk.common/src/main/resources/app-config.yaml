@@ -1,3 +1,7 @@
+serviceDiscovery:
+  enabled: true
+  refreshIntervalSeconds: 10
+
 indexNodes:
   routingStrategy: "LEAST_LOADED"
   componentLabel: "dsearch-index-node"
@@ -9,7 +13,7 @@ indexNodes:
     - id: "1"
       host: "localhost"
       port: 5001
-      healthPort: "5101"
+      healthPort: 5101
 
 queryNodes:
   routingStrategy: "ROUND_ROBIN"
@@ -18,11 +22,20 @@ queryNodes:
     - id: "0"
       host: "localhost"
       port: 6000
-      healthPort: "6100"
+      healthPort: 6100
     - id: "1"
       host: "localhost"
       port: 6001
-      healthPort: "6101"
+      healthPort: 6101
+
+coordinatorNodes:
+  routingStrategy: "ROUND_ROBIN"
+  componentLabel: "dsearch-coordinator-node"
+  nodes:
+    - id: "0"
+      host: "localhost"
+      port: 7000
+      healthPort: 7100
 
 ml:
   models:

@@ -31,9 +31,6 @@ INDEX_BASE_PORT=${INDEX_BASE_PORT:-5000}
 QUERY_BASE_PORT=${QUERY_BASE_PORT:-6000}
 GATEWAY_PORT=${GATEWAY_PORT:-8080}
 
-# Shards (your coordinator can decide how to assign)
-NUM_SHARDS=${NUM_SHARDS:-4}
-
 ############################################
 # FUNCTIONS
 ############################################
@@ -41,7 +38,7 @@ NUM_SHARDS=${NUM_SHARDS:-4}
 start_coordinator() {
   echo "Starting Coordinator..."
   export COORDINATOR_PORT
-  export NUM_SHARDS
+  export COORDINATOR_HEALTH_PORT=$((COORDINATOR_PORT + 100))
 
   nohup java -jar "$COORDINATOR_JAR" \
     > "$LOG_DIR/coordinator.log" 2>&1 &

@@ -37,6 +37,9 @@ The system is composed of three primary components:
   gRPC services hosting **Lucene shards**. Each index node can host multiple partitions (e.g. `shard-movies`, `shard-shows`, …), and sharded across multiple nodes. 
   Each partition is a Lucene index responsible for a categorical or domain‑specific slice of your data.
 
+- **Coordinator Node**  
+  Service discovery and health aggregation across the cluster (optional). It allows dynamic addition/removal of index/query nodes without restarting the cluster.
+
 ### Sharding & Load Balancing
 
 - Shards represent **logical partitions** of your data (e.g., by domain or category).
@@ -159,12 +162,13 @@ For full details, see [Quick Start Guide](./docs/QUICKSTART.md).
 # from repo root
 make build
 
-# Start a local cluster with 2 index nodes, 2 query nodes, and 1 gateway
+# Start a local cluster with 2 index nodes, 2 query nodes, 1 coordinator, and 1 gateway
 make run-multi
 
 # Cluster layout (by default):
 #  - Index Nodes : 5000, 5001
 #  - Query Nodes : 6000, 6001
+#  - Coordinator  : 7000
 #  - Gateway     : http://localhost:8080
 ```
 
@@ -259,6 +263,10 @@ See the benchmarks document for:
 Cluster configuration is defined in `app-config.yaml` and loaded into the Gateway and nodes at startup:
 
 ```yaml
+serviceDiscovery:
+  enabled: true
+  refreshIntervalSeconds: 30
+
 indexNodes:
   routingStrategy: "LEAST_LOADED"
   componentLabel: "dsearch-index-node"
@@ -266,11 +274,7 @@ indexNodes:
     - id: "0"
       host: "localhost"
       port: 5000
-      healthPort: "5100"
-    - id: "1"
-      host: "localhost"
-      port: 5001
-      healthPort: "5101"
+      healthPort: 5100
 
 queryNodes:
   routingStrategy: "ROUND_ROBIN"
@@ -279,11 +283,16 @@ queryNodes:
     - id: "0"
       host: "localhost"
       port: 6000
-      healthPort: "6100"
-    - id: "1"
+      healthPort: 6100
+
+coordinatorNodes:
+  routingStrategy: "ROUND_ROBIN"
+  componentLabel: "dsearch-coordinator-node"
+  nodes:
+    - id: "0"
       host: "localhost"
-      port: 6001
-      healthPort: "6101"
+      port: 7000
+      healthPort: 7100
 
 ml:
   models:
@@ -304,10 +313,6 @@ This project is intentionally minimal and educational. Some trade‑offs and pot
 - **No replication layer (yet)**
   - A shard lives on exactly one node; if that node goes down, its data is unavailable until restart.
   - Future direction: coordinator‑driven replication / Raft‑based shard groups.
-
-- **Static shard assignment**
-  - Shards are configured in `app-config.yaml`.
-  - Future direction: dynamic shard reassignment and consistent hashing for smoother scaling.
 
 - **Basic scoring and fusion**
   - BM25 + Lucene kNN + RRF fusion are implemented.

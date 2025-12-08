@@ -3,6 +3,8 @@ package com.danieljhkim.dsearch.gateway.config;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.config.ConfigLoader;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
+import com.danieljhkim.dsearch.proto.cluster.ClusterServiceGrpc;
+import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
 import com.danieljhkim.dsearch.proto.query.QueryServiceGrpc;
 import lombok.Getter;
@@ -10,23 +12,33 @@ import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Lazy;
 
 @Configuration
 public class GatewayConfig {
 
     @Bean
-    public NodeClientManager<QueryServiceGrpc.QueryServiceBlockingStub> queryNodeClientManager(AppConfig appConfig) {
-        return NodeClientManager.fromConfig(
-                appConfig.getQueryNodes(),
+    public NodeClientManager<QueryServiceGrpc.QueryServiceBlockingStub> queryNodeClientManager() {
+        return NodeClientManager.loadClientManager(
+                NodeRole.NODE_ROLE_QUERY,
                 QueryServiceGrpc::newBlockingStub
         );
     }
 
     @Bean
-    public NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> indexNodeClientManager(AppConfig appConfig) {
-        return NodeClientManager.fromConfig(
-                appConfig.getIndexNodes(),
+    public NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> indexNodeClientManager() {
+        return NodeClientManager.loadClientManager(
+                NodeRole.NODE_ROLE_INDEX,
                 IndexServiceGrpc::newBlockingStub
+        );
+    }
+
+    @Lazy
+    @Bean
+    public NodeClientManager<ClusterServiceGrpc.ClusterServiceBlockingStub> clusterNodeClientManager() {
+        return NodeClientManager.loadClientManager(
+                NodeRole.NODE_ROLE_COORDINATOR,
+                ClusterServiceGrpc::newBlockingStub
         );
     }
 

@@ -1,4 +1,5 @@
 package com.danieljhkim.dsearch.common.enums;
+
 import com.danieljhkim.dsearch.proto.common.FusionStrategy;
 
 public class EnumMapper {

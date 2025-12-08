@@ -16,6 +16,10 @@ public class ShardMap {
         this.numShards = numShards;
     }
 
+    public ShardMap() {
+        this.numShards = 0;
+    }
+
     public void assignShard(String shardId, String nodeId) {
         shardToNodeId.put(shardId, nodeId);
     }

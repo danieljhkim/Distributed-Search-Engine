@@ -1,9 +1,8 @@
 package com.danieljhkim.dsearch.querynode;
 
-import com.danieljhkim.dsearch.common.config.AppConfig;
-import com.danieljhkim.dsearch.common.config.ConfigLoader;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.common.health.HealthHttpServer;
+import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
 import com.danieljhkim.dsearch.querynode.grpc.BaseIndexService;
 import com.danieljhkim.dsearch.querynode.grpc.IndexService;
@@ -22,10 +21,9 @@ public class QueryNodeApplication {
     public static void main(String[] args) throws IOException, InterruptedException {
         int grpcPort = Integer.parseInt(System.getenv("QUERY_NODE_PORT"));
         int healthPort = Integer.parseInt(System.getenv("QUERY_NODE_HEALTH_PORT"));
-        AppConfig appConfig = ConfigLoader.load("app-config.yaml");
 
         NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager =
-                NodeClientManager.fromConfig(appConfig.getIndexNodes(), IndexServiceGrpc::newBlockingStub);
+                NodeClientManager.loadClientManager(NodeRole.NODE_ROLE_INDEX, IndexServiceGrpc::newBlockingStub);
         SearchExecutor searchExecutor = new SearchExecutor(nodeClientManager);
         BaseIndexService indexService = new IndexService(nodeClientManager);
         QueryNodeServer queryNodeServer = new QueryNodeServer(grpcPort, searchExecutor, indexService);

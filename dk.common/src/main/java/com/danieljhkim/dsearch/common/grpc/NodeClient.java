@@ -3,22 +3,29 @@ package com.danieljhkim.dsearch.common.grpc;
 import com.danieljhkim.dsearch.common.shard.ShardState;
 import io.grpc.ManagedChannel;
 import lombok.Getter;
+import lombok.Setter;
 
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
+@Setter
 @Getter
 public class NodeClient<T> {
     private final String nodeId;
-    private final T stub;
     private final ManagedChannel channel;
     private final Map<String, ShardState> shardStates = new ConcurrentHashMap<>();
+    private final String host;
+    private final int healthPort;
+    private T stub;
+    private boolean isActive = true;
 
-    public NodeClient(String nodeId, T stub, ManagedChannel channel) {
+    public NodeClient(String nodeId, T stub, ManagedChannel channel, String host, int healthPort) {
         this.nodeId = Objects.requireNonNull(nodeId, "nodeId must not be null");
         this.stub = Objects.requireNonNull(stub, "stub must not be null");
         this.channel = Objects.requireNonNull(channel, "channel must not be null");
+        this.host = host;
+        this.healthPort = healthPort;
     }
 
     public long getShardDocCount(String shardId) {

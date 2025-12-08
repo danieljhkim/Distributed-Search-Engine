@@ -1,8 +1,13 @@
 package com.danieljhkim.dsearch.coordinator;
 
 
-import com.danieljhkim.dsearch.coordinator.cluster.ShardMap;
+import com.danieljhkim.dsearch.common.config.AppConfig;
+import com.danieljhkim.dsearch.common.config.ConfigLoader;
+import com.danieljhkim.dsearch.common.health.HealthHttpServer;
+import com.danieljhkim.dsearch.coordinator.cluster.ClusterMembershipService;
+import com.danieljhkim.dsearch.coordinator.scheduler.HealthCheckScheduler;
 import com.danieljhkim.dsearch.coordinator.server.CoordinatorServer;
+import com.sun.net.httpserver.HttpServer;
 
 import java.io.IOException;
 import java.util.logging.Level;
@@ -14,23 +19,28 @@ public class CoordinatorApplication {
 
     public static void main(String[] args) throws IOException, InterruptedException {
 
-        int port = Integer.parseInt(System.getenv().getOrDefault("COORDINATOR_PORT", "7000"));
-        int numShards = Integer.parseInt(System.getenv().getOrDefault("NUM_SHARDS", "4"));
-
-        ShardMap shardMap = new ShardMap(numShards);
-        CoordinatorServer server = new CoordinatorServer(port, shardMap);
+        int port = Integer.parseInt(System.getenv("COORDINATOR_PORT"));
+        int healthPort = Integer.parseInt(System.getenv("COORDINATOR_HEALTH_PORT"));
+        AppConfig appConfig = ConfigLoader.load("app-config.yaml");
+        ClusterMembershipService membershipService = new ClusterMembershipService(appConfig);
+        CoordinatorServer server = new CoordinatorServer(port, membershipService);
+        HealthCheckScheduler healthCheckScheduler = new HealthCheckScheduler(membershipService, appConfig);
+        HttpServer healthServer = HealthHttpServer.start(healthPort, "coordinator-node");
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             LOGGER.info("Shutting down Coordinator gRPC server...");
             try {
                 server.shutdown();
+                healthCheckScheduler.shutdown();
+                healthServer.stop(0);
             } catch (InterruptedException e) {
                 LOGGER.log(Level.SEVERE, "Interrupted during coordinator shutdown", e);
                 Thread.currentThread().interrupt();
             }
         }));
 
-        LOGGER.info("Coordinator gRPC server started on port " + port + " with " + numShards + " shard(s)");
+        LOGGER.info("Coordinator gRPC server started on port " + port);
+        healthCheckScheduler.start();
         server.start();
     }
 }

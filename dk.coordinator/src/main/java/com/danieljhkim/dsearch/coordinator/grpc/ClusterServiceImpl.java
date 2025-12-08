@@ -1,42 +1,32 @@
 package com.danieljhkim.dsearch.coordinator.grpc;
 
 import com.danieljhkim.dsearch.coordinator.cluster.ClusterMembershipService;
-import com.danieljhkim.dsearch.coordinator.cluster.ShardMap;
 import com.danieljhkim.dsearch.proto.cluster.*;
+import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 
-import java.util.Comparator;
-import java.util.List;
 
 public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBase {
 
     private final ClusterMembershipService membershipService;
-    private final ShardMap shardMap;
 
-    public ClusterServiceImpl(ClusterMembershipService membershipService, ShardMap shardMap) {
+    public ClusterServiceImpl(ClusterMembershipService membershipService) {
         this.membershipService = membershipService;
-        this.shardMap = shardMap;
     }
 
     @Override
-    public void registerNode(RegisterNodeRequest request,
-                             StreamObserver<RegisterNodeResponse> responseObserver) {
-
-        // 1) Register node in membership
+    public void registerNode(RegisterNodeRequest request, StreamObserver<RegisterNodeResponse> responseObserver) {
         membershipService.registerNode(
-                new ClusterMembershipService.ClusterNodeInfo(
+                new ClusterMembershipService.NodeInfo(
                         request.getNodeId(),
                         request.getHost(),
                         request.getPort(),
-                        request.getRole().name()  // e.g. "NODE_ROLE_INDEX"
-                )
+                        request.getHealthPort(),
+                        request.getRole().name(),
+                        true
+                ),
+                request.getRole()
         );
-
-        // 2) If this is an INDEX node, recompute shard assignments
-        if (request.getRole() == NodeRole.NODE_ROLE_INDEX) {
-            recomputeShardAssignmentsForIndexNodes();
-        }
-
         RegisterNodeResponse resp = RegisterNodeResponse.newBuilder()
                 .setSuccess(true)
                 .build();
@@ -45,65 +35,47 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
     }
 
     @Override
-    public void getShardMap(GetShardMapRequest request,
-                            StreamObserver<GetShardMapResponse> responseObserver) {
-
-        GetShardMapResponse.Builder builder = GetShardMapResponse.newBuilder();
-
-        shardMap.getShardToNodeId().forEach((shardId, nodeId) -> {
-            ClusterMembershipService.ClusterNodeInfo info =
-                    membershipService.getNodes().get(nodeId);
-            if (info != null) {
-                ShardLocation location = ShardLocation.newBuilder()
-                        .setShardId(shardId)
-                        .setNodeId(info.nodeId())
-                        .setHost(info.host())
-                        .setPort(info.port())
-                        .setRole(NodeRole.valueOf(info.role()))
-                        .build();
-                builder.addShardLocations(location);
+    public void getClusterInfo(GetClusterInfoRequest request, StreamObserver<GetClusterInfoResponse> responseObserver) {
+        try {
+            NodeRole role = request.getRole();
+            ClusterMembershipService.NodeGroup group = switch (role) {
+                case NODE_ROLE_INDEX -> membershipService.getIndexGroup();
+                case NODE_ROLE_QUERY -> membershipService.getQueryGroup();
+                case NODE_ROLE_COORDINATOR -> membershipService.getCoordinatorGroup();
+                default -> null;
+            };
+            if (group == null) {
+                responseObserver.onError(Status.NOT_FOUND.withDescription("No node group registered for role: " + role)
+                        .asRuntimeException());
+                return;
             }
-        });
+            GetClusterInfoResponse.Builder resp = GetClusterInfoResponse.newBuilder()
+                    .setComponentLabel(group.getComponentLabel())
+                    .setRoutingStrategy(group.getRoutingStrategy().name());
 
-        responseObserver.onNext(builder.build());
-        responseObserver.onCompleted();
-    }
-
-    /**
-     * Hash-based shard assignment:
-     * <p>
-     * For each shardId in [0, numShards):
-     * - Compute index = hash(shardId) % numIndexNodes
-     * - Assign shard to indexNodes[index]
-     * <p>
-     * This is simple, deterministic, and evenly spreads shards
-     * (though it does not do consistent hashing).
-     */
-    private void recomputeShardAssignmentsForIndexNodes() {
-        // 1) Collect all INDEX nodes, sorted by nodeId for determinism
-        List<ClusterMembershipService.ClusterNodeInfo> indexNodes =
-                membershipService.getNodes().values().stream()
-                        .filter(info -> "NODE_ROLE_INDEX".equals(info.role()))
-                        .sorted(Comparator.comparing(ClusterMembershipService.ClusterNodeInfo::nodeId))
-                        .toList();
-
-        if (indexNodes.isEmpty()) {
-            // No index nodes; nothing to assign
-            shardMap.clearAssignments();
-            return;
-        }
-
-        // 2) Clear existing assignments
-        shardMap.clearAssignments();
-        int numShards = shardMap.getNumShards();
-        int numIndexNodes = indexNodes.size();
-
-        // 3) Assign each shard to one index node using hash(shardId)
-        for (int shardId = 0; shardId < numShards; shardId++) {
-            // hash-based index; using shardId itself here
-            int idx = Math.floorMod(Integer.hashCode(shardId), numIndexNodes);
-            ClusterMembershipService.ClusterNodeInfo owner = indexNodes.get(idx);
-            shardMap.assignShard(String.valueOf(shardId), owner.nodeId());
+            for (ClusterMembershipService.NodeInfo ni : group.getAllNodes()) {
+                if (!ni.isHealthy()) {
+                    continue;
+                }
+                resp.addNodes(NodeInfo.newBuilder()
+                        .setNodeId(ni.nodeId())
+                        .setHost(ni.host())
+                        .setPort(ni.port())
+                        .setHealthPort(ni.healthPort())
+                        .setRole(role)
+                        .build());
+            }
+            responseObserver.onNext(resp.build());
+            responseObserver.onCompleted();
+        } catch (Exception e) {
+            e.printStackTrace();
+            responseObserver.onError(
+                    Status.INTERNAL
+                            .withDescription("Failed to get cluster info for role: " + request.getRole())
+                            .withCause(e)
+                            .asRuntimeException()
+            );
         }
     }
+
 }
