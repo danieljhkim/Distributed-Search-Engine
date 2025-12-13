@@ -112,13 +112,36 @@ start_gateway() {
   echo "Gateway started (PORT: $GATEWAY_PORT)"
 }
 
+write_cluster_state() {
+  echo "Writing cluster state..."
+  local state_file="$BASE_DIR/logs/cluster_state.json"
+
+  cat > "$state_file" <<EOF
+{
+  "ports": {
+    "coordinator_port": $COORDINATOR_PORT,
+    "index_base_port": $INDEX_BASE_PORT,
+    "query_base_port": $QUERY_BASE_PORT,
+    "gateway_port": $GATEWAY_PORT
+  },
+  "counts": {
+    "n_index_nodes": $N_INDEX_NODES,
+    "n_query_nodes": $N_QUERY_NODES
+  },
+  "log_dir": "$LOG_DIR",
+  "data_dir": "$DATA_DIR"
+}
+EOF
+  echo "Cluster state written to $state_file"
+}
+
 stop_cluster() {
   echo "Stopping all cluster processes..."
 
-  pkill -f "dk.coordinator-1.0-SNAPSHOT.jar" || true
-  pkill -f "dk.index-node-1.0-SNAPSHOT.jar" || true
-  pkill -f "dk.query-node-1.0-SNAPSHOT.jar" || true
-  pkill -f "dk.gateway-1.0-SNAPSHOT.jar" || true
+    pkill -f "dk.coordinator-1.0-SNAPSHOT.jar" || true
+    pkill -f "dk.index-node-1.0-SNAPSHOT.jar" || true
+    pkill -f "dk.query-node-1.0-SNAPSHOT.jar" || true
+    pkill -f "dk.gateway-1.0-SNAPSHOT.jar" || true
 
   echo "Cluster stopped."
 }
@@ -143,7 +166,7 @@ echo "Shards      : ${NUM_SHARDS}"
 echo "================================================="
 
 start_coordinator
-sleep 1
+sleep 5
 
 start_index_nodes
 sleep 1
@@ -153,6 +176,8 @@ sleep 1
 
 start_gateway
 sleep 1
+
+write_cluster_state
 
 echo ""
 echo "================================================="

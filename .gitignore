@@ -36,11 +36,28 @@ build/
 
 ### Mac OS ###
 .DS_Store
-.idea
+ .idea
 /logs/*.log
+/.box/reports/
+/.box/reports/**
+/.box/state/
+/.box/state/**
+
+# Optional: DevBox state/log artifacts (keeps repo clean)
+/logs/box-*.log
 
 *.jar
 
 *.dat
 
 data/
+
+node_modules/
+
+/.idea
+
+dist/
+
+package-lock.json
+
+cluster_state.json

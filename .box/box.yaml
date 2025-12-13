@@ -1,0 +1,94 @@
+version: 1
+name: "devbox"
+type: "service"  # service | cli | library | distributed | mono
+spec_version: "0.1.0"
+
+commands:
+  bootstrap:
+    run: ".box/scripts/bootstrap.sh"
+    description: "Install deps, generate config, prepare local runtime."
+  up:
+    run: ".box/scripts/up.sh"
+    description: "Start local runtime (services, containers, dependencies)."
+  down:
+    run: ".box/scripts/down.sh"
+    description: "Stop local runtime."
+  reset:
+    run: ".box/scripts/reset.sh"
+    description: "Clean ephemeral state and reports; preserve logs."
+  test:
+    run: ".box/scripts/test.sh"
+    description: "Run the full test suite (unit + integration if available)."
+  smoke:
+    run: ".box/scripts/smoke.sh"
+    description: "Fast end-to-end checks against local runtime."
+  health:
+    run: ".box/scripts/smoke.sh --health"
+    description: "Run configured health checks and return pass/fail."
+  lint:
+    run: ".box/scripts/lint.sh"
+    description: "Static checks (optional; exit 0 if not applicable)."
+  fmt:
+    run: ".box/scripts/fmt.sh"
+    description: "Auto-format code (optional; exit 0 if not applicable)."
+  bench:
+    run: ".box/scripts/bench.sh"
+    description: "Benchmarks/perf tests (optional; exit 0 if not applicable)."
+  doctor:
+    run: ".box/scripts/doctor.sh"
+    description: "Verify dependencies/ports/env; prints actionable fixes."
+  logs:
+    run: ".box/scripts/logs.sh"
+    description: "Tail/filter logs in logs/."
+  report:
+    run: ".box/scripts/report.sh"
+    description: "Summarize latest test artifacts in .box/reports/."
+
+artifacts:
+  logs_dir: "logs/"
+  reports_dir: ".box/reports/"
+  state_dir: ".box/state/"
+
+runtime:
+  env:
+    BOX_UP_CMD: ""
+    BOX_DOWN_CMD: ""
+    BOX_HEALTH_URL: "http://localhost:8080/health"
+    BOX_HEALTH_TIMEOUT_SECS: "2"
+    BOX_HEALTH_RETRIES: "20"
+    BOX_HEALTH_SLEEP_SECS: "1"
+
+signals:
+  health:
+    checks:
+      - name: "service"
+        type: "http"
+        url: "http://localhost:8080/health"
+        timeout_ms: 1500
+
+  logs:
+    format: "text"  # text | json
+    locations:
+      - "logs/*.log"
+      - "logs/**/*.log"
+
+  state:
+    locations:
+      - ".box/state/*.json"
+      - ".box/state/**/*.json"
+
+  reports:
+    junit:
+      - ".box/reports/junit.xml"
+      - ".box/reports/junit/*.xml"
+    coverage:
+      - ".box/reports/coverage/*"
+
+contracts:
+  locations:
+    - ".box/contracts/"
+    - "contracts/"
+
+agent:
+  policies: ".box/policies.yaml"
+  mcp_tools: ".box/mcp/server.json"

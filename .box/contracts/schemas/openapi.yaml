@@ -1,0 +1,356 @@
+openapi: 3.0.3
+info:
+  title: dsearch Gateway API
+  description: >
+    HTTP API contract for the dsearch Gateway. This file is the canonical schema
+    used by DevBox and agents to generate requests and validate responses.
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+    description: Local DevBox gateway
+
+tags:
+  - name: Health
+  - name: Search
+  - name: Documents
+
+paths:
+  /actuator/health:
+    get:
+      tags: [Health]
+      summary: Gateway health (Spring Boot Actuator)
+      description: Readiness/liveness signal for DevBox and agents.
+      operationId: getHealth
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActuatorHealth"
+        "503":
+          description: Unhealthy / not ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActuatorHealth"
+
+  /api/v1/search:
+    post:
+      tags: [Search]
+      summary: Search documents
+      description: >
+        Executes a search query against dsearch. Supports lexical, semantic, and
+        hybrid modes. Pagination is cursorless (from/size).
+      operationId: search
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+            examples:
+              lexical:
+                summary: Lexical search
+                value:
+                  query: "storage system"
+                  mode: "LEXICAL"
+                  from: 0
+                  size: 10
+              hybrid:
+                summary: Hybrid search
+                value:
+                  query: "vector search engine"
+                  mode: "HYBRID"
+                  from: 0
+                  size: 10
+                  weights:
+                    lexical: 0.5
+                    semantic: 0.5
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/documents:
+    post:
+      tags: [Documents]
+      summary: Index a document
+      description: >
+        Indexes a document into a shard. If shardId is omitted, the gateway may
+        route using its configured sharding strategy.
+      operationId: indexDocument
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IndexRequest"
+            examples:
+              example:
+                value:
+                  shardId: "0"
+                  document:
+                    docId: "f25fde80-3dbe-4692-986d-13e85db89ae6"
+                    title: "storage system"
+                    content: "storage high tech system blobs and texts and search engine"
+                    metadata:
+                      source: "demo"
+      responses:
+        "201":
+          description: Indexed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexResponse"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/documents/{docId}:
+    delete:
+      tags: [Documents]
+      summary: Delete a document
+      description: Deletes a document by docId. If shardId is provided, it is used for routing.
+      operationId: deleteDocument
+      parameters:
+        - name: docId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: shardId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Optional shard routing hint.
+      responses:
+        "204":
+          description: Deleted (or did not exist)
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  schemas:
+    # ----------------------------
+    # Health
+    # ----------------------------
+    ActuatorHealth:
+      type: object
+      additionalProperties: true
+      properties:
+        status:
+          type: string
+          description: Overall health status (e.g., UP/DOWN).
+          example: UP
+      required: [status]
+
+    # ----------------------------
+    # Search
+    # ----------------------------
+    SearchMode:
+      type: string
+      description: Search mode to execute.
+      enum: [LEXICAL, SEMANTIC, HYBRID]
+
+    SearchWeights:
+      type: object
+      description: Optional weighting used by HYBRID mode.
+      additionalProperties: false
+      properties:
+        lexical:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        semantic:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+
+    SearchRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        query:
+          type: string
+          description: Query text. For SEMANTIC/HYBRID, the system may embed this text.
+          minLength: 1
+        mode:
+          $ref: "#/components/schemas/SearchMode"
+        from:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Zero-based offset.
+        size:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 10
+          description: Page size.
+        shardId:
+          type: string
+          description: Optional shard routing hint.
+        weights:
+          $ref: "#/components/schemas/SearchWeights"
+        filters:
+          type: object
+          description: Optional filter map (low-cardinality keys recommended).
+          additionalProperties:
+            type: string
+      required: [query]
+
+    SearchHit:
+      type: object
+      additionalProperties: false
+      properties:
+        docId:
+          type: string
+        score:
+          type: number
+          format: double
+        title:
+          type: string
+        content:
+          type: string
+        shardId:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+      required: [docId, score]
+
+    PageInfo:
+      type: object
+      additionalProperties: false
+      properties:
+        from:
+          type: integer
+          minimum: 0
+        size:
+          type: integer
+          minimum: 1
+        totalElements:
+          type: integer
+          minimum: 0
+        totalPages:
+          type: integer
+          minimum: 0
+        first:
+          type: boolean
+        last:
+          type: boolean
+      required: [from, size, totalElements]
+
+    SearchResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        page:
+          $ref: "#/components/schemas/PageInfo"
+        tookMs:
+          type: integer
+          minimum: 0
+          description: End-to-end time measured at the gateway.
+        content:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchHit"
+      required: [page, content]
+
+    # ----------------------------
+    # Documents
+    # ----------------------------
+    SearchDocument:
+      type: object
+      additionalProperties: false
+      properties:
+        docId:
+          type: string
+          minLength: 1
+        title:
+          type: string
+        content:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+      required: [docId, title, content]
+
+    IndexRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        shardId:
+          type: string
+          description: Optional shard routing hint.
+        document:
+          $ref: "#/components/schemas/SearchDocument"
+      required: [document]
+
+    IndexResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        docId:
+          type: string
+        shardId:
+          type: string
+        indexed:
+          type: boolean
+      required: [docId, indexed]
+
+    # ----------------------------
+    # Errors
+    # ----------------------------
+    Error:
+      type: object
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+          description: Short error category.
+        message:
+          type: string
+          description: Human-readable error message.
+        correlationId:
+          type: string
+          description: Optional request correlation identifier.
+      required: [error, message]

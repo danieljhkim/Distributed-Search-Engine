@@ -1,0 +1,77 @@
+// Canonical contract for the dsearch Coordinator service.
+// This file defines the stable RPC interface used by other components.
+// Changes here are considered breaking unless versioned.
+
+syntax = "proto3";
+
+package dsearch.cluster;
+
+option java_package = "com.danieljhkim.dsearch.proto.cluster";
+option java_multiple_files = true;
+
+enum NodeRole {
+  NODE_ROLE_UNKNOWN = 0;
+  NODE_ROLE_INDEX = 1;
+  NODE_ROLE_QUERY = 2;
+  NODE_ROLE_COORDINATOR = 3;
+}
+
+message RegisterNodeRequest {
+  string node_id = 1;
+  string host = 2;
+  int32 port = 3;
+  NodeRole role = 4;
+  int32 health_port = 5;
+}
+
+message RegisterNodeResponse {
+  bool success = 1;
+}
+
+message GetClusterInfoRequest {
+  NodeRole role = 1;
+  string partition_id = 2;
+}
+
+message GetClusterInfoResponse {
+    repeated NodeInfo nodes = 1;
+    string routingStrategy = 2;
+    string componentLabel = 3;
+}
+
+message HeartbeatRequest {
+  string node_id = 1;
+}
+
+message HeartbeatResponse {
+  bool success = 1;
+}
+
+message GetShardMapRequest {}
+
+message ShardLocation {
+  string shard_id = 1;
+  string node_id = 2;
+  string host = 3;
+  int32 port = 4;
+  NodeRole role = 5;
+}
+
+message NodeInfo {
+  string node_id = 2;
+  string host = 3;
+  int32 port = 4;
+  NodeRole role = 5;
+  int32 health_port = 6;
+}
+
+message GetShardMapResponse {
+  repeated ShardLocation shard_locations = 1;
+}
+
+service ClusterService {
+  rpc RegisterNode(RegisterNodeRequest) returns (RegisterNodeResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc GetShardMap(GetShardMapRequest) returns (GetShardMapResponse);
+  rpc getClusterInfo(GetClusterInfoRequest) returns (GetClusterInfoResponse);
+}

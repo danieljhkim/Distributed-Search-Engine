@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://danieljhkim.com/dsearch/schemas/config/app-config.schema.json",
+  "title": "AppConfig",
+  "description": "Schema for dsearch app-config.yaml. Defines the stable external shape of local cluster topology and service endpoints.",
+  "type": "object",
+  "additionalProperties": false,
+
+  "properties": {
+    "gateway": {
+      "type": "object",
+      "description": "Gateway service configuration.",
+      "additionalProperties": false,
+      "properties": {
+        "host": { "type": "string", "default": "localhost" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 8080 },
+        "healthPath": { "type": "string", "default": "/actuator/health" }
+      }
+    },
+
+    "coordinator": {
+      "type": "object",
+      "description": "Coordinator service configuration.",
+      "additionalProperties": false,
+      "properties": {
+        "host": { "type": "string", "default": "localhost" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 7000 },
+        "healthPort": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 7001 },
+        "healthPath": { "type": "string", "default": "/health" }
+      }
+    },
+
+    "queryNodes": {
+      "type": "array",
+      "description": "List of query nodes available to the gateway (and/or coordinator).",
+      "items": { "$ref": "#/definitions/HostPortNode" },
+      "default": []
+    },
+
+    "indexNodes": {
+      "type": "array",
+      "description": "List of index nodes available to the coordinator (and/or query nodes).",
+      "items": { "$ref": "#/definitions/HostPortNode" },
+      "default": []
+    },
+
+    "shards": {
+      "type": "array",
+      "description": "Shard topology. Each shard maps to one or more index nodes.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "indexNodes"],
+        "properties": {
+          "id": {
+            "type": ["integer", "string"],
+            "description": "Shard identifier. Prefer integers (0..N-1), but strings are permitted."
+          },
+          "replicationFactor": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional replication factor for the shard."
+          },
+          "indexNodes": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/definitions/HostPortNode" }
+          }
+        }
+      },
+      "default": []
+    },
+
+    "runtime": {
+      "type": "object",
+      "description": "Runtime-level toggles and defaults for local execution.",
+      "additionalProperties": false,
+      "properties": {
+        "environment": {
+          "type": "string",
+          "description": "Environment name (local/dev/staging/prod).",
+          "default": "local"
+        },
+        "logDir": {
+          "type": "string",
+          "description": "Directory where services write logs.",
+          "default": "logs"
+        },
+        "dataDir": {
+          "type": "string",
+          "description": "Directory where services store local data.",
+          "default": "data"
+        }
+      }
+    },
+
+    "features": {
+      "type": "object",
+      "description": "Feature flags (optional). Keep keys low-cardinality and stable.",
+      "additionalProperties": {
+        "type": ["boolean", "string", "number"]
+      }
+    }
+  },
+
+  "definitions": {
+    "HostPortNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "port"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Optional stable node identifier (e.g. index-0, query-1)."
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "healthPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Optional HTTP health/metrics port if separate from the primary port."
+        }
+      }
+    }
+  }
+}

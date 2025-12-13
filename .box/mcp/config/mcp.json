@@ -1,0 +1,15 @@
+{
+  "servers": {
+    "devbox": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/.box/mcp/server/dist/devbox-mcp.mjs"
+      ],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "NODE_ENV": "production"
+      }
+    }
+  }
+}

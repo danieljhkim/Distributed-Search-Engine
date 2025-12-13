@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://danieljhkim.com/dsearch/schemas/search_response.schema.json",
+  "title": "SearchResponse",
+  "description": "Canonical schema for a search response returned by the dsearch Gateway.",
+  "type": "object",
+  "additionalProperties": false,
+
+  "required": ["page", "content"],
+
+  "properties": {
+    "page": {
+      "type": "object",
+      "description": "Pagination metadata for cursorless paging (from/size).",
+      "additionalProperties": false,
+      "required": ["from", "size", "totalElements"],
+      "properties": {
+        "from": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-based offset used for this page."
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Requested page size."
+        },
+        "totalElements": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of matching documents."
+        },
+        "totalPages": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of pages given size."
+        },
+        "first": {
+          "type": "boolean",
+          "description": "True if this is the first page."
+        },
+        "last": {
+          "type": "boolean",
+          "description": "True if this is the last page."
+        }
+      }
+    },
+
+    "tookMs": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "End-to-end time measured at the gateway."
+    },
+
+    "content": {
+      "type": "array",
+      "description": "Ranked list of search hits.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["docId", "score"],
+        "properties": {
+          "docId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "score": {
+            "type": "number",
+            "description": "Ranking score (relative; not guaranteed comparable across modes)."
+          },
+          "title": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "shardId": {
+            "type": "string",
+            "description": "Shard identifier that produced the hit."
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Optional document metadata.",
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+    "name": "devbox-mcp",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node18 --outfile=dist/devbox-mcp.mjs",
+        "start": "node dist/devbox-mcp.mjs"
+    },
+    "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.0.0",
+        "js-yaml": "^4.1.0",
+        "minimatch": "^9.0.5"
+    },
+    "devDependencies": {
+        "@types/js-yaml": "^4.0.9",
+        "@types/node": "^25.0.1",
+        "esbuild": "^0.27.1",
+        "typescript": "^5.6.3"
+    }
+}

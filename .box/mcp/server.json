@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "name": "box-run",
+      "description": "Run an allowlisted box command",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "command": { "type": "string" },
+          "args": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["command"]
+      }
+    },
+    {
+      "name": "box-read-logs",
+      "description": "Read logs from logs/ with optional filtering",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "glob": { "type": "string" },
+          "tailLines": { "type": "integer", "minimum": 1, "maximum": 2000 },
+          "contains": { "type": "string" }
+        },
+        "required": ["glob"]
+      }
+    },
+    {
+      "name": "box-read-contract",
+      "description": "Read a contract file (openapi/proto/schema/invariants)",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "box-health",
+      "description": "Run configured health checks from box.yaml",
+      "inputSchema": { "type": "object", "properties": {} }
+    }
+  ]
+}

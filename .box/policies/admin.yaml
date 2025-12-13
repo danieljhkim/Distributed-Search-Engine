@@ -1,0 +1,19 @@
+version: 1
+mode: "admin"
+
+allow:
+  commands: [up, down, doctor, test, smoke, logs, reset]
+  read_paths:
+    - "."
+  write_paths:
+    - "."
+deny:
+  commands: [deploy, publish, release, prod]
+limits:
+  max_runtime_seconds: 1800
+  max_parallel_commands: 2
+  max_log_bytes_to_read: 5000000
+  network:
+    allow:
+      - "http://localhost:*"
+      - "https://localhost:*"
