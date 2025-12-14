@@ -20,11 +20,12 @@ import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.index.StoredFields;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.queryparser.classic.MultiFieldQueryParser;
 import org.apache.lucene.queryparser.classic.ParseException;
 import org.apache.lucene.search.IndexSearcher;
-import org.apache.lucene.search.KnnVectorQuery;
+import org.apache.lucene.search.KnnFloatVectorQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.SearcherManager;
@@ -142,11 +143,14 @@ public class ShardIndex implements Closeable {
 		try {
 			float[] queryEmbedding = embeddingService.embed(queryText);
 			if (queryEmbedding == null || queryEmbedding.length == 0) {
-				LOGGER.warning("Empty embedding for query on shard " + shardId);
+				LOGGER.warning(() -> "Empty embedding for query on shard " + shardId);
 				return new SearchResult(new ArrayList<>(), 0);
 			}
 
-			Query knnQuery = new KnnVectorQuery(FIELD_EMBEDDING, queryEmbedding, limit + from);
+			Query knnQuery = new KnnFloatVectorQuery(
+					FIELD_EMBEDDING,
+					queryEmbedding,
+					limit + from);
 			searcher = searcherManager.acquire();
 			TopDocs topDocs = searcher.search(knnQuery, limit + from);
 			int totalHits = getTotalHits(searcher, knnQuery);
@@ -180,7 +184,8 @@ public class ShardIndex implements Closeable {
 		List<SearchHit> hits = new ArrayList<>(end - from);
 		for (int i = from; i < end; i++) {
 			ScoreDoc sd = scoreDocs[i];
-			Document doc = searcher.doc(sd.doc);
+			StoredFields storedField = searcher.storedFields();
+			Document doc = storedField.document(sd.doc);
 			String docId = doc.get(FIELD_ID);
 			if (docId == null) {
 				continue;
@@ -240,14 +245,14 @@ public class ShardIndex implements Closeable {
 		return luceneDoc;
 	}
 
-	private int getTotalHits(IndexSearcher searcher, Query query) throws IOException { // TODO: optimize by caching
+	private int getTotalHits(IndexSearcher searcher, Query query) throws IOException {
+		// TODO: optimize by caching
 		TotalHitCountCollector countCollector = new TotalHitCountCollector();
 		searcher.search(query, countCollector);
 		return countCollector.getTotalHits();
 	}
 
 	@Override
-	@SuppressWarnings({ "all" })
 	public void close() throws IOException {
 		IOException first = null;
 		try {
@@ -273,9 +278,17 @@ public class ShardIndex implements Closeable {
 				LOGGER.log(Level.WARNING, "Suppressed exception while closing Directory for shard " + shardId, e);
 			}
 		}
-		analyzer.close();
-		if (first != null) {
-			throw first;
+		try {
+			analyzer.close();
+		} catch (Exception e) {
+			if (first != null) {
+				throw first;
+			} else {
+				LOGGER.log(Level.WARNING, "Suppressed exception while closing analyzer for shard " + shardId, e);
+				throw e;
+			}
 		}
+		if (first != null)
+			throw first;
 	}
 }

@@ -1,5 +1,6 @@
 package com.danieljhkim.dsearch.common.grpc;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -44,7 +45,7 @@ public class NodeClientManager<T> {
 		try {
 			defaultConfig = ConfigLoader.load("app-config.yaml");
 			coordinatorManager = loadClientManager(NodeRole.NODE_ROLE_COORDINATOR, ClusterServiceGrpc::newBlockingStub);
-		} catch (Exception e) {
+		} catch (IOException | RuntimeException e) {
 			LOGGER.log(Level.SEVERE, "Failed to load application configuration", e);
 		}
 	}
@@ -66,15 +67,14 @@ public class NodeClientManager<T> {
 		this.routingStrategy = routingStrategy;
 
 		AppConfig.ServiceDiscoveryConfig sd = defaultConfig != null ? defaultConfig.getServiceDiscovery() : null;
-		boolean serviceDiscoveryEnabled = sd != null && sd.isEnabled();
-		if (serviceDiscoveryEnabled) {
+		if (sd != null && sd.isEnabled()) {
 			int interval = sd.getRefreshIntervalSeconds();
 			this.healthRefresher = new NodeClientHealthRefresher(interval);
-			LOGGER.info("Service discovery enabled for role " + nodeRole + " with refresh interval: " + interval
+			LOGGER.info(() -> "Service discovery enabled for role " + nodeRole + " with refresh interval: " + interval
 					+ " seconds");
 		} else {
 			this.healthRefresher = null;
-			LOGGER.info("Service discovery disabled for role " + nodeRole + "; using static node configuration");
+			LOGGER.info(() -> "Service discovery disabled for role " + nodeRole + "; using static node configuration");
 		}
 	}
 
@@ -142,7 +142,7 @@ public class NodeClientManager<T> {
 			nodeGroupConfig.setNodes(nodeConfigs);
 			return nodeGroupConfig;
 		} catch (Exception e) {
-			LOGGER.warning("Failed to fetch cluster info from coordinator for role "
+			LOGGER.warning(() -> "Failed to fetch cluster info from coordinator for role "
 					+ role + ". Falling back to static configuration. Cause: " + e.toString());
 			return getStaticNodeGroupConfig(role);
 		}
@@ -172,7 +172,7 @@ public class NodeClientManager<T> {
 	 * WRITE/DEL ops.
 	 */
 	public T nextClient(String partitionId, boolean isWriteOperation) {
-		LOGGER.info("Routing strategy: " + this.routingStrategy);
+		LOGGER.info(() -> "Routing strategy: " + this.routingStrategy);
 		if (this.routingStrategy == RoutingStrategy.LEAST_LOADED) {
 			return nextLeastLoadedClient(partitionId, isWriteOperation);
 		}
@@ -191,8 +191,8 @@ public class NodeClientManager<T> {
 		long minDocCount = Long.MAX_VALUE;
 		for (NodeClient<T> client : clientMap.values()) {
 			long shardDocCount = client.getShardDocCount(partitionId);
-			LOGGER.info(
-					"Client " + client.getNodeId() + " has partition " + partitionId + " doc count: " + shardDocCount);
+			LOGGER.info(() -> "Client " + client.getNodeId() + " has partition " + partitionId + " doc count: "
+					+ shardDocCount);
 			if (shardDocCount < minDocCount && client.isActive()) {
 				minDocCount = shardDocCount;
 				leastLoadedClient = client;
