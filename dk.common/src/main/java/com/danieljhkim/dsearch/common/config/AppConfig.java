@@ -1,113 +1,112 @@
 package com.danieljhkim.dsearch.common.config;
 
-import com.danieljhkim.dsearch.common.enums.RoutingStrategy;
-import lombok.Getter;
-import lombok.Setter;
-
 import java.util.List;
 
+import com.danieljhkim.dsearch.common.enums.RoutingStrategy;
+
+import lombok.Getter;
+import lombok.Setter;
 
 @Setter
 @Getter
 public class AppConfig {
-    private ServiceDiscoveryConfig serviceDiscovery;
-    private NodeGroupConfig indexNodes;
-    private NodeGroupConfig queryNodes;
-    private NodeGroupConfig coordinatorNodes;
-    private MlConfig ml;
+	private ServiceDiscoveryConfig serviceDiscovery;
+	private NodeGroupConfig indexNodes;
+	private NodeGroupConfig queryNodes;
+	private NodeGroupConfig coordinatorNodes;
+	private MlConfig ml;
 
-    @Override
-    public String toString() {
-        return "AppConfig{" +
-                "indexNodes=" + indexNodes +
-                ", queryNodes=" + queryNodes +
-                ", ml=" + ml +
-                '}';
-    }
+	@Override
+	public String toString() {
+		return "AppConfig{" +
+				"indexNodes=" + indexNodes +
+				", queryNodes=" + queryNodes +
+				", ml=" + ml +
+				'}';
+	}
 
-    @Setter
-    @Getter
-    public static class ServiceDiscoveryConfig {
-        private boolean enabled = false;
-        private int refreshIntervalSeconds = 30;
-    }
+	@Setter
+	@Getter
+	public static class ServiceDiscoveryConfig {
+		private boolean enabled = false;
+		private int refreshIntervalSeconds = 30;
+	}
 
+	@Setter
+	@Getter
+	public static class NodeGroupConfig {
+		private List<NodeConfig> nodes;
+		private RoutingStrategy routingStrategy;
+		private String componentLabel;
 
-    @Setter
-    @Getter
-    public static class NodeGroupConfig {
-        private List<NodeConfig> nodes;
-        private RoutingStrategy routingStrategy;
-        private String componentLabel;
+		@Override
+		public String toString() {
+			return "NodeGroupConfig{" +
+					"nodes=" + nodes +
+					", routingStrategy=" + routingStrategy +
+					", componentLabel='" + componentLabel +
+					'}';
+		}
+	}
 
-        @Override
-        public String toString() {
-            return "NodeGroupConfig{" +
-                    "nodes=" + nodes +
-                    ", routingStrategy=" + routingStrategy +
-                    ", componentLabel='" + componentLabel +
-                    '}';
-        }
-    }
+	@Setter
+	@Getter
+	public static class NodeConfig {
+		private String id;
+		private String host;
+		private int port;
+		private int healthPort;
+		private String role;
 
-    @Setter
-    @Getter
-    public static class NodeConfig {
-        private String id;
-        private String host;
-        private int port;
-        private int healthPort;
-        private String role;
+		@Override
+		public String toString() {
+			return "NodeConfig{" +
+					"id='" + id + '\'' +
+					", host='" + host + '\'' +
+					", port=" + port + '\'' +
+					", healthPort=" + healthPort +
+					'}';
+		}
+	}
 
-        @Override
-        public String toString() {
-            return "NodeConfig{" +
-                    "id='" + id + '\'' +
-                    ", host='" + host + '\'' +
-                    ", port=" + port + '\'' +
-                    ", healthPort=" + healthPort +
-                    '}';
-        }
-    }
+	@Setter
+	@Getter
+	public static class MlConfig {
+		private ModelsConfig models;
 
-    @Setter
-    @Getter
-    public static class MlConfig {
-        private ModelsConfig models;
+		@Override
+		public String toString() {
+			return "MlConfig{" +
+					"models=" + models +
+					'}';
+		}
+	}
 
-        @Override
-        public String toString() {
-            return "MlConfig{" +
-                    "models=" + models +
-                    '}';
-        }
-    }
+	@Setter
+	@Getter
+	public static class ModelsConfig {
+		private TextEmbeddingConfig textEmbedding;
 
-    @Setter
-    @Getter
-    public static class ModelsConfig {
-        private TextEmbeddingConfig textEmbedding;
+		@Override
+		public String toString() {
+			return "ModelsConfig{" +
+					"textEmbedding=" + textEmbedding +
+					'}';
+		}
+	}
 
-        @Override
-        public String toString() {
-            return "ModelsConfig{" +
-                    "textEmbedding=" + textEmbedding +
-                    '}';
-        }
-    }
+	@Setter
+	@Getter
+	public static class TextEmbeddingConfig {
+		private String url;
+		private String engine;
 
-    @Setter
-    @Getter
-    public static class TextEmbeddingConfig {
-        private String url;
-        private String engine;
-
-        @Override
-        public String toString() {
-            return "TextEmbeddingConfig{" +
-                    "url='" + url + '\'' +
-                    ", engine='" + engine + '\'' +
-                    '}';
-        }
-    }
+		@Override
+		public String toString() {
+			return "TextEmbeddingConfig{" +
+					"url='" + url + '\'' +
+					", engine='" + engine + '\'' +
+					'}';
+		}
+	}
 }

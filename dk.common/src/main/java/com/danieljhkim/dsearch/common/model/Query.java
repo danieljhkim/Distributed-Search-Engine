@@ -6,6 +6,6 @@ import lombok.Setter;
 @Setter
 @Getter
 public class Query {
-    private String queryString;
+	private String queryString;
 
 }

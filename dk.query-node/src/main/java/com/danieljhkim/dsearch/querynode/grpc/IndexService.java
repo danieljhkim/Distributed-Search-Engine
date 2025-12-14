@@ -10,25 +10,26 @@ import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
 
 public class IndexService implements BaseIndexService {
 
-    private final NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager;
+	private final NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager;
 
-    public IndexService(NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager) {
-        this.nodeClientManager = nodeClientManager;
-    }
+	public IndexService(NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager) {
+		this.nodeClientManager = nodeClientManager;
+	}
 
-    public SearchResult search(String queryString, String nodeId, String partitionId, int page, int size, SearchType searchType) {
-        if (!nodeClientManager.getClientMap().containsKey(nodeId)) {
-            throw new IllegalArgumentException("Unknown nodeId: " + nodeId);
-        }
-        int from = page * size;
-        IndexSearchRequest.Builder grpcReqBuilder = IndexSearchRequest.newBuilder()
-                .setQuery(queryString)
-                .setFrom(from)
-                .setSize(size)
-                .setPartitionId(partitionId)
-                .setSearchType(EnumMapper.mapToProtoEnum(searchType));
-        IndexServiceGrpc.IndexServiceBlockingStub stub = nodeClientManager.getClientMap().get(nodeId).getStub();
-        IndexSearchResponse grpcResp = stub.searchIndex(grpcReqBuilder.build());
-        return mapToSearchResult(grpcResp, page);
-    }
+	public SearchResult search(String queryString, String nodeId, String partitionId, int page, int size,
+			SearchType searchType) {
+		if (!nodeClientManager.getClientMap().containsKey(nodeId)) {
+			throw new IllegalArgumentException("Unknown nodeId: " + nodeId);
+		}
+		int from = page * size;
+		IndexSearchRequest.Builder grpcReqBuilder = IndexSearchRequest.newBuilder()
+				.setQuery(queryString)
+				.setFrom(from)
+				.setSize(size)
+				.setPartitionId(partitionId)
+				.setSearchType(EnumMapper.mapToProtoEnum(searchType));
+		IndexServiceGrpc.IndexServiceBlockingStub stub = nodeClientManager.getClientMap().get(nodeId).getStub();
+		IndexSearchResponse grpcResp = stub.searchIndex(grpcReqBuilder.build());
+		return mapToSearchResult(grpcResp, page);
+	}
 }

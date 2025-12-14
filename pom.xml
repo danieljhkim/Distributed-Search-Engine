@@ -28,14 +28,13 @@
     </modules>
 
     <properties>
-        <maven.compiler.source>21</maven.compiler.source>
-        <maven.compiler.target>21</maven.compiler.target>
+        <maven.compiler.release>21</maven.compiler.release>
 
         <spring.boot.version>3.3.0</spring.boot.version>
         <grpc.version>1.65.0</grpc.version>
         <protobuf.version>3.25.3</protobuf.version>
         <lucene.version>9.8.0</lucene.version>
-        <lombok.version>1.18.32</lombok.version>
+        <lombok.version>1.18.42</lombok.version>
         <junit.jupiter.version>5.10.2</junit.jupiter.version>
     </properties>
 
@@ -217,6 +216,35 @@
                         <useModulePath>false</useModulePath>
                     </configuration>
                 </plugin>
+
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>3.11.0</version>
+                    <configuration>
+                        <release>${maven.compiler.release}</release>
+                        <annotationProcessorPaths>
+                            <path>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok</artifactId>
+                                <version>${lombok.version}</version>
+                            </path>
+                        </annotationProcessorPaths>
+                    </configuration>
+                </plugin>
+
+                <plugin>
+                    <groupId>com.diffplug.spotless</groupId>
+                    <artifactId>spotless-maven-plugin</artifactId>
+                    <version>2.43.0</version>
+                    <configuration>
+                      <java>
+                        <eclipse>
+                            <file>${maven.multiModuleProjectDirectory}/config/eclipse-formatter.xml</file>
+                        </eclipse>
+                      </java>
+                    </configuration>
+                  </plugin>
             </plugins>
         </pluginManagement>
     </build>

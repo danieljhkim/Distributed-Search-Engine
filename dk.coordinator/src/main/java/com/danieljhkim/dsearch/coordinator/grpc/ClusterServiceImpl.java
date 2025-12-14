@@ -1,81 +1,84 @@
 package com.danieljhkim.dsearch.coordinator.grpc;
 
 import com.danieljhkim.dsearch.coordinator.cluster.ClusterMembershipService;
-import com.danieljhkim.dsearch.proto.cluster.*;
+import com.danieljhkim.dsearch.proto.cluster.ClusterServiceGrpc;
+import com.danieljhkim.dsearch.proto.cluster.GetClusterInfoRequest;
+import com.danieljhkim.dsearch.proto.cluster.GetClusterInfoResponse;
+import com.danieljhkim.dsearch.proto.cluster.NodeInfo;
+import com.danieljhkim.dsearch.proto.cluster.NodeRole;
+import com.danieljhkim.dsearch.proto.cluster.RegisterNodeRequest;
+import com.danieljhkim.dsearch.proto.cluster.RegisterNodeResponse;
+
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 
-
 public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBase {
 
-    private final ClusterMembershipService membershipService;
+	private final ClusterMembershipService membershipService;
 
-    public ClusterServiceImpl(ClusterMembershipService membershipService) {
-        this.membershipService = membershipService;
-    }
+	public ClusterServiceImpl(ClusterMembershipService membershipService) {
+		this.membershipService = membershipService;
+	}
 
-    @Override
-    public void registerNode(RegisterNodeRequest request, StreamObserver<RegisterNodeResponse> responseObserver) {
-        membershipService.registerNode(
-                new ClusterMembershipService.NodeInfo(
-                        request.getNodeId(),
-                        request.getHost(),
-                        request.getPort(),
-                        request.getHealthPort(),
-                        request.getRole().name(),
-                        true
-                ),
-                request.getRole()
-        );
-        RegisterNodeResponse resp = RegisterNodeResponse.newBuilder()
-                .setSuccess(true)
-                .build();
-        responseObserver.onNext(resp);
-        responseObserver.onCompleted();
-    }
+	@Override
+	public void registerNode(RegisterNodeRequest request, StreamObserver<RegisterNodeResponse> responseObserver) {
+		membershipService.registerNode(
+				new ClusterMembershipService.NodeInfo(
+						request.getNodeId(),
+						request.getHost(),
+						request.getPort(),
+						request.getHealthPort(),
+						request.getRole().name(),
+						true),
+				request.getRole());
+		RegisterNodeResponse resp = RegisterNodeResponse.newBuilder()
+				.setSuccess(true)
+				.build();
+		responseObserver.onNext(resp);
+		responseObserver.onCompleted();
+	}
 
-    @Override
-    public void getClusterInfo(GetClusterInfoRequest request, StreamObserver<GetClusterInfoResponse> responseObserver) {
-        try {
-            NodeRole role = request.getRole();
-            ClusterMembershipService.NodeGroup group = switch (role) {
-                case NODE_ROLE_INDEX -> membershipService.getIndexGroup();
-                case NODE_ROLE_QUERY -> membershipService.getQueryGroup();
-                case NODE_ROLE_COORDINATOR -> membershipService.getCoordinatorGroup();
-                default -> null;
-            };
-            if (group == null) {
-                responseObserver.onError(Status.NOT_FOUND.withDescription("No node group registered for role: " + role)
-                        .asRuntimeException());
-                return;
-            }
-            GetClusterInfoResponse.Builder resp = GetClusterInfoResponse.newBuilder()
-                    .setComponentLabel(group.getComponentLabel())
-                    .setRoutingStrategy(group.getRoutingStrategy().name());
+	@Override
+	public void getClusterInfo(GetClusterInfoRequest request, StreamObserver<GetClusterInfoResponse> responseObserver) {
+		try {
+			NodeRole role = request.getRole();
+			ClusterMembershipService.NodeGroup group = switch (role) {
+				case NODE_ROLE_INDEX -> membershipService.getIndexGroup();
+				case NODE_ROLE_QUERY -> membershipService.getQueryGroup();
+				case NODE_ROLE_COORDINATOR -> membershipService.getCoordinatorGroup();
+				default -> null;
+			};
+			if (group == null) {
+				responseObserver.onError(Status.NOT_FOUND.withDescription("No node group registered for role: " + role)
+						.asRuntimeException());
+				return;
+			}
+			GetClusterInfoResponse.Builder resp = GetClusterInfoResponse.newBuilder()
+					.setComponentLabel(group.getComponentLabel())
+					.setRoutingStrategy(group.getRoutingStrategy().name());
 
-            for (ClusterMembershipService.NodeInfo ni : group.getAllNodes()) {
-                if (!ni.isHealthy()) {
-                    continue;
-                }
-                resp.addNodes(NodeInfo.newBuilder()
-                        .setNodeId(ni.nodeId())
-                        .setHost(ni.host())
-                        .setPort(ni.port())
-                        .setHealthPort(ni.healthPort())
-                        .setRole(role)
-                        .build());
-            }
-            responseObserver.onNext(resp.build());
-            responseObserver.onCompleted();
-        } catch (Exception e) {
-            e.printStackTrace();
-            responseObserver.onError(
-                    Status.INTERNAL
-                            .withDescription("Failed to get cluster info for role: " + request.getRole())
-                            .withCause(e)
-                            .asRuntimeException()
-            );
-        }
-    }
+			for (ClusterMembershipService.NodeInfo ni : group.getAllNodes()) {
+				if (!ni.isHealthy()) {
+					continue;
+				}
+				resp.addNodes(NodeInfo.newBuilder()
+						.setNodeId(ni.nodeId())
+						.setHost(ni.host())
+						.setPort(ni.port())
+						.setHealthPort(ni.healthPort())
+						.setRole(role)
+						.build());
+			}
+			responseObserver.onNext(resp.build());
+			responseObserver.onCompleted();
+		} catch (Exception e) {
+			e.printStackTrace();
+			responseObserver.onError(
+					Status.INTERNAL
+							.withDescription("Failed to get cluster info for role: " + request.getRole())
+							.withCause(e)
+							.asRuntimeException());
+		}
+	}
 
 }

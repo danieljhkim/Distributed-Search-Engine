@@ -69,3 +69,9 @@ reset: clean stop wipe-data
 # ============================
 
 restart: stop run
+
+format:
+	mvn spotless:apply
+
+lint:
+	mvn spotless:check

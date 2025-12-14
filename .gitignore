@@ -61,3 +61,7 @@ dist/
 package-lock.json
 
 cluster_state.json
+
+dependency-reduced-pom.xml
+
+.spotless/
