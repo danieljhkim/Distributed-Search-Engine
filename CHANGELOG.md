@@ -11,6 +11,10 @@ This project follows a **Keep a Changelog–inspired** format and adheres loosel
 
 ## [Unreleased]
 
+---
+
+## [0.2.0] — Tooling & Build Hardening
+
 ### Added
 - `COMMANDS.md` documenting Makefile-based cluster operations
 - devbox configuration for local agentic development
