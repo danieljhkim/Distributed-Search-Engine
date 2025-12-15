@@ -84,6 +84,7 @@
     </dependencies>
 
     <build>
+        <finalName>dk-index-node</finalName>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

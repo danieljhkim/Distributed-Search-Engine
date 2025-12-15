@@ -43,7 +43,7 @@ public class NodeClientManager<T> {
 
 	static {
 		try {
-			defaultConfig = ConfigLoader.load("app-config.yaml");
+			defaultConfig = ConfigLoader.load();
 			coordinatorManager = loadClientManager(NodeRole.NODE_ROLE_COORDINATOR, ClusterServiceGrpc::newBlockingStub);
 		} catch (IOException | RuntimeException e) {
 			LOGGER.log(Level.SEVERE, "Failed to load application configuration", e);

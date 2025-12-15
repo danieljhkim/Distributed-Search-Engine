@@ -4,10 +4,10 @@ echo "Stopping Distributed Search Engine cluster..."
 
 # Grep patterns for each module
 PATTERNS=(
-  "dk.coordinator-1.0-SNAPSHOT.jar"
-  "dk.index-node-1.0-SNAPSHOT.jar"
-  "dk.query-node-1.0-SNAPSHOT.jar"
-  "dk.gateway-1.0-SNAPSHOT.jar"
+  "dk.coordinator*.jar"
+  "dk.index-node*.jar"
+  "dk.query-node*.jar"
+  "dk.gateway*.jar"
 )
 
 for pattern in "${PATTERNS[@]}"; do

@@ -27,6 +27,7 @@ help:
 # ============================
 
 build:
+	rm -rf logs/*
 	mvn clean package -DskipTests
 
 clean:
@@ -46,7 +47,6 @@ run-multi:
 
 stop:
 	./scripts/kill_cluster.sh
-	rm -rf logs/*
 
 # ============================
 # Logs & Data Management

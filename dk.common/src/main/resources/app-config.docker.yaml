@@ -1,0 +1,45 @@
+serviceDiscovery:
+  enabled: true
+  refreshIntervalSeconds: 10
+
+indexNodes:
+  routingStrategy: "LEAST_LOADED"
+  componentLabel: "dsearch-index-node"
+  nodes:
+    - id: "in0"
+      host: "dsearch-index-0"
+      port: 6000
+      healthPort: 8090
+
+queryNodes:
+  routingStrategy: "ROUND_ROBIN"
+  componentLabel: "dsearch-query-node"
+  nodes:
+    - id: "qn0"
+      host: "dsearch-query-0"
+      port: 50052
+      healthPort: 8081
+
+gatewayNodes:
+  routingStrategy: "ROUND_ROBIN"
+  componentLabel: "dsearch-gateway-node"
+  nodes:
+    - id: "gw0"
+      host: "dsearch-gateway"
+      port: 8080
+      healthPort: 8180
+
+coordinatorNodes:
+  routingStrategy: "ROUND_ROBIN"
+  componentLabel: "dsearch-coordinator-node"
+  nodes:
+    - id: "c0"
+      host: "dsearch-coordinator"
+      port: 7000
+      healthPort: 8080
+
+ml:
+  models:
+    textEmbedding:
+      url: "djl://ai.djl.huggingface.pytorch/sentence-transformers/all-MiniLM-L6-v2"
+      engine: "PyTorch"

@@ -20,7 +20,7 @@ public class CoordinatorApplication {
 
 		int port = Integer.parseInt(System.getenv("COORDINATOR_PORT"));
 		int healthPort = Integer.parseInt(System.getenv("COORDINATOR_HEALTH_PORT"));
-		AppConfig appConfig = ConfigLoader.load("app-config.yaml");
+		AppConfig appConfig = ConfigLoader.load();
 		ClusterMembershipService membershipService = new ClusterMembershipService(appConfig);
 		CoordinatorServer server = new CoordinatorServer(port, membershipService);
 		HealthCheckScheduler healthCheckScheduler = new HealthCheckScheduler(membershipService, appConfig);

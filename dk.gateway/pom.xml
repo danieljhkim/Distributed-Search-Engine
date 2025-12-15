@@ -66,6 +66,7 @@
     </dependencies>
 
     <build>
+        <finalName>dk-gateway</finalName>
         <plugins>
             <!-- Spring Boot Uber JAR (fat jar) -->
             <plugin>

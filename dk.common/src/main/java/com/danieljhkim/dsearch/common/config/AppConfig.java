@@ -14,6 +14,7 @@ public class AppConfig {
 	private NodeGroupConfig indexNodes;
 	private NodeGroupConfig queryNodes;
 	private NodeGroupConfig coordinatorNodes;
+	private NodeGroupConfig gatewayNodes;
 	private MlConfig ml;
 
 	@Override

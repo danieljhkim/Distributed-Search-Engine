@@ -28,7 +28,7 @@ public class EmbeddingModelManager {
 	private ZooModel<String, float[]> defaultModel;
 
 	private EmbeddingModelManager() throws IOException {
-		this.appConfig = ConfigLoader.load("app-config.yaml");
+		this.appConfig = ConfigLoader.load();
 		this.DEFAULT_MODEL_URL = appConfig.getMl().getModels().getTextEmbedding().getUrl();
 		this.DEFAULT_ENGINE = appConfig.getMl().getModels().getTextEmbedding().getEngine();
 	}
@@ -51,10 +51,10 @@ public class EmbeddingModelManager {
 	}
 
 	private void init() {
-		LOGGER.info("Loading default embedding model: " + DEFAULT_MODEL_URL);
+		LOGGER.info(() -> "Loading default embedding model: " + DEFAULT_MODEL_URL);
 		this.defaultModel = loadModel(DEFAULT_MODEL_URL, DEFAULT_ENGINE);
 		modelCache.put(DEFAULT_MODEL_URL, this.defaultModel);
-		LOGGER.info("Default embedding model loaded successfully: " + DEFAULT_MODEL_URL);
+		LOGGER.info(() -> "Default embedding model loaded successfully: " + DEFAULT_MODEL_URL);
 	}
 
 	private ZooModel<String, float[]> loadModel(String modelUrl, String engine) {

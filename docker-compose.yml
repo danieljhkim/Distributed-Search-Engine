@@ -1,0 +1,102 @@
+version: "3.9"
+
+name: dsearch
+
+networks:
+  dsearch-net:
+
+volumes:
+  indexnode0-data:
+
+services:
+  coordinator:
+    # If building locally:
+    build:
+      context: .
+      dockerfile: dk.coordinator/Dockerfile
+    # If using GHCR instead, comment build and uncomment image:
+    # image: ghcr.io/<owner>/<repo>/dk.coordinator:latest
+
+    container_name: dsearch-coordinator
+    networks:
+      dsearch-net:
+        aliases:
+          - dsearch-coordinator
+    environment:
+      COORDINATOR_PORT: "7000"
+      COORDINATOR_HEALTH_PORT: "8080"
+      APP_CONFIG_PATH: "app-config.docker.yaml"
+    ports:
+      - "17000:7000"
+      - "18080:8080"
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: .
+      dockerfile: dk.gateway/Dockerfile
+
+    container_name: dsearch-gateway
+    networks:
+      dsearch-net:
+        aliases:
+          - dsearch-gateway
+    environment:
+      GATEWAY_PORT: "8080"
+      GATEWAY_HEALTH_PORT: "8180"
+      COORDINATOR_HOST: "dsearch-coordinator"
+      COORDINATOR_PORT: "7000"
+      APP_CONFIG_PATH: "app-config.docker.yaml"
+    ports:
+      - "19080:8080"
+      - "19180:8180"
+    depends_on:
+      - coordinator
+    restart: unless-stopped
+
+  query-node-0:
+    build:
+      context: .
+      dockerfile: dk.query-node/Dockerfile
+    container_name: dsearch-query-0
+    networks:
+      dsearch-net:
+        aliases:
+          - dsearch-query-0
+    environment:
+      QUERY_NODE_ID: "qn0"
+      QUERY_NODE_PORT: "50052"
+      QUERY_NODE_HEALTH_PORT: "8081"
+      APP_CONFIG_PATH: "app-config.docker.yaml"
+    ports:
+      - "50052:50052"
+      - "8081:8081"
+    depends_on:
+      - coordinator
+      - gateway
+    restart: unless-stopped
+
+  index-node-0:
+    build:
+      context: .
+      dockerfile: dk.index-node/Dockerfile
+    container_name: dsearch-index-0
+    networks:
+      dsearch-net:
+        aliases:
+          - dsearch-index-0
+    environment:
+      INDEX_NODE_ID: "in0"
+      INDEX_NODE_PORT: "6000"
+      INDEX_NODE_HEALTH_PORT: "8090"
+      # Where Lucene shards live (your code uses baseDir; map that to this)
+      INDEX_NODE_BASE_DIR: "/data/index"
+      APP_CONFIG_PATH: "app-config.docker.yaml"
+    ports:
+      - "6000:6000"
+      - "8090:8090"
+    volumes:
+      - indexnode0-data:/data/index
+    depends_on:
+      - coordinator
+    restart: unless-stopped

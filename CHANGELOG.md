@@ -11,6 +11,20 @@ This project follows a **Keep a Changelog–inspired** format and adheres loosel
 
 ## [Unreleased]
 
+### Added
+- Docker support: Multi-stage Dockerfiles for all runnable modules (coordinator, gateway, index-node, query-node)
+- `docker-compose.yml` for full cluster orchestration
+- `app-config.docker.yaml` for Docker-specific configuration
+- GitHub Actions workflows: CI with Spotless checks and automated Docker image publishing
+- `APP_CONFIG_PATH` environment variable support for flexible configuration file selection
+- `finalName` configuration in all module POMs for consistent JAR naming (dk-*.jar)
+
+### Changed
+- Refactored `ConfigLoader` to use `APP_CONFIG_PATH` with default fallback to `app-config.yaml`
+- Updated all modules to use simplified `ConfigLoader.load()` API
+- Updated cluster scripts to use new JAR names (removed version suffixes)
+- `Makefile`: Moved log cleanup from `stop` to `build` target
+
 ---
 
 ## [0.2.0] — Tooling & Build Hardening

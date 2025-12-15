@@ -8,9 +8,9 @@ set -e
 
 BASE_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )/.."
 
-INDEX_NODE_JAR="$BASE_DIR/dk.index-node/target/dk.index-node-1.0-SNAPSHOT.jar"
-QUERY_NODE_JAR="$BASE_DIR/dk.query-node/target/dk.query-node-1.0-SNAPSHOT.jar"
-GATEWAY_JAR="$BASE_DIR/dk.gateway/target/dk.gateway-1.0-SNAPSHOT.jar"
+INDEX_NODE_JAR="$BASE_DIR/dk.index-node/target/dk-index-node.jar"
+QUERY_NODE_JAR="$BASE_DIR/dk.query-node/target/dk-query-node.jar"
+GATEWAY_JAR="$BASE_DIR/dk.gateway/target/dk-gateway.jar"
 
 LOG_DIR="$BASE_DIR/logs"
 DATA_DIR="$BASE_DIR/data"
@@ -67,9 +67,9 @@ start_gateway() {
 stop_cluster() {
   echo "Stopping all cluster processes..."
 
-  pkill -f dk.index-node-1.0-SNAPSHOT.jar || true
-  pkill -f dk.query-node-1.0-SNAPSHOT.jar || true
-  pkill -f dk.gateway-1.0-SNAPSHOT.jar || true
+  pkill -f dk-index-node.jar || true
+  pkill -f dk-query-node.jar || true
+  pkill -f dk-gateway.jar || true
 
   echo "Cluster stopped."
 }

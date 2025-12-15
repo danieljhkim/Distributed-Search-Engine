@@ -1,5 +1,7 @@
 package com.danieljhkim.dsearch.gateway.config;
 
+import java.io.IOException;
+
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -44,8 +46,8 @@ public class GatewayConfig {
 	@Bean
 	public AppConfig appConfig() {
 		try {
-			return ConfigLoader.load("app-config.yaml");
-		} catch (Exception e) {
+			return ConfigLoader.load();
+		} catch (IOException e) {
 			throw new RuntimeException("Failed to load application configuration", e);
 		}
 	}
