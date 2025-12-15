@@ -16,6 +16,7 @@ public class AppConfig {
 	private NodeGroupConfig coordinatorNodes;
 	private NodeGroupConfig gatewayNodes;
 	private MlConfig ml;
+	private RequestLimitsConfig requestLimits;
 
 	@Override
 	public String toString() {
@@ -107,6 +108,21 @@ public class AppConfig {
 			return "TextEmbeddingConfig{" +
 					"url='" + url + '\'' +
 					", engine='" + engine + '\'' +
+					'}';
+		}
+	}
+
+	@Setter
+	@Getter
+	public static class RequestLimitsConfig {
+		private int maxSize = 1000;
+		private int maxQueryLength = 1024;
+
+		@Override
+		public String toString() {
+			return "RequestLimitsConfig{" +
+					"maxSize=" + maxSize +
+					", maxQueryLength=" + maxQueryLength +
 					'}';
 		}
 	}

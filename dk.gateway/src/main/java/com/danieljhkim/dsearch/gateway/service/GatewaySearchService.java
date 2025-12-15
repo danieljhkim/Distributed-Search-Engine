@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 
 import com.danieljhkim.dsearch.common.enums.EnumMapper;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
+import com.danieljhkim.dsearch.common.validation.RequestLimitsValidator;
 import com.danieljhkim.dsearch.gateway.api.dto.SearchRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.SearchResponseDto;
 import com.danieljhkim.dsearch.gateway.mapper.QueryResponseMapper;
@@ -32,6 +33,9 @@ public class GatewaySearchService {
 	}
 
 	public Page<SearchResponseDto.SearchHitDto> search(SearchRequestDto request) {
+		// Validate request limits
+		RequestLimitsValidator.validateRequestLimits(request.getQuery(), request.getPageSize());
+
 		long startNanos = System.nanoTime();
 		Pageable pageable = PageRequest.of(request.getPage(), request.getPageSize());
 		QueryServiceGrpc.QueryServiceBlockingStub queryStub = qnClientManager.nextClient();

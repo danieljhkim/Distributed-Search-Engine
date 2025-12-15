@@ -42,3 +42,7 @@ ml:
     textEmbedding:
       url: "djl://ai.djl.huggingface.pytorch/sentence-transformers/all-MiniLM-L6-v2"
       engine: "PyTorch"
+
+requestLimits:
+  maxSize: 1000
+  maxQueryLength: 1024

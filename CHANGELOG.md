@@ -18,6 +18,7 @@ This project follows a **Keep a Changelog–inspired** format and adheres loosel
 - GitHub Actions workflows: CI with Spotless checks and automated Docker image publishing
 - `APP_CONFIG_PATH` environment variable support for flexible configuration file selection
 - `finalName` configuration in all module POMs for consistent JAR naming (dk-*.jar)
+- Per-request limits validation (`maxSize`, `maxQueryLength`) enforced at Gateway and QueryNode layers via `RequestLimitsValidator`
 
 ### Changed
 - Refactored `ConfigLoader` to use `APP_CONFIG_PATH` with default fallback to `app-config.yaml`

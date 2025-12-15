@@ -8,6 +8,7 @@ import com.danieljhkim.dsearch.common.enums.HybridFusionStrategy;
 import com.danieljhkim.dsearch.common.enums.SearchType;
 import com.danieljhkim.dsearch.common.exception.ParseGoneWrongException;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.common.validation.RequestLimitsValidator;
 import com.danieljhkim.dsearch.proto.query.QueryRequest;
 import com.danieljhkim.dsearch.proto.query.QueryResponse;
 import com.danieljhkim.dsearch.proto.query.QueryServiceGrpc;
@@ -35,6 +36,9 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
 		int size = request.getSize();
 		String partitionId = request.getPartitionId();
 		SearchType searchType = EnumMapper.mapFromProtoEnum(request.getSearchType());
+
+		validateRequestLimits(queryString, size);
+
 		try {
 			SearchResult result;
 			if (searchType == SearchType.HYBRID) {
@@ -62,6 +66,10 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
 			LOGGER.log(Level.WARNING, "Failed to parse query: " + queryString, e);
 			responseObserver.onError(new ParseGoneWrongException("Failed to parse query: " + queryString, e));
 		}
+	}
+
+	private void validateRequestLimits(String queryString, int size) {
+		RequestLimitsValidator.validateRequestLimits(queryString, size);
 	}
 
 	private QueryResponse buildQueryResponse(SearchResult result, int page, int size) {

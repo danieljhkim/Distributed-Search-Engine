@@ -83,6 +83,12 @@ public class GlobalExceptionInterceptor implements ServerInterceptor {
 					.withDescription("Index operation failed: " + e.getMessage());
 		}
 
+		// IllegalArgumentException (e.g., request validation failures)
+		if (t instanceof IllegalArgumentException e) {
+			return Status.INVALID_ARGUMENT
+					.withDescription(e.getMessage());
+		}
+
 		// Any other IndexServiceException
 		if (t instanceof ServiceException e) {
 			return Status.INTERNAL

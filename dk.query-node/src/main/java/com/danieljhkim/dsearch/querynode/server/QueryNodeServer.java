@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.grpc.GlobalExceptionInterceptor;
 import com.danieljhkim.dsearch.common.grpc.PrometheusGrpcServerInterceptor;
 import com.danieljhkim.dsearch.common.tracing.CorrelationIdServerInterceptor;
@@ -25,7 +26,8 @@ public class QueryNodeServer {
 	private final Server server;
 	private HTTPServer metricsServer;
 
-	public QueryNodeServer(int port, SearchExecutor searchExecutor, BaseIndexService indexService) {
+	public QueryNodeServer(int port, SearchExecutor searchExecutor, BaseIndexService indexService,
+			AppConfig appConfig) {
 		QueryServiceImpl queryService = new QueryServiceImpl(searchExecutor, indexService);
 		ServerServiceDefinition interceptedService = ServerInterceptors.intercept(queryService,
 				new GlobalExceptionInterceptor());

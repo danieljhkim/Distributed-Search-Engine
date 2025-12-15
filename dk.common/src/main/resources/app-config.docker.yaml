@@ -29,6 +29,10 @@ gatewayNodes:
       port: 8080
       healthPort: 8180
 
+requestLimits:
+  maxSize: 1000
+  maxQueryLength: 1024
+
 coordinatorNodes:
   routingStrategy: "ROUND_ROBIN"
   componentLabel: "dsearch-coordinator-node"

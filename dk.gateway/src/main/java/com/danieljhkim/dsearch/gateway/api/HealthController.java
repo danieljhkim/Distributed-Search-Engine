@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.client.RestTemplate;
 
 import com.danieljhkim.dsearch.common.config.AppConfig;
+import com.danieljhkim.dsearch.common.enums.HealthStatus;
 import com.danieljhkim.dsearch.gateway.api.dto.ClusterHealthResponse;
 import com.danieljhkim.dsearch.gateway.api.dto.ClusterHealthResponse.NodeHealthStatus;
 import com.danieljhkim.dsearch.gateway.api.dto.ClusterHealthResponse.ServiceHealth;
@@ -30,21 +31,22 @@ public class HealthController {
 	@GetMapping("/health")
 	public Map<String, Object> health() {
 		return Map.of(
-				"status", "UP",
+				"status", HealthStatus.UP.name(),
 				"service", "gateway",
 				"timestamp", Instant.now().toString());
 	}
 
 	@GetMapping("/cluster/health")
 	public ResponseEntity<ClusterHealthResponse> clusterHealth() {
-		ServiceHealth gatewayHealth = new ServiceHealth("UP");
+		ServiceHealth gatewayHealth = new ServiceHealth(HealthStatus.UP.name());
 
 		List<NodeHealthStatus> indexNodeHealth = checkGroup("index-node", appConfig.getIndexNodes());
 		List<NodeHealthStatus> queryNodeHealth = checkGroup("query-node", appConfig.getQueryNodes());
-		boolean allNodesUp = indexNodeHealth.stream().allMatch(h -> "UP".equals(h.getStatus()))
-				&& queryNodeHealth.stream().allMatch(h -> "UP".equals(h.getStatus()));
+		boolean allNodesUp = indexNodeHealth.stream()
+				.allMatch(h -> HealthStatus.UP.name().equals(h.getStatus()))
+				&& queryNodeHealth.stream().allMatch(h -> HealthStatus.UP.name().equals(h.getStatus()));
 
-		String overallStatus = allNodesUp ? "UP" : "DEGRADED";
+		String overallStatus = allNodesUp ? HealthStatus.UP.name() : HealthStatus.DEGRADED.name();
 		HttpStatus httpStatus = allNodesUp ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE;
 		ClusterHealthResponse body = new ClusterHealthResponse(
 				overallStatus,
@@ -68,19 +70,19 @@ public class HealthController {
 			int grpcPort = node.getPort();
 			int healthPort = node.getHealthPort();
 			String url = "http://" + host + ":" + healthPort + "/health";
-			String status = "DOWN";
+			HealthStatus status = HealthStatus.DOWN;
 			String error = null;
 
 			try {
 				var response = restTemplate.getForEntity(url, String.class);
 				if (response.getStatusCode().is2xxSuccessful()) {
-					status = "UP";
+					status = HealthStatus.UP;
 				} else {
-					status = "DOWN";
+					status = HealthStatus.DOWN;
 					error = "HTTP " + response.getStatusCode().value();
 				}
 			} catch (Exception ex) {
-				status = "DOWN";
+				status = HealthStatus.DOWN;
 				error = ex.getClass().getSimpleName() + ": " + ex.getMessage();
 			}
 
@@ -89,7 +91,7 @@ public class HealthController {
 					host,
 					grpcPort,
 					healthPort,
-					status,
+					status.name(),
 					error);
 			results.add(nodeHealth);
 		});
