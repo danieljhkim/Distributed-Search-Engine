@@ -5,6 +5,8 @@ package dsearch.index;
 option java_package = "com.danieljhkim.dsearch.proto.index";
 option java_multiple_files = true;
 import "common/search_type.proto";
+import "common/filter.proto";
+import "common/facet.proto";
 
 message Field {
   string name = 1;
@@ -51,6 +53,9 @@ message IndexSearchRequest {
   int32 from = 3;
   int32 size = 4;
   dsearch.common.SearchType search_type = 5;
+  repeated dsearch.common.Filter filters = 6;
+  bool highlight = 7;
+  repeated dsearch.common.FacetRequest facets = 8;
 }
 
 message IndexHit {
@@ -60,12 +65,15 @@ message IndexHit {
   string content = 4;
   string title = 5;
   int32 rank = 6;
+  map<string, string> highlighted_fields = 7;
+  map<string, string> fields = 8;
 }
 
 message IndexSearchResponse {
   repeated IndexHit hits = 1;
   int64 total_hits = 2;
   dsearch.common.SearchType search_type = 3;
+  repeated dsearch.common.FacetResponse facets = 4;
 }
 
 service IndexService {

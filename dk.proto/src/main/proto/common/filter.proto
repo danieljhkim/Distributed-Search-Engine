@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package dsearch.common;
+
+option java_package = "com.danieljhkim.dsearch.proto.common";
+option java_multiple_files = true;
+
+/**
+ * Filter operator for comparing field values.
+ */
+enum FilterOperator {
+  FILTER_OP_UNSPECIFIED = 0;
+  EQ = 1;      // Equals
+  NE = 2;      // Not equals
+  GT = 3;      // Greater than
+  GTE = 4;     // Greater than or equal
+  LT = 5;      // Less than
+  LTE = 6;     // Less than or equal
+  IN = 7;      // In list of values
+  NOT_IN = 8;  // Not in list of values
+}
+
+/**
+ * A filter condition applied to search queries.
+ */
+message Filter {
+  string field = 1;
+  FilterOperator operator = 2;
+  repeated string values = 3;
+}
+

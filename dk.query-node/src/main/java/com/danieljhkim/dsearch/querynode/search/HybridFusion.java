@@ -87,12 +87,17 @@ public final class HybridFusion {
 			// Prefer BM25 metadata, fall back to semantic
 			String title = bm25 != null ? bm25.title : (sem != null ? sem.title : null);
 			String content = bm25 != null ? bm25.content : (sem != null ? sem.content : null);
+			Map<String, String> fields = bm25 != null ? bm25.fields : (sem != null ? sem.fields : null);
+			Map<String, String> highlightedFields = bm25 != null ? bm25.highlightedFields
+					: (sem != null ? sem.highlightedFields : null);
 
 			fused.add(new SearchHit(
 					docId,
 					title,
 					content,
-					(float) fusedScore));
+					(float) fusedScore,
+					highlightedFields,
+					fields));
 		}
 
 		// Sort by fused score desc and apply limit
@@ -151,7 +156,9 @@ public final class HybridFusion {
 					h.getScore(),
 					i,
 					h.getTitle(),
-					h.getContent()));
+					h.getContent(),
+					h.getFields(),
+					h.getHighlightedFields()));
 		}
 		return map;
 	}
@@ -182,13 +189,19 @@ public final class HybridFusion {
 		final String title;
 		final String content;
 		double normScore;
+		Map<String, String> fields;
+		Map<String, String> highlightedFields;
 
-		RankedScore(double rawScore, int rank, String title, String content) {
+		RankedScore(double rawScore, int rank, String title, String content, Map<String, String> fields,
+				Map<String, String> highlightedFields) {
 			this.rawScore = rawScore;
 			this.rank = rank;
 			this.title = title;
 			this.content = content;
 			this.normScore = rawScore;
+			this.fields = fields;
+			this.highlightedFields = highlightedFields;
+
 		}
 	}
 }

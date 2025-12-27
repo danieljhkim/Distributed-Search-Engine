@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package dsearch.common;
+
+option java_package = "com.danieljhkim.dsearch.proto.common";
+option java_multiple_files = true;
+
+import "common/filter.proto";
+
+/**
+ * Request for computing facets on a field.
+ */
+message FacetRequest {
+  string field = 1;
+  int32 size = 2;  // Maximum number of buckets to return
+  repeated Filter filters = 3;  // Optional filters for this facet
+  repeated FacetRequest nested = 4;  // Nested facets
+}
+
+/**
+ * Response containing facet results for a field.
+ */
+message FacetResponse {
+  string field = 1;
+  repeated FacetBucket buckets = 2;
+}
+
+/**
+ * A single facet bucket with value, count, and optional nested facets.
+ */
+message FacetBucket {
+  string value = 1;
+  int64 count = 2;
+  repeated FacetResponse nested = 3;
+}
+

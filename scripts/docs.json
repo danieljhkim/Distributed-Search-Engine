@@ -1,0 +1,95 @@
+[
+    {
+      "partitionId": "movies",
+      "fields": {
+        "title": "Interstellar",
+        "content": "A team of explorers travel through a wormhole in space in an attempt to ensure humanity's survival.",
+        "year": "2014",
+        "genre": "sci-fi",
+        "rating": "8.6",
+        "createdAt": "1412121600000"
+      }
+    },
+    {
+      "partitionId": "movies",
+      "fields": {
+        "title": "The Matrix",
+        "content": "A computer hacker learns from mysterious rebels about the true nature of his reality and his role in the war against its controllers.",
+        "year": "1999",
+        "genre": "sci-fi",
+        "rating": "8.7",
+        "createdAt": "915148800000"
+      }
+    },
+    {
+      "partitionId": "movies",
+      "fields": {
+        "title": "Inception",
+        "content": "A skilled thief is given a chance at redemption if he can pull off an impossible heist: planting an idea in someone's mind.",
+        "year": "2010",
+        "genre": "sci-fi",
+        "rating": "8.8",
+        "createdAt": "1277942400000"
+      }
+    },
+    {
+      "partitionId": "products",
+      "fields": {
+        "title": "Wireless Bluetooth Headphones",
+        "content": "Premium noise-cancelling wireless headphones with 30-hour battery life and superior sound quality.",
+        "price": "199.99",
+        "rating": "4.5",
+        "brand": "AudioTech",
+        "category": "electronics",
+        "inStock": "true",
+        "createdAt": "1704067200000"
+      }
+    },
+    {
+      "partitionId": "articles",
+      "fields": {
+        "title": "Understanding Distributed Search Systems",
+        "content": "This article explores the architecture and implementation of distributed search engines, covering topics like sharding, replication, and query routing.",
+        "author": "John Doe",
+        "publishedAt": "1704067200000",
+        "category": "technology",
+        "tags": "search, distributed-systems, architecture"
+      }
+    },
+    {
+      "partitionId": "movies",
+      "fields": {
+        "title": "Minimal Movie",
+        "content": "A simple movie description.",
+        "year": "2023",
+        "genre": "action",
+        "rating": "9.2",
+        "createdAt": "1672531200000"
+      }
+    },
+    {
+      "partitionId": "movies",
+      "fields": {
+        "title": "Complete Example Movie",
+        "content": "This is a comprehensive example showing all field types that can be indexed, filtered, sorted, and faceted.",
+        "year": "2023",
+        "rating": "9.2",
+        "genre": "action",
+        "createdAt": "1672531200000",
+        "director": "Christopher Nolan",
+        "runtime": "180",
+        "budget": "165000000"
+      }
+    },
+    {
+      "partitionId": "movies",
+      "fields": {
+        "title": "The Shawshank Redemption",
+        "content": "Two imprisoned men bond over a number of years, finding solace and eventual redemption through acts of common decency.",
+        "year": "1994",
+        "genre": "action",
+        "rating": "9.3",
+        "createdAt": "778377600000"
+      }
+    }
+  ]

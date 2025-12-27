@@ -2,6 +2,7 @@ package com.danieljhkim.dsearch.common.config;
 
 import java.util.List;
 
+import com.danieljhkim.dsearch.common.enums.FieldType;
 import com.danieljhkim.dsearch.common.enums.RoutingStrategy;
 
 import lombok.Getter;
@@ -17,6 +18,7 @@ public class AppConfig {
 	private NodeGroupConfig gatewayNodes;
 	private MlConfig ml;
 	private RequestLimitsConfig requestLimits;
+	private List<FieldConfig> fieldConfigs;
 
 	@Override
 	public String toString() {
@@ -123,6 +125,32 @@ public class AppConfig {
 			return "RequestLimitsConfig{" +
 					"maxSize=" + maxSize +
 					", maxQueryLength=" + maxQueryLength +
+					'}';
+		}
+	}
+
+	/**
+	 * Configuration for a document field specifying its type and capabilities.
+	 */
+	@Setter
+	@Getter
+	public static class FieldConfig {
+		private String name;
+		private FieldType type = FieldType.STRING;
+		private boolean filterable = false;
+		private boolean sortable = false;
+		private boolean facetable = false;
+		private boolean highlightable = false;
+
+		@Override
+		public String toString() {
+			return "FieldConfig{" +
+					"name='" + name + '\'' +
+					", type=" + type +
+					", filterable=" + filterable +
+					", sortable=" + sortable +
+					", facetable=" + facetable +
+					", highlightable=" + highlightable +
 					'}';
 		}
 	}

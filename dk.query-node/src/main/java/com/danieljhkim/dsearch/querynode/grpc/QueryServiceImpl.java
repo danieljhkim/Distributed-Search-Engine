@@ -1,5 +1,6 @@
 package com.danieljhkim.dsearch.querynode.grpc;
 
+import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -9,6 +10,8 @@ import com.danieljhkim.dsearch.common.enums.SearchType;
 import com.danieljhkim.dsearch.common.exception.ParseGoneWrongException;
 import com.danieljhkim.dsearch.common.model.SearchResult;
 import com.danieljhkim.dsearch.common.validation.RequestLimitsValidator;
+import com.danieljhkim.dsearch.proto.common.FacetRequest;
+import com.danieljhkim.dsearch.proto.common.Filter;
 import com.danieljhkim.dsearch.proto.query.QueryRequest;
 import com.danieljhkim.dsearch.proto.query.QueryResponse;
 import com.danieljhkim.dsearch.proto.query.QueryServiceGrpc;
@@ -36,8 +39,11 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
 		int size = request.getSize();
 		String partitionId = request.getPartitionId();
 		SearchType searchType = EnumMapper.mapFromProtoEnum(request.getSearchType());
+		List<Filter> filters = request.getFiltersList();
+		boolean highlight = request.getHighlight();
+		List<FacetRequest> facetRequests = request.getFacetsList();
 
-		validateRequestLimits(queryString, size);
+		RequestLimitsValidator.validateRequestLimits(queryString, size);
 
 		try {
 			SearchResult result;
@@ -49,7 +55,10 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
 						page,
 						size,
 						indexService,
-						fusionStrategy);
+						fusionStrategy,
+						filters,
+						highlight,
+						facetRequests);
 			} else {
 				result = searchExecutor.search(
 						queryString,
@@ -57,7 +66,10 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
 						page,
 						size,
 						searchType,
-						indexService);
+						indexService,
+						filters,
+						highlight,
+						facetRequests);
 			}
 			QueryResponse response = buildQueryResponse(result, page, size);
 			responseObserver.onNext(response);
@@ -66,10 +78,6 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
 			LOGGER.log(Level.WARNING, "Failed to parse query: " + queryString, e);
 			responseObserver.onError(new ParseGoneWrongException("Failed to parse query: " + queryString, e));
 		}
-	}
-
-	private void validateRequestLimits(String queryString, int size) {
-		RequestLimitsValidator.validateRequestLimits(queryString, size);
 	}
 
 	private QueryResponse buildQueryResponse(SearchResult result, int page, int size) {
@@ -88,9 +96,21 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
 			if (hit.getContent() != null) {
 				hitBuilder.setContent(hit.getContent());
 			}
+			if (hit.getHighlightedFields() != null && !hit.getHighlightedFields().isEmpty()) {
+				hitBuilder.putAllHighlightedFields(hit.getHighlightedFields());
+			}
+			if (hit.getFields() != null && !hit.getFields().isEmpty()) {
+				hitBuilder.putAllFields(hit.getFields());
+			}
 			SearchHit protoHit = hitBuilder.build();
 			respBuilder.addHits(protoHit);
 		}
+
+		// Add aggregated facets to response
+		if (result.getFacets() != null && !result.getFacets().isEmpty()) {
+			respBuilder.addAllFacets(result.getFacets());
+		}
+
 		return respBuilder.build();
 	}
 }

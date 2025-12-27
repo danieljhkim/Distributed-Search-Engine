@@ -1,5 +1,7 @@
 package com.danieljhkim.dsearch.gateway.api.dto;
 
+import java.util.List;
+
 import com.danieljhkim.dsearch.common.enums.HybridFusionStrategy;
 import com.danieljhkim.dsearch.common.enums.SearchType;
 
@@ -28,6 +30,12 @@ public class SearchRequestDto {
 	private SearchType searchType = SearchType.BM25;
 
 	private HybridFusionStrategy fusionStrategy = HybridFusionStrategy.RRF;
+
+	private List<FilterDto> filters;
+
+	private List<FacetRequestDto> facets;
+
+	private Boolean highlight = true;
 
 	public SearchRequestDto() {
 	}

@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -17,9 +18,12 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Stream;
 
+import com.danieljhkim.dsearch.common.config.AppConfig.FieldConfig;
 import com.danieljhkim.dsearch.common.enums.SearchType;
 import com.danieljhkim.dsearch.common.model.SearchDocument;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.proto.common.FacetRequest;
+import com.danieljhkim.dsearch.proto.common.Filter;
 
 public class IndexManager implements Closeable {
 
@@ -45,14 +49,30 @@ public class IndexManager implements Closeable {
 
 	private final ScheduledExecutorService flushScheduler;
 
+	// Field configurations for filtering, sorting, and highlighting
+	private final Map<String, FieldConfig> fieldConfigMap;
+
 	public IndexManager(Path baseDir) {
-		this(baseDir, 1, Duration.ofSeconds(6));
+		this(baseDir, 1, Duration.ofSeconds(6), null);
 	}
 
 	public IndexManager(Path baseDir, int maxBufferedOpsPerShard, Duration maxFlushInterval) {
+		this(baseDir, maxBufferedOpsPerShard, maxFlushInterval, null);
+	}
+
+	public IndexManager(Path baseDir, int maxBufferedOpsPerShard, Duration maxFlushInterval,
+			List<FieldConfig> fieldConfigs) {
 		this.baseDir = baseDir;
 		this.maxBufferedOpsPerShard = maxBufferedOpsPerShard;
 		this.maxFlushInterval = maxFlushInterval;
+
+		// Build field config map
+		this.fieldConfigMap = new HashMap<>();
+		if (fieldConfigs != null) {
+			for (FieldConfig fc : fieldConfigs) {
+				this.fieldConfigMap.put(fc.getName(), fc);
+			}
+		}
 
 		loadExistingShards();
 
@@ -86,7 +106,7 @@ public class IndexManager implements Closeable {
 						.filter(name -> name.startsWith(SHARD_PREFIX))
 						.forEach(dirName -> {
 							String shardId = dirName.substring(SHARD_PREFIX.length());
-							ShardIndex shardIndex = new ShardIndex(shardId, baseDir);
+							ShardIndex shardIndex = new ShardIndex(shardId, baseDir, fieldConfigMap);
 							shardIndexes.put(shardId, shardIndex);
 							shardBuffers.put(shardId, new ShardBuffer());
 						});
@@ -98,7 +118,7 @@ public class IndexManager implements Closeable {
 
 	private ShardIndex getOrCreateShard(String shardId) {
 		ShardIndex index = shardIndexes.computeIfAbsent(shardId, id -> {
-			ShardIndex si = new ShardIndex(id, baseDir);
+			ShardIndex si = new ShardIndex(id, baseDir, fieldConfigMap);
 			shardBuffers.put(id, new ShardBuffer());
 			return si;
 		});
@@ -153,9 +173,7 @@ public class IndexManager implements Closeable {
 	}
 
 	/**
-	 * Search reads from the current committed state. There is a trade-off:
-	 * - Newly indexed docs may not be visible until a flush/commit happens.
-	 * - In most systems, that small delay is acceptable.
+	 * Search reads from the current committed state (backward compatible).
 	 */
 	public SearchResult searchDocument(
 			String partitionId,
@@ -163,14 +181,32 @@ public class IndexManager implements Closeable {
 			int limit,
 			int from,
 			SearchType searchType) throws IOException {
+		return searchDocument(partitionId, query, limit, from, searchType, null, false, null);
+	}
+
+	/**
+	 * Search with filters, highlighting, and facets.
+	 * Newly indexed docs may not be visible until a flush/commit happens.
+	 */
+	public SearchResult searchDocument(
+			String partitionId,
+			String query,
+			int limit,
+			int from,
+			SearchType searchType,
+			List<Filter> filters,
+			boolean highlight,
+			List<FacetRequest> facetRequests) throws IOException {
 		ShardIndex shardIndex = shardIndexes.get(partitionId);
 		if (shardIndex == null) {
 			return new SearchResult(new ArrayList<>(), 0);
 		}
 		return switch (searchType) {
-			case SearchType.SEMANTIC -> shardIndex.semanticSearch(query, limit, from);
-			case SearchType.BM25 -> shardIndex.search(query, limit, from);
-			default -> shardIndex.search(query, limit, from);
+			case SearchType.SEMANTIC ->
+				shardIndex.semanticSearch(query, limit, from, filters, highlight, facetRequests);
+			case SearchType.BM25 ->
+				shardIndex.search(query, limit, from, filters, highlight, facetRequests);
+			default -> shardIndex.search(query, limit, from, filters, highlight, facetRequests);
 		};
 	}
 

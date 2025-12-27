@@ -47,3 +47,96 @@ ml:
     textEmbedding:
       url: "djl://ai.djl.huggingface.pytorch/sentence-transformers/all-MiniLM-L6-v2"
       engine: "PyTorch"
+
+# Field configurations for filtering, sorting, faceting, and highlighting
+fieldConfigs:
+  - name: "title"
+    type: "STRING"
+    filterable: true
+    sortable: true
+    facetable: false
+    highlightable: true
+  - name: "content"
+    type: "STRING"
+    filterable: false
+    sortable: false
+    facetable: false
+    highlightable: true
+  - name: "year"
+    type: "INTEGER"
+    filterable: true
+    sortable: true
+    facetable: true
+    highlightable: false
+  - name: "createdAt"
+    type: "DATE"
+    filterable: true
+    sortable: true
+    facetable: false
+    highlightable: false
+  - name: "tag"
+    type: "STRING"
+    filterable: true
+    sortable: false
+    facetable: true
+    highlightable: false
+  - name: "rating"
+    type: "DOUBLE"
+    filterable: true
+    sortable: true
+    facetable: false
+    highlightable: false
+  - name: "category"
+    type: "STRING"
+    filterable: true
+    sortable: true
+    facetable: true
+    highlightable: false
+  - name: "brand"
+    type: "STRING"
+    filterable: true
+    sortable: true
+    facetable: true
+    highlightable: false
+  - name: "price"
+    type: "DOUBLE"
+    filterable: true
+    sortable: true
+    facetable: false
+    highlightable: false
+  - name: "inStock"
+    type: "STRING"
+    filterable: true
+    sortable: false
+    facetable: true
+    highlightable: false
+  - name: "genre"
+    type: "STRING"
+    filterable: true
+    sortable: false
+    facetable: true
+    highlightable: false
+  - name: "author"
+    type: "STRING"
+    filterable: true
+    sortable: true
+    facetable: true
+    highlightable: false
+  - name: "publishedAt"
+    type: "DATE"
+    filterable: true
+    sortable: true
+    facetable: false
+    highlightable: false
+  - name: "tags"
+    type: "STRING"
+    filterable: true
+    sortable: false
+    facetable: true
+    highlightable: false
+  - name: "director"
+    type: "STRING"
+    filterable: true
+    sortable: true
+    facetable: true
+    highlightable: false
