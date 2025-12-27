@@ -1,4 +1,4 @@
-# Distributed Search Engine (dsearch)
+# dsearch (Distributed Search Engine)
 
 <p align="center">
   <img src="https://img.shields.io/badge/Java-21-007396?style=for-the-badge&logo=openjdk&logoColor=white">
@@ -69,15 +69,18 @@ This design intentionally keeps the system:
            HTTP /search
                  |
         +--------v---------+
-        |    Gateway Node  |
-        | (Spring Boot API)|
-        +--------+---------+
-                 |
-                 | gRPC QueryService
-                 |
-        +--------v---------+
-        |    Query Nodes   |
-        |  - Fan-out RPCs  |
+        |    Gateway Node  |           
+        | (Spring Boot API)|             
+        +--------+---------+           
+                 |                            +--------v----------+
+                 |                            | Coordinator Node  |
+                 |----------------------------| - registry        |
+                 |                            | - node membership |
+                 | gRPC QueryService          | - health checks   |
+                 |                            +--------+----------+
+        +--------v---------+             
+        |    Query Nodes   |             
+        |  - Fan-out RPCs  |          
         |  - Merge Results |
         +--------+---------+
                  |
@@ -184,6 +187,23 @@ make run-multi
   "partitionId": "movies",
   "searchType": "HYBRID",  // BM25 | SEMANTIC | HYBRID
   "fusionStrategy": "RRF" // SCORE_SUM | WEIGHTED | RRF
+  "filters": [
+    {
+      "field": "year",
+      "operator": "GTE",
+      "values": ["2000"]
+    }
+  ],
+  "facets": [
+    {
+      "field": "genre",
+      "size": 10
+    },
+    {
+      "field": "year",
+      "size": 5
+    }
+  ]
 }
 ```
 
@@ -195,7 +215,11 @@ make run-multi
   "id": "movie_001",
   "fields": {
     "title": "Interstellar",
-    "content": "A team of explorers travel through a wormhole..."
+    "content": "A team of explorers travel through a wormhole...",
+    "year": "1999",
+    "genre": "sci-fi",
+    "rating": "8.7",
+    "createdAt": "915148800000"
   }
 }
 ```
@@ -314,15 +338,11 @@ This project is intentionally minimal and educational. Some trade‑offs and pot
   - A shard lives on exactly one node; if that node goes down, its data is unavailable until restart.
   - Future direction: coordinator‑driven replication / Raft‑based shard groups.
 
-- **Basic scoring and fusion**
-  - BM25 + Lucene kNN + RRF fusion are implemented.
-  - Future direction: learned ranking, per‑field boosts, filters, aggregations.
-
-Despite these, `dsearch` is already a usable, horizontally scalable, Lucene‑backed search engine suitable for side projects, prototypes, and as a learning platform for distributed search architecture.
-
 ---
 
 ## License
 
 This repository is intended as an educational and portfolio project.
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License. 
+
+See the [LICENSE](LICENSE) file for details.
