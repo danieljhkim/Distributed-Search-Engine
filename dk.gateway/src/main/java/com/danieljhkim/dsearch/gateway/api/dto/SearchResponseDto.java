@@ -1,6 +1,7 @@
 package com.danieljhkim.dsearch.gateway.api.dto;
 
 import java.util.List;
+import java.util.Map;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -14,6 +15,7 @@ public class SearchResponseDto {
 	private long tookMillis;
 	private int page;
 	private int pageSize;
+	private List<FacetResponseDto> facets;
 
 	public SearchResponseDto() {
 	}
@@ -41,6 +43,11 @@ public class SearchResponseDto {
 		private double score;
 		private String title;
 		private String content;
+		private Map<String, String> highlightedFields;
+		private Map<String, String> fields;
+
+		public SearchHitDto() {
+		}
 
 		public SearchHitDto(String docId, String title, String content, double score) {
 			this.docId = docId;
@@ -49,5 +56,23 @@ public class SearchResponseDto {
 			this.content = content;
 		}
 
+		public SearchHitDto(String docId, String title, String content, double score,
+				Map<String, String> highlightedFields) {
+			this.docId = docId;
+			this.score = score;
+			this.title = title;
+			this.content = content;
+			this.highlightedFields = highlightedFields;
+		}
+
+		public SearchHitDto(String docId, String title, String content, double score,
+				Map<String, String> highlightedFields, Map<String, String> fields) {
+			this.docId = docId;
+			this.score = score;
+			this.title = title;
+			this.content = content;
+			this.highlightedFields = highlightedFields;
+			this.fields = fields;
+		}
 	}
 }

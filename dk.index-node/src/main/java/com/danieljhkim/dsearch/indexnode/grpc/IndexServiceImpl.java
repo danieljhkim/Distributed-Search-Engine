@@ -3,6 +3,7 @@ package com.danieljhkim.dsearch.indexnode.grpc;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.logging.Level;
@@ -15,6 +16,8 @@ import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
 import com.danieljhkim.dsearch.indexnode.index.IndexManager;
 import com.danieljhkim.dsearch.indexnode.index.ShardIndex;
+import com.danieljhkim.dsearch.proto.common.FacetRequest;
+import com.danieljhkim.dsearch.proto.common.Filter;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentRequest;
@@ -113,13 +116,24 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
 		SearchType protoType = EnumMapper.mapFromProtoEnum(request.getSearchType());
 		int from = request.getFrom();
 		int size = request.getSize();
+
+		// Extract filters, highlight flag, and facet requests from request
+		List<Filter> filters = request.getFiltersList();
+		boolean highlight = request.getHighlight();
+		List<FacetRequest> facetRequests = request.getFacetsList();
+
 		try {
-			SearchResult res = indexManager.searchDocument(partitionId, query, size, from, protoType);
+			SearchResult res = indexManager.searchDocument(
+					partitionId, query, size, from, protoType, filters, highlight, facetRequests);
 			IndexSearchResponse.Builder respBuilder = IndexSearchResponse.newBuilder()
 					.setTotalHits(res.getTotalHits());
 			for (SearchHit hit : res.getHits()) {
 				IndexHit protoHit = toIndexHit(hit);
 				respBuilder.addHits(protoHit);
+			}
+			// Add facets to response if present
+			if (res.getFacets() != null && !res.getFacets().isEmpty()) {
+				respBuilder.addAllFacets(res.getFacets());
 			}
 			IndexSearchResponse response = respBuilder.build();
 			responseObserver.onNext(response);
@@ -139,6 +153,12 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
 		}
 		if (hit.getContent() != null) {
 			builder.setContent(hit.getContent());
+		}
+		if (hit.getHighlightedFields() != null && !hit.getHighlightedFields().isEmpty()) {
+			builder.putAllHighlightedFields(hit.getHighlightedFields());
+		}
+		if (hit.getFields() != null && !hit.getFields().isEmpty()) {
+			builder.putAllFields(hit.getFields());
 		}
 		return builder.build();
 	}

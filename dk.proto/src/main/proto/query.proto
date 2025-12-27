@@ -6,6 +6,8 @@ option java_package = "com.danieljhkim.dsearch.proto.query";
 option java_multiple_files = true;
 import "common/search_type.proto";
 import "common/fusion_strategy.proto";
+import "common/filter.proto";
+import "common/facet.proto";
 
 message QueryRequest {
   string query_string = 1;
@@ -15,6 +17,9 @@ message QueryRequest {
   int32 size = 5;
   dsearch.common.SearchType search_type = 6;
   dsearch.common.FusionStrategy fusion_strategy = 7;
+  repeated dsearch.common.Filter filters = 8;
+  repeated dsearch.common.FacetRequest facets = 9;
+  bool highlight = 10;
 }
 
 message SearchHit {
@@ -22,6 +27,8 @@ message SearchHit {
   double score = 2;
   string content = 3;
   string title = 4;
+  map<string, string> highlighted_fields = 5;
+  map<string, string> fields = 6;
 }
 
 message QueryResponse {
@@ -29,6 +36,7 @@ message QueryResponse {
   int64 total_hits = 2;
   int32 page = 3;
   int32 size = 4;
+  repeated dsearch.common.FacetResponse facets = 5;
 }
 
 service QueryService {

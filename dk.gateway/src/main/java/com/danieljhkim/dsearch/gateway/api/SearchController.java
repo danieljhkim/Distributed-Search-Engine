@@ -1,6 +1,5 @@
 package com.danieljhkim.dsearch.gateway.api;
 
-import org.springframework.data.domain.Page;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -29,7 +28,7 @@ public class SearchController {
 
 	@Timed(value = "dsearch.search.http", extraTags = { "endpoint", "/api/v1/search" })
 	@PostMapping(consumes = "application/json", produces = "application/json")
-	public Page<SearchResponseDto.SearchHitDto> search(@Valid @RequestBody SearchRequestDto req) {
+	public SearchResponseDto search(@Valid @RequestBody SearchRequestDto req) {
 		Timer.Sample sample = Timer.start(meterRegistry);
 		try {
 			return searchService.search(req);

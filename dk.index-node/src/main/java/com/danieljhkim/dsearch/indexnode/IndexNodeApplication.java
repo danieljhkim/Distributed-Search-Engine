@@ -2,9 +2,14 @@ package com.danieljhkim.dsearch.indexnode;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import com.danieljhkim.dsearch.common.config.AppConfig;
+import com.danieljhkim.dsearch.common.config.AppConfig.FieldConfig;
+import com.danieljhkim.dsearch.common.config.ConfigLoader;
 import com.danieljhkim.dsearch.common.health.HealthHttpServer;
 import com.danieljhkim.dsearch.indexnode.index.IndexManager;
 import com.danieljhkim.dsearch.indexnode.server.IndexNodeServer;
@@ -21,7 +26,11 @@ public class IndexNodeApplication {
 		String baseDirStr = System.getenv("INDEX_NODE_BASE_DIR");
 		Path baseDir = Path.of(baseDirStr);
 
-		IndexManager indexManager = new IndexManager(baseDir);
+		// Load configuration including field configs
+		AppConfig appConfig = ConfigLoader.load();
+		List<FieldConfig> fieldConfigs = appConfig.getFieldConfigs();
+
+		IndexManager indexManager = new IndexManager(baseDir, 1, Duration.ofSeconds(6), fieldConfigs);
 		IndexNodeServer indexNodeServer = new IndexNodeServer(grpcPort, indexManager);
 		HttpServer healthServer = HealthHttpServer.start(healthPort, "index-node");
 
