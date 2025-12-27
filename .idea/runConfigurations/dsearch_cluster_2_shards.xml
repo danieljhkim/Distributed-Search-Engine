@@ -1,0 +1,10 @@
+<component name="ProjectRunConfigurationManager">
+    <configuration default="false" name="dsearch-cluster-2-shards" type="CompoundRunConfigurationType">
+        <toRun name="dsearch-coordinator" type="Application" />
+        <toRun name="dsearch-indexnode-shard-1" type="Application" />
+        <toRun name="dsearch-indexnode-shard-2" type="Application" />
+        <toRun name="dsearch-querynode" type="Application" />
+        <toRun name="dsearch-gateway" type="Application" />
+        <method v="2" />
+    </configuration>
+</component>

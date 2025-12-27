@@ -1,0 +1,18 @@
+<component name="ProjectRunConfigurationManager">
+    <configuration default="false" name="dsearch-coordinator" type="Application" factoryName="Application">
+        <option name="MAIN_CLASS_NAME" value="com.danieljhkim.dsearch.coordinator.CoordinatorApplication" />
+        <module name="dk.coordinator" />
+        <option name="VM_PARAMETERS" value="-Xms256m
+                   -Xmx512m
+                   -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -Dfile.encoding=UTF-8 -Duser.timezone=UTC -Dlog.dir=.local/logs/coordinator" />
+        <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+        <envs>
+            <env name="APP_CONFIG_PATH" value="app-config.yaml" />
+            <env name="DS_NODE_ROLE" value="coordinator" />
+            <env name="DS_ENV" value="local" />
+            <env name="COORDINATOR_PORT" value="9000" />
+            <env name="COORDINATOR_HEALTH_PORT" value="9001" />
+        </envs>
+        <method v="2" />
+    </configuration>
+</component>

@@ -1,0 +1,20 @@
+<component name="ProjectRunConfigurationManager">
+    <configuration default="false" name="dsearch-indexnode-shard-1" type="Application" factoryName="Application">
+        <option name="MAIN_CLASS_NAME" value="com.danieljhkim.dsearch.indexnode.IndexNodeApplication" />
+        <module name="dk.index-node" />
+        <option name="VM_PARAMETERS" value="-Xms512m
+                   -Xmx1024m
+                   -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -Dfile.encoding=UTF-8 -Duser.timezone=UTC -Dlog.dir=.local/logs/indexnode-shard-1" />
+        <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+        <envs>
+            <env name="APP_CONFIG_PATH" value="app-config.yaml" />
+            <env name="DS_NODE_ROLE" value="indexnode" />
+            <env name="DS_ENV" value="local" />
+            <env name="SHARD_ID" value="shard-1" />
+            <env name="INDEX_NODE_PORT" value="9300" />
+            <env name="INDEX_NODE_HEALTH_PORT" value="9301" />
+            <env name="INDEX_NODE_BASE_DIR" value="$PROJECT_DIR$/.local/data/shard-1" />
+        </envs>
+        <method v="2" />
+    </configuration>
+</component>

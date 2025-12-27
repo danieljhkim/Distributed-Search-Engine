@@ -8,6 +8,9 @@ target/
 .idea/jarRepositories.xml
 .idea/compiler.xml
 .idea/libraries/
+.idea/.gitignore
+.idea/misc.xml
+.idea/vcs.xml
 *.iws
 *.iml
 *.ipr
@@ -32,7 +35,7 @@ build/
 !**/src/test/**/build/
 
 ### VS Code ###
-.vscode/
+#.vscode/
 
 ### Mac OS ###
 .DS_Store
@@ -54,7 +57,7 @@ data/
 
 node_modules/
 
-/.idea
+
 
 dist/
 
@@ -65,3 +68,6 @@ cluster_state.json
 dependency-reduced-pom.xml
 
 .spotless/
+
+.cursor/
+

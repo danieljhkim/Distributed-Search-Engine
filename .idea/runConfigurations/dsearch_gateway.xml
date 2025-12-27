@@ -1,0 +1,18 @@
+<component name="ProjectRunConfigurationManager">
+    <configuration default="false" name="dsearch-gateway" type="Application" factoryName="Application">
+        <option name="MAIN_CLASS_NAME" value="com.danieljhkim.dsearch.gateway.GatewayApplication" />
+        <module name="dk.gateway" />
+        <option name="VM_PARAMETERS" value="-Xms256m
+                   -Xmx512m
+                   -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -Dfile.encoding=UTF-8 -Duser.timezone=UTC -Dlog.dir=.local/logs/gateway" />
+        <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+        <envs>
+            <env name="APP_CONFIG_PATH" value="app-config.yaml" />
+            <env name="DS_NODE_ROLE" value="gateway" />
+            <env name="DS_ENV" value="local" />
+            <!-- dk.gateway/src/main/resources/application.yml uses ${port:8080} -->
+            <env name="PORT" value="8080" />
+        </envs>
+        <method v="2" />
+    </configuration>
+</component>
