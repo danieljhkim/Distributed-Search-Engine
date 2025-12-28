@@ -9,8 +9,7 @@ import java.util.UUID;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import com.danieljhkim.dsearch.common.enums.EnumMapper;
-import com.danieljhkim.dsearch.common.enums.SearchType;
+import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.common.model.SearchDocument;
 import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
@@ -113,7 +112,7 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
 			StreamObserver<IndexSearchResponse> responseObserver) {
 		String partitionId = request.getPartitionId();
 		String query = request.getQuery();
-		SearchType protoType = EnumMapper.mapFromProtoEnum(request.getSearchType());
+		SearchType protoType = request.getSearchType();
 		int from = request.getFrom();
 		int size = request.getSize();
 

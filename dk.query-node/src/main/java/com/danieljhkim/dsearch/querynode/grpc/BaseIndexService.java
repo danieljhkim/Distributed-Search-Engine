@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-import com.danieljhkim.dsearch.common.enums.SearchType;
+import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;

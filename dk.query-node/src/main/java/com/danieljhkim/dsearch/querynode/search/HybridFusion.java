@@ -8,9 +8,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import com.danieljhkim.dsearch.common.enums.HybridFusionStrategy;
 import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.proto.common.FusionStrategy;
 
 public final class HybridFusion {
 
@@ -20,7 +20,7 @@ public final class HybridFusion {
 	public static List<SearchHit> fuse(
 			SearchResult bm25Result,
 			SearchResult semanticResult,
-			HybridFusionStrategy strategy,
+			FusionStrategy strategy,
 			int limit,
 			double alpha,
 			double beta) {
@@ -49,7 +49,7 @@ public final class HybridFusion {
 	public static List<SearchHit> fuse(
 			SearchResult bm25Result,
 			SearchResult semanticResult,
-			HybridFusionStrategy strategy,
+			FusionStrategy strategy,
 			int limit,
 			double alpha,
 			double beta,
@@ -82,6 +82,7 @@ public final class HybridFusion {
 				case SCORE_SUM -> scoreSum(bm25, sem);
 				case WEIGHTED -> weighted(bm25, sem, alpha, beta);
 				case RRF -> rrf(bm25, sem, rrfK);
+				default -> rrf(bm25, sem, rrfK);
 			};
 
 			// Prefer BM25 metadata, fall back to semantic

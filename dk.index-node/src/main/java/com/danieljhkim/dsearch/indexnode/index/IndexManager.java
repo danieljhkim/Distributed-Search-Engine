@@ -19,7 +19,7 @@ import java.util.logging.Logger;
 import java.util.stream.Stream;
 
 import com.danieljhkim.dsearch.common.config.AppConfig.FieldConfig;
-import com.danieljhkim.dsearch.common.enums.SearchType;
+import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.common.model.SearchDocument;
 import com.danieljhkim.dsearch.common.model.SearchResult;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;

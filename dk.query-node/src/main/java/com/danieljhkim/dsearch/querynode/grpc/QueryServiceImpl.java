@@ -4,9 +4,8 @@ import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import com.danieljhkim.dsearch.common.enums.EnumMapper;
-import com.danieljhkim.dsearch.common.enums.HybridFusionStrategy;
-import com.danieljhkim.dsearch.common.enums.SearchType;
+import com.danieljhkim.dsearch.proto.common.FusionStrategy;
+import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.common.exception.ParseGoneWrongException;
 import com.danieljhkim.dsearch.common.model.SearchResult;
 import com.danieljhkim.dsearch.common.validation.RequestLimitsValidator;
@@ -38,7 +37,7 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
 		int page = request.getPage();
 		int size = request.getSize();
 		String partitionId = request.getPartitionId();
-		SearchType searchType = EnumMapper.mapFromProtoEnum(request.getSearchType());
+		SearchType searchType = request.getSearchType();
 		List<Filter> filters = request.getFiltersList();
 		boolean highlight = request.getHighlight();
 		List<FacetRequest> facetRequests = request.getFacetsList();
@@ -48,7 +47,7 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
 		try {
 			SearchResult result;
 			if (searchType == SearchType.HYBRID) {
-				HybridFusionStrategy fusionStrategy = EnumMapper.mapFromProtoEnum(request.getFusionStrategy());
+				FusionStrategy fusionStrategy = request.getFusionStrategy();
 				result = searchExecutor.searchHybrid(
 						queryString,
 						partitionId,

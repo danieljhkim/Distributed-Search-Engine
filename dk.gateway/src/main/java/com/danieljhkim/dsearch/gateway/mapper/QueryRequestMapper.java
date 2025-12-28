@@ -1,6 +1,5 @@
 package com.danieljhkim.dsearch.gateway.mapper;
 
-import com.danieljhkim.dsearch.common.enums.EnumMapper;
 import com.danieljhkim.dsearch.gateway.api.dto.FacetRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.FilterDto;
 import com.danieljhkim.dsearch.gateway.api.dto.SearchRequestDto;
@@ -13,8 +12,8 @@ import org.springframework.stereotype.Component;
 public class QueryRequestMapper {
 
 	public QueryRequest toGrpc(SearchRequestDto request) {
-		var protoType = EnumMapper.mapToProtoEnum(request.getSearchType());
-		var fusionStrategy = EnumMapper.mapToProtoEnum(request.getFusionStrategy());
+		var protoType = request.getSearchType();
+		var fusionStrategy = request.getFusionStrategy();
 
 		QueryRequest.Builder b = QueryRequest.newBuilder()
 				.setQueryString(request.getQuery())

@@ -2,8 +2,7 @@ package com.danieljhkim.dsearch.querynode.grpc;
 
 import java.util.List;
 
-import com.danieljhkim.dsearch.common.enums.EnumMapper;
-import com.danieljhkim.dsearch.common.enums.SearchType;
+import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.common.model.SearchResult;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
@@ -45,7 +44,7 @@ public class IndexService implements BaseIndexService {
 				.setFrom(from)
 				.setSize(size)
 				.setPartitionId(partitionId)
-				.setSearchType(EnumMapper.mapToProtoEnum(searchType))
+				.setSearchType(searchType)
 				.setHighlight(highlight);
 
 		if (filters != null) {

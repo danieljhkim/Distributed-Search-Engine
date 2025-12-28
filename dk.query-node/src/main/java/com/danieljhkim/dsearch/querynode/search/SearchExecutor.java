@@ -17,19 +17,14 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import com.danieljhkim.dsearch.proto.common.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
-import com.danieljhkim.dsearch.common.enums.HybridFusionStrategy;
-import com.danieljhkim.dsearch.common.enums.SearchType;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
-import com.danieljhkim.dsearch.proto.common.FacetBucket;
-import com.danieljhkim.dsearch.proto.common.FacetRequest;
-import com.danieljhkim.dsearch.proto.common.FacetResponse;
-import com.danieljhkim.dsearch.proto.common.Filter;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
 import com.danieljhkim.dsearch.querynode.grpc.BaseIndexService;
 
@@ -58,7 +53,7 @@ public class SearchExecutor implements Closeable {
 			int page,
 			int size,
 			BaseIndexService indexService,
-			HybridFusionStrategy fusionStrategy) {
+			FusionStrategy fusionStrategy) {
 		return searchHybrid(queryString, shardId, page, size, indexService, fusionStrategy, null, false, null);
 	}
 
@@ -67,7 +62,7 @@ public class SearchExecutor implements Closeable {
 			int page,
 			int size,
 			BaseIndexService indexService,
-			HybridFusionStrategy fusionStrategy,
+			FusionStrategy fusionStrategy,
 			List<Filter> filters,
 			boolean highlight,
 			List<FacetRequest> facetRequests) {
