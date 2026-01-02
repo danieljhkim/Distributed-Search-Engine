@@ -1,0 +1,95 @@
+version: 2
+updates:
+  # Keep GitHub Actions up to date (workflow actions like actions/checkout, docker/*, etc.)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "saturday"
+      time: "03:00"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "github-actions"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # Maven dependencies (root / multi-module)
+  - package-ecosystem: "maven"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "saturday"
+      time: "03:10"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "java"
+      - "maven"
+    groups:
+      maven-dependencies:
+        patterns:
+          - "*"
+
+  # Dockerfiles (each service)
+  - package-ecosystem: "docker"
+    directory: "/dk.gateway"
+    schedule:
+      interval: "weekly"
+      day: "saturday"
+      time: "03:20"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+    groups:
+      docker-base-images:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "docker"
+    directory: "/dk.coordinator"
+    schedule:
+      interval: "weekly"
+      day: "saturday"
+      time: "03:20"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+    groups:
+      docker-base-images:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "docker"
+    directory: "/dk.index-node"
+    schedule:
+      interval: "weekly"
+      day: "saturday"
+      time: "03:20"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+    groups:
+      docker-base-images:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "docker"
+    directory: "/dk.query-node"
+    schedule:
+      interval: "weekly"
+      day: "saturday"
+      time: "03:20"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+    groups:
+      docker-base-images:
+        patterns:
+          - "*"

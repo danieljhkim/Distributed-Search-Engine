@@ -23,6 +23,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: amd64,arm64
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -37,12 +42,29 @@ jobs:
         id: meta
         run: echo "TAG=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
 
+      - name: Compute image tags
+        id: tags
+        shell: bash
+        run: |
+          TAG="${{ steps.meta.outputs.TAG }}"
+
+          # Always publish an immutable, versioned tag.
+          VERSIONED="ghcr.io/${{ github.repository }}/${{ matrix.service }}:${TAG}"
+
+          # Only publish :latest for non-RC tags.
+          # (Treat tags containing "-rc" / "-RC" as release candidates.)
+          if echo "$TAG" | grep -Eiq '(^|[-.])rc([0-9].*)?$|[-.]rc'; then
+            echo "TAGS=${VERSIONED}" >> "$GITHUB_OUTPUT"
+          else
+            LATEST="ghcr.io/${{ github.repository }}/${{ matrix.service }}:latest"
+            echo -e "TAGS=${VERSIONED}\n${LATEST}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./${{ matrix.service }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ steps.meta.outputs.TAG }}
-            ghcr.io/${{ github.repository }}/${{ matrix.service }}:latest
+          tags: ${{ steps.tags.outputs.TAGS }}
