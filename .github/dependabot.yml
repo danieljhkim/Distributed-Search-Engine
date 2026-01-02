@@ -49,35 +49,14 @@ updates:
         patterns:
           - "*"
     ignore:
-      # Stay on Java 21 for base images (avoid non-LTS/next-major bumps like 25)
+      # Avoid major tag jumps (e.g., 21 -> 25) for base images
       - dependency-name: "eclipse-temurin"
-        versions:
-          - "22*"
-          - "23*"
-          - "24*"
-          - "25*"
-          - "26*"
-          - "27*"
-          - "28*"
-          - "29*"
-          - "3*"
-
-      # Avoid pre-release / RC tags
-      - dependency-name: "eclipse-temurin"
-        versions:
-          - "*rc*"
-          - "*RC*"
-          - "*alpha*"
-          - "*beta*"
-          - "*preview*"
+        update-types:
+          - "version-update:semver-major"
 
       - dependency-name: "maven"
-        versions:
-          - "*rc*"
-          - "*RC*"
-          - "*alpha*"
-          - "*beta*"
-          - "*preview*"
+        update-types:
+          - "version-update:semver-major"
 
   - package-ecosystem: "docker"
     directory: "/dk.coordinator"
@@ -94,35 +73,14 @@ updates:
         patterns:
           - "*"
     ignore:
-      # Stay on Java 21 for base images (avoid non-LTS/next-major bumps like 25)
+      # Avoid major tag jumps (e.g., 21 -> 25) for base images
       - dependency-name: "eclipse-temurin"
-        versions:
-          - "22*"
-          - "23*"
-          - "24*"
-          - "25*"
-          - "26*"
-          - "27*"
-          - "28*"
-          - "29*"
-          - "3*"
-
-      # Avoid pre-release / RC tags
-      - dependency-name: "eclipse-temurin"
-        versions:
-          - "*rc*"
-          - "*RC*"
-          - "*alpha*"
-          - "*beta*"
-          - "*preview*"
+        update-types:
+          - "version-update:semver-major"
 
       - dependency-name: "maven"
-        versions:
-          - "*rc*"
-          - "*RC*"
-          - "*alpha*"
-          - "*beta*"
-          - "*preview*"
+        update-types:
+          - "version-update:semver-major"
 
   - package-ecosystem: "docker"
     directory: "/dk.index-node"
@@ -139,35 +97,14 @@ updates:
         patterns:
           - "*"
     ignore:
-      # Stay on Java 21 for base images (avoid non-LTS/next-major bumps like 25)
+      # Avoid major tag jumps (e.g., 21 -> 25) for base images
       - dependency-name: "eclipse-temurin"
-        versions:
-          - "22*"
-          - "23*"
-          - "24*"
-          - "25*"
-          - "26*"
-          - "27*"
-          - "28*"
-          - "29*"
-          - "3*"
-
-      # Avoid pre-release / RC tags
-      - dependency-name: "eclipse-temurin"
-        versions:
-          - "*rc*"
-          - "*RC*"
-          - "*alpha*"
-          - "*beta*"
-          - "*preview*"
+        update-types:
+          - "version-update:semver-major"
 
       - dependency-name: "maven"
-        versions:
-          - "*rc*"
-          - "*RC*"
-          - "*alpha*"
-          - "*beta*"
-          - "*preview*"
+        update-types:
+          - "version-update:semver-major"
 
   - package-ecosystem: "docker"
     directory: "/dk.query-node"
@@ -184,32 +121,11 @@ updates:
         patterns:
           - "*"
     ignore:
-      # Stay on Java 21 for base images (avoid non-LTS/next-major bumps like 25)
+      # Avoid major tag jumps (e.g., 21 -> 25) for base images
       - dependency-name: "eclipse-temurin"
-        versions:
-          - "22*"
-          - "23*"
-          - "24*"
-          - "25*"
-          - "26*"
-          - "27*"
-          - "28*"
-          - "29*"
-          - "3*"
-
-      # Avoid pre-release / RC tags
-      - dependency-name: "eclipse-temurin"
-        versions:
-          - "*rc*"
-          - "*RC*"
-          - "*alpha*"
-          - "*beta*"
-          - "*preview*"
+        update-types:
+          - "version-update:semver-major"
 
       - dependency-name: "maven"
-        versions:
-          - "*rc*"
-          - "*RC*"
-          - "*alpha*"
-          - "*beta*"
-          - "*preview*"
+        update-types:
+          - "version-update:semver-major"
