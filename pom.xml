@@ -31,11 +31,11 @@
         <maven.compiler.release>21</maven.compiler.release>
 
         <spring.boot.version>3.3.0</spring.boot.version>
-        <grpc.version>1.65.0</grpc.version>
-        <protobuf.version>3.25.3</protobuf.version>
-        <lucene.version>9.8.0</lucene.version>
+        <grpc.version>1.78.0</grpc.version>
+        <protobuf.version>4.33.2</protobuf.version>
+        <lucene.version>10.3.2</lucene.version>
         <lombok.version>1.18.42</lombok.version>
-        <junit.jupiter.version>5.10.2</junit.jupiter.version>
+        <junit.jupiter.version>6.0.1</junit.jupiter.version>
     </properties>
 
     <dependencyManagement>
@@ -95,7 +95,7 @@
             <dependency>
                 <groupId>io.micrometer</groupId>
                 <artifactId>micrometer-registry-prometheus</artifactId>
-                <version>1.13.1</version>
+                <version>1.16.1</version>
             </dependency>
             <dependency>
                 <groupId>io.prometheus</groupId>
@@ -158,13 +158,13 @@
             <dependency>
                 <groupId>org.mockito</groupId>
                 <artifactId>mockito-core</artifactId>
-                <version>5.11.0</version>
+                <version>5.21.0</version>
                 <scope>test</scope>
             </dependency>
             <dependency>
                 <groupId>org.mockito</groupId>
                 <artifactId>mockito-junit-jupiter</artifactId>
-                <version>5.11.0</version>
+                <version>5.21.0</version>
                 <scope>test</scope>
             </dependency>
             <dependency>
@@ -183,24 +183,24 @@
             <dependency>
                 <groupId>com.fasterxml.jackson.dataformat</groupId>
                 <artifactId>jackson-dataformat-yaml</artifactId>
-                <version>2.15.2</version>
+                <version>2.20.1</version>
             </dependency>
             <dependency>
                 <groupId>com.fasterxml.jackson.core</groupId>
                 <artifactId>jackson-databind</artifactId>
-                <version>2.15.2</version>
+                <version>2.20.1</version>
             </dependency>
             <dependency>
                 <groupId>org.yaml</groupId>
                 <artifactId>snakeyaml</artifactId>
-                <version>2.2</version>
+                <version>2.5</version>
             </dependency>
 
             <!-- DJL core -->
             <dependency>
                 <groupId>ai.djl</groupId>
                 <artifactId>api</artifactId>
-                <version>0.28.0</version>
+                <version>0.36.0</version>
             </dependency>
 
 
@@ -208,14 +208,14 @@
             <dependency>
                 <groupId>ai.djl.pytorch</groupId>
                 <artifactId>pytorch-engine</artifactId>
-                <version>0.28.0</version>
+                <version>0.36.0</version>
             </dependency>
 
             <!-- HuggingFace model hub -->
             <dependency>
                 <groupId>ai.djl.huggingface</groupId>
                 <artifactId>tokenizers</artifactId>
-                <version>0.28.0</version>
+                <version>0.36.0</version>
             </dependency>
 
             <dependency>
@@ -227,7 +227,7 @@
             <dependency>
                 <groupId>ch.qos.logback</groupId>
                 <artifactId>logback-classic</artifactId>
-                <version>1.5.6</version>
+                <version>1.5.23</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -239,7 +239,7 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
-                    <version>3.2.5</version>
+                    <version>3.5.4</version>
                     <configuration>
                         <useModulePath>false</useModulePath>
                     </configuration>
@@ -248,7 +248,7 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>
-                    <version>3.11.0</version>
+                    <version>3.14.1</version>
                     <configuration>
                         <release>${maven.compiler.release}</release>
                         <annotationProcessorPaths>
@@ -264,7 +264,7 @@
                 <plugin>
                     <groupId>com.diffplug.spotless</groupId>
                     <artifactId>spotless-maven-plugin</artifactId>
-                    <version>2.43.0</version>
+                    <version>3.1.0</version>
                     <configuration>
                       <java>
                         <eclipse>
