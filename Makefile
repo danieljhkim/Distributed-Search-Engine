@@ -1,5 +1,5 @@
 # ============================
-# Distributed Search Engine - Makefile
+# Dsearch - Makefile
 # ============================
 
 SHELL := /bin/bash
@@ -48,6 +48,8 @@ run-multi:
 stop:
 	./scripts/kill_cluster.sh
 
+restart: stop run
+
 # ============================
 # Logs & Data Management
 # ============================
@@ -68,7 +70,6 @@ reset: clean stop wipe-data
 # Convenience
 # ============================
 
-restart: stop run
 
 format:
 	mvn spotless:apply

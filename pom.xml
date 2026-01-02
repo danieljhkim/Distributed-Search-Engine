@@ -6,7 +6,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.danieljhkim.dsearch</groupId>
-    <artifactId>distributed-search-engine</artifactId>
+    <artifactId>dsearch</artifactId>
     <version>1.0-SNAPSHOT</version>
     <licenses>
         <license>
@@ -29,13 +29,30 @@
 
     <properties>
         <maven.compiler.release>21</maven.compiler.release>
-
         <spring.boot.version>3.3.0</spring.boot.version>
         <grpc.version>1.65.0</grpc.version>
         <protobuf.version>3.25.3</protobuf.version>
         <lucene.version>9.8.0</lucene.version>
         <lombok.version>1.18.42</lombok.version>
         <junit.jupiter.version>5.10.2</junit.jupiter.version>
+        <!-- Tooling / plugins -->
+        <maven.surefire.version>3.2.5</maven.surefire.version>
+        <maven.compiler.plugin.version>3.11.0</maven.compiler.plugin.version>
+        <spotless.maven.plugin.version>2.43.0</spotless.maven.plugin.version>
+        <!-- Observability -->
+        <micrometer.registry.prometheus.version>1.13.1</micrometer.registry.prometheus.version>
+        <prometheus.simpleclient.version>0.16.0</prometheus.simpleclient.version>
+        <!-- Testing -->
+        <mockito.version>5.11.0</mockito.version>
+        <!-- Serialization / config -->
+        <jackson.version>2.15.2</jackson.version>
+        <snakeyaml.version>2.2</snakeyaml.version>
+        <!-- ML -->
+        <djl.version>0.28.0</djl.version>
+        <!-- Logging -->
+        <logback.version>1.5.6</logback.version>
+        <!-- Misc -->
+        <javax.annotation.version>1.3.2</javax.annotation.version>
     </properties>
 
     <dependencyManagement>
@@ -95,22 +112,22 @@
             <dependency>
                 <groupId>io.micrometer</groupId>
                 <artifactId>micrometer-registry-prometheus</artifactId>
-                <version>1.13.1</version>
+                <version>${micrometer.registry.prometheus.version}</version>
             </dependency>
             <dependency>
                 <groupId>io.prometheus</groupId>
                 <artifactId>simpleclient</artifactId>
-                <version>0.16.0</version>
+                <version>${prometheus.simpleclient.version}</version>
             </dependency>
             <dependency>
                 <groupId>io.prometheus</groupId>
                 <artifactId>simpleclient_hotspot</artifactId>
-                <version>0.16.0</version>
+                <version>${prometheus.simpleclient.version}</version>
             </dependency>
             <dependency>
                 <groupId>io.prometheus</groupId>
                 <artifactId>simpleclient_httpserver</artifactId>
-                <version>0.16.0</version>
+                <version>${prometheus.simpleclient.version}</version>
             </dependency>
 
             <!-- Lucene -->
@@ -158,13 +175,13 @@
             <dependency>
                 <groupId>org.mockito</groupId>
                 <artifactId>mockito-core</artifactId>
-                <version>5.11.0</version>
+                <version>${mockito.version}</version>
                 <scope>test</scope>
             </dependency>
             <dependency>
                 <groupId>org.mockito</groupId>
                 <artifactId>mockito-junit-jupiter</artifactId>
-                <version>5.11.0</version>
+                <version>${mockito.version}</version>
                 <scope>test</scope>
             </dependency>
             <dependency>
@@ -177,57 +194,56 @@
             <dependency>
                 <groupId>javax.annotation</groupId>
                 <artifactId>javax.annotation-api</artifactId>
-                <version>1.3.2</version>
+                <version>${javax.annotation.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>com.fasterxml.jackson.dataformat</groupId>
                 <artifactId>jackson-dataformat-yaml</artifactId>
-                <version>2.15.2</version>
+                <version>${jackson.version}</version>
             </dependency>
             <dependency>
                 <groupId>com.fasterxml.jackson.core</groupId>
                 <artifactId>jackson-databind</artifactId>
-                <version>2.15.2</version>
+                <version>${jackson.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.yaml</groupId>
                 <artifactId>snakeyaml</artifactId>
-                <version>2.2</version>
+                <version>${snakeyaml.version}</version>
             </dependency>
 
             <!-- DJL core -->
             <dependency>
                 <groupId>ai.djl</groupId>
                 <artifactId>api</artifactId>
-                <version>0.28.0</version>
+                <version>${djl.version}</version>
             </dependency>
-
 
             <!-- DJL PyTorch engine -->
             <dependency>
                 <groupId>ai.djl.pytorch</groupId>
                 <artifactId>pytorch-engine</artifactId>
-                <version>0.28.0</version>
+                <version>${djl.version}</version>
             </dependency>
 
             <!-- HuggingFace model hub -->
             <dependency>
                 <groupId>ai.djl.huggingface</groupId>
                 <artifactId>tokenizers</artifactId>
-                <version>0.28.0</version>
+                <version>${djl.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>ai.djl.huggingface</groupId>
                 <artifactId>translators</artifactId>
-                <version>0.28.0</version>
+                <version>${djl.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>ch.qos.logback</groupId>
                 <artifactId>logback-classic</artifactId>
-                <version>1.5.6</version>
+                <version>${logback.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -239,7 +255,7 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
-                    <version>3.2.5</version>
+                    <version>${maven.surefire.version}</version>
                     <configuration>
                         <useModulePath>false</useModulePath>
                     </configuration>
@@ -248,7 +264,7 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>
-                    <version>3.11.0</version>
+                    <version>${maven.compiler.plugin.version}</version>
                     <configuration>
                         <release>${maven.compiler.release}</release>
                         <annotationProcessorPaths>
@@ -264,7 +280,7 @@
                 <plugin>
                     <groupId>com.diffplug.spotless</groupId>
                     <artifactId>spotless-maven-plugin</artifactId>
-                    <version>2.43.0</version>
+                    <version>${spotless.maven.plugin.version}</version>
                     <configuration>
                       <java>
                         <eclipse>
@@ -272,8 +288,14 @@
                         </eclipse>
                       </java>
                     </configuration>
-                  </plugin>
+                </plugin>
             </plugins>
         </pluginManagement>
+        <plugins>
+            <plugin>
+                <groupId>com.diffplug.spotless</groupId>
+                <artifactId>spotless-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
     </build>
 </project>
