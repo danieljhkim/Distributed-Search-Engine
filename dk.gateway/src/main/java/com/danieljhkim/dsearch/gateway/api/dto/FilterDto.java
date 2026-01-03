@@ -1,9 +1,7 @@
 package com.danieljhkim.dsearch.gateway.api.dto;
 
-import java.util.List;
-
 import com.danieljhkim.dsearch.proto.common.FilterOperator;
-
+import java.util.List;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -14,16 +12,15 @@ import lombok.Setter;
 @Getter
 public class FilterDto {
 
-	private String field;
-	private FilterOperator operator = FilterOperator.EQ;
-	private List<String> values;
+    private String field;
+    private FilterOperator operator = FilterOperator.EQ;
+    private List<String> values;
 
-	public FilterDto() {
-	}
+    public FilterDto() {}
 
-	public FilterDto(String field, FilterOperator operator, List<String> values) {
-		this.field = field;
-		this.operator = operator;
-		this.values = values;
-	}
+    public FilterDto(String field, FilterOperator operator, List<String> values) {
+        this.field = field;
+        this.operator = operator;
+        this.values = values;
+    }
 }

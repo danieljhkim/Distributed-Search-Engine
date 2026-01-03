@@ -1,5 +1,19 @@
 package com.danieljhkim.dsearch.indexnode.index;
 
+import com.danieljhkim.dsearch.common.config.AppConfig.FieldConfig;
+import com.danieljhkim.dsearch.common.enums.FieldType;
+import com.danieljhkim.dsearch.common.exception.IndexOperationException;
+import com.danieljhkim.dsearch.common.exception.ParseGoneWrongException;
+import com.danieljhkim.dsearch.common.model.SearchDocument;
+import com.danieljhkim.dsearch.common.model.SearchHit;
+import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.indexnode.index.facet.FacetCalculator;
+import com.danieljhkim.dsearch.indexnode.index.highlight.TextHighlighter;
+import com.danieljhkim.dsearch.indexnode.index.query.FilterQueryBuilder;
+import com.danieljhkim.dsearch.ml.embedding.TextEmbeddingService;
+import com.danieljhkim.dsearch.proto.common.FacetRequest;
+import com.danieljhkim.dsearch.proto.common.FacetResponse;
+import com.danieljhkim.dsearch.proto.common.Filter;
 import java.io.Closeable;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -11,7 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.logging.Level;
-
+import lombok.Getter;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.document.Document;
@@ -49,525 +63,515 @@ import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 import org.apache.lucene.util.BytesRef;
 
-import com.danieljhkim.dsearch.common.config.AppConfig.FieldConfig;
-import com.danieljhkim.dsearch.common.enums.FieldType;
-import com.danieljhkim.dsearch.common.exception.IndexOperationException;
-import com.danieljhkim.dsearch.common.exception.ParseGoneWrongException;
-import com.danieljhkim.dsearch.common.model.SearchDocument;
-import com.danieljhkim.dsearch.common.model.SearchHit;
-import com.danieljhkim.dsearch.common.model.SearchResult;
-import com.danieljhkim.dsearch.indexnode.index.facet.FacetCalculator;
-import com.danieljhkim.dsearch.indexnode.index.highlight.TextHighlighter;
-import com.danieljhkim.dsearch.indexnode.index.query.FilterQueryBuilder;
-import com.danieljhkim.dsearch.ml.embedding.TextEmbeddingService;
-import com.danieljhkim.dsearch.proto.common.FacetRequest;
-import com.danieljhkim.dsearch.proto.common.FacetResponse;
-import com.danieljhkim.dsearch.proto.common.Filter;
-
-import lombok.Getter;
-
 public class ShardIndex implements Closeable {
 
-	public static final String FIELD_ID = "id";
-	public static final String FIELD_CONTENT = "content";
-	public static final String FIELD_TITLE = "title";
-	public static final String FIELD_EMBEDDING = "text_embedding";
+    public static final String FIELD_ID = "id";
+    public static final String FIELD_CONTENT = "content";
+    public static final String FIELD_TITLE = "title";
+    public static final String FIELD_EMBEDDING = "text_embedding";
 
-	private static final java.util.logging.Logger LOGGER = java.util.logging.Logger
-			.getLogger(ShardIndex.class.getName());
+    private static final java.util.logging.Logger LOGGER =
+            java.util.logging.Logger.getLogger(ShardIndex.class.getName());
 
-	private static final String[] DEFAULT_SEARCH_FIELDS = new String[] { FIELD_TITLE, FIELD_CONTENT };
-	private static final Set<String> HIGHLIGHTABLE_FIELDS = Set.of(FIELD_TITLE, FIELD_CONTENT);
+    private static final String[] DEFAULT_SEARCH_FIELDS = new String[] {FIELD_TITLE, FIELD_CONTENT};
+    private static final Set<String> HIGHLIGHTABLE_FIELDS = Set.of(FIELD_TITLE, FIELD_CONTENT);
 
-	@Getter
-	private final String shardId;
-	private final Path indexPath;
-	private final Directory directory;
-	private final Analyzer analyzer;
-	private final IndexWriter indexWriter;
-	private final SearcherManager searcherManager;
-	private final TextEmbeddingService embeddingService;
+    @Getter
+    private final String shardId;
 
-	// Query builders for filters, highlighting, and faceting
-	private final FilterQueryBuilder filterQueryBuilder;
-	private final TextHighlighter textHighlighter;
-	private final FacetCalculator facetCalculator;
-	private final Map<String, FieldConfig> fieldConfigMap;
+    private final Path indexPath;
+    private final Directory directory;
+    private final Analyzer analyzer;
+    private final IndexWriter indexWriter;
+    private final SearcherManager searcherManager;
+    private final TextEmbeddingService embeddingService;
 
-	public ShardIndex(String shardId, Path baseDir) {
-		this(shardId, baseDir, null);
-	}
+    // Query builders for filters, highlighting, and faceting
+    private final FilterQueryBuilder filterQueryBuilder;
+    private final TextHighlighter textHighlighter;
+    private final FacetCalculator facetCalculator;
+    private final Map<String, FieldConfig> fieldConfigMap;
 
-	public ShardIndex(String shardId, Path baseDir, Map<String, FieldConfig> fieldConfigMap) {
-		try {
-			this.shardId = shardId;
-			this.indexPath = baseDir.resolve("shard-" + shardId);
-			Files.createDirectories(indexPath);
+    public ShardIndex(String shardId, Path baseDir) {
+        this(shardId, baseDir, null);
+    }
 
-			this.directory = FSDirectory.open(indexPath);
-			this.analyzer = new StandardAnalyzer();
+    public ShardIndex(String shardId, Path baseDir, Map<String, FieldConfig> fieldConfigMap) {
+        try {
+            this.shardId = shardId;
+            this.indexPath = baseDir.resolve("shard-" + shardId);
+            Files.createDirectories(indexPath);
 
-			IndexWriterConfig config = new IndexWriterConfig(analyzer);
-			config.setOpenMode(IndexWriterConfig.OpenMode.CREATE_OR_APPEND);
-			this.indexWriter = new IndexWriter(directory, config);
+            this.directory = FSDirectory.open(indexPath);
+            this.analyzer = new StandardAnalyzer();
 
-			if (!DirectoryReader.indexExists(directory)) {
-				indexWriter.commit();
-			}
+            IndexWriterConfig config = new IndexWriterConfig(analyzer);
+            config.setOpenMode(IndexWriterConfig.OpenMode.CREATE_OR_APPEND);
+            this.indexWriter = new IndexWriter(directory, config);
 
-			this.embeddingService = new TextEmbeddingService();
-			DirectoryReader initialReader = DirectoryReader.open(directory);
-			this.searcherManager = new SearcherManager(initialReader, null);
+            if (!DirectoryReader.indexExists(directory)) {
+                indexWriter.commit();
+            }
 
-			// Initialize field config and query builders
-			this.fieldConfigMap = fieldConfigMap != null ? fieldConfigMap : new HashMap<>();
-			this.filterQueryBuilder = new FilterQueryBuilder(this.fieldConfigMap);
-			this.textHighlighter = new TextHighlighter();
-			this.facetCalculator = new FacetCalculator();
-		} catch (IOException e) {
-			throw new RuntimeException("Failed to initialize ShardIndex for shard " + shardId, e);
-		}
-	}
+            this.embeddingService = new TextEmbeddingService();
+            DirectoryReader initialReader = DirectoryReader.open(directory);
+            this.searcherManager = new SearcherManager(initialReader, null);
 
-	/**
-	 * Upsert a document by id.
-	 */
-	public void index(SearchDocument doc) throws IOException {
-		Document luceneDoc = toLuceneDocument(doc);
-		// Wrap with FacetsConfig to properly index facet fields
-		Document wrappedDoc = facetCalculator.getFacetsConfig().build(luceneDoc);
-		indexWriter.updateDocument(new Term(FIELD_ID, doc.getId()), wrappedDoc);
-	}
+            // Initialize field config and query builders
+            this.fieldConfigMap = fieldConfigMap != null ? fieldConfigMap : new HashMap<>();
+            this.filterQueryBuilder = new FilterQueryBuilder(this.fieldConfigMap);
+            this.textHighlighter = new TextHighlighter();
+            this.facetCalculator = new FacetCalculator();
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to initialize ShardIndex for shard " + shardId, e);
+        }
+    }
 
-	/**
-	 * Delete by docId.
-	 */
-	public void delete(String docId) throws IOException {
-		indexWriter.deleteDocuments(new Term(FIELD_ID, docId));
-	}
+    /**
+     * Upsert a document by id.
+     */
+    public void index(SearchDocument doc) throws IOException {
+        Document luceneDoc = toLuceneDocument(doc);
+        // Wrap with FacetsConfig to properly index facet fields
+        Document wrappedDoc = facetCalculator.getFacetsConfig().build(luceneDoc);
+        indexWriter.updateDocument(new Term(FIELD_ID, doc.getId()), wrappedDoc);
+    }
 
-	/**
-	 * Search against the current committed index state (backward compatible).
-	 */
-	public SearchResult search(String queryString, int limit, int from) {
-		return search(queryString, limit, from, null, false, null);
-	}
+    /**
+     * Delete by docId.
+     */
+    public void delete(String docId) throws IOException {
+        indexWriter.deleteDocuments(new Term(FIELD_ID, docId));
+    }
 
-	/**
-	 * Search with filters, highlighting, and facets.
-	 */
-	public SearchResult search(String queryString, int limit, int from,
-			List<Filter> filters, boolean highlight,
-			List<FacetRequest> facetRequests) {
-		IndexSearcher searcher = null;
-		try {
-			searcher = searcherManager.acquire();
-			MultiFieldQueryParser parser = new MultiFieldQueryParser(DEFAULT_SEARCH_FIELDS, analyzer);
-			Query textQuery = parser.parse(queryString);
+    /**
+     * Search against the current committed index state (backward compatible).
+     */
+    public SearchResult search(String queryString, int limit, int from) {
+        return search(queryString, limit, from, null, false, null);
+    }
 
-			// Combine text query with filters
-			Query combinedQuery = combineWithFilters(textQuery, filters);
-			TopDocs topDocs = searcher.search(combinedQuery, limit + from);
-			int totalHits = getTotalHits(searcher, combinedQuery);
+    /**
+     * Search with filters, highlighting, and facets.
+     */
+    public SearchResult search(
+            String queryString,
+            int limit,
+            int from,
+            List<Filter> filters,
+            boolean highlight,
+            List<FacetRequest> facetRequests) {
+        IndexSearcher searcher = null;
+        try {
+            searcher = searcherManager.acquire();
+            MultiFieldQueryParser parser = new MultiFieldQueryParser(DEFAULT_SEARCH_FIELDS, analyzer);
+            Query textQuery = parser.parse(queryString);
 
-			// Compute facets if requested
-			List<FacetResponse> facets = null;
-			if (facetRequests != null && !facetRequests.isEmpty()) {
-				facets = facetCalculator.computeFacets(searcher, combinedQuery, facetRequests);
-			}
+            // Combine text query with filters
+            Query combinedQuery = combineWithFilters(textQuery, filters);
+            TopDocs topDocs = searcher.search(combinedQuery, limit + from);
+            int totalHits = getTotalHits(searcher, combinedQuery);
 
-			SearchResult result = buildPagedResult(searcher, topDocs, limit, from, totalHits,
-					highlight ? textQuery : null);
-			result.setFacets(facets);
-			return result;
-		} catch (IOException e) {
-			LOGGER.log(Level.SEVERE, "I/O error searching shard " + shardId, e);
-			throw new IndexOperationException("I/O error on shard " + shardId, e);
-		} catch (ParseException e) {
-			throw new ParseGoneWrongException("Failed to parse query for shard " + shardId, e);
-		} finally {
-			releaseSearcher(searcher);
-		}
-	}
+            // Compute facets if requested
+            List<FacetResponse> facets = null;
+            if (facetRequests != null && !facetRequests.isEmpty()) {
+                facets = facetCalculator.computeFacets(searcher, combinedQuery, facetRequests);
+            }
 
-	/**
-	 * Compute facets for a query (separate method for facet-only computation).
-	 */
-	public List<FacetResponse> computeFacets(Query query, List<FacetRequest> facetRequests) {
-		if (facetRequests == null || facetRequests.isEmpty()) {
-			return new ArrayList<>();
-		}
-		IndexSearcher searcher = null;
-		try {
-			searcher = searcherManager.acquire();
-			return facetCalculator.computeFacets(searcher, query, facetRequests);
-		} catch (IOException e) {
-			LOGGER.log(Level.WARNING, "Failed to compute facets for shard " + shardId, e);
-			return new ArrayList<>();
-		} finally {
-			releaseSearcher(searcher);
-		}
-	}
+            SearchResult result =
+                    buildPagedResult(searcher, topDocs, limit, from, totalHits, highlight ? textQuery : null);
+            result.setFacets(facets);
+            return result;
+        } catch (IOException e) {
+            LOGGER.log(Level.SEVERE, "I/O error searching shard " + shardId, e);
+            throw new IndexOperationException("I/O error on shard " + shardId, e);
+        } catch (ParseException e) {
+            throw new ParseGoneWrongException("Failed to parse query for shard " + shardId, e);
+        } finally {
+            releaseSearcher(searcher);
+        }
+    }
 
-	/**
-	 * Semantic kNN search (backward compatible).
-	 */
-	public SearchResult semanticSearch(String queryText, int limit, int from) {
-		return semanticSearch(queryText, limit, from, null, false, null);
-	}
+    /**
+     * Compute facets for a query (separate method for facet-only computation).
+     */
+    public List<FacetResponse> computeFacets(Query query, List<FacetRequest> facetRequests) {
+        if (facetRequests == null || facetRequests.isEmpty()) {
+            return new ArrayList<>();
+        }
+        IndexSearcher searcher = null;
+        try {
+            searcher = searcherManager.acquire();
+            return facetCalculator.computeFacets(searcher, query, facetRequests);
+        } catch (IOException e) {
+            LOGGER.log(Level.WARNING, "Failed to compute facets for shard " + shardId, e);
+            return new ArrayList<>();
+        } finally {
+            releaseSearcher(searcher);
+        }
+    }
 
-	/**
-	 * Semantic kNN search with filters, highlighting, and facets.
-	 */
-	@SuppressWarnings("all")
-	public SearchResult semanticSearch(String queryText, int limit, int from,
-			List<Filter> filters, boolean highlight,
-			List<FacetRequest> facetRequests) {
-		IndexSearcher searcher = null;
-		try {
-			float[] queryEmbedding = embeddingService.embed(queryText);
-			if (queryEmbedding == null || queryEmbedding.length == 0) {
-				LOGGER.warning(() -> "Empty embedding for query on shard " + shardId);
-				return new SearchResult(new ArrayList<>(), 0);
-			}
+    /**
+     * Semantic kNN search (backward compatible).
+     */
+    public SearchResult semanticSearch(String queryText, int limit, int from) {
+        return semanticSearch(queryText, limit, from, null, false, null);
+    }
 
-			// Build filter query if filters exist
-			Query filterQuery = null;
-			if (filters != null && !filters.isEmpty()) {
-				filterQuery = filterQueryBuilder.buildQuery(filters);
-				if (filterQuery instanceof MatchAllDocsQuery) {
-					filterQuery = null; // No actual filtering needed
-				}
-			}
+    /**
+     * Semantic kNN search with filters, highlighting, and facets.
+     */
+    @SuppressWarnings("all")
+    public SearchResult semanticSearch(
+            String queryText,
+            int limit,
+            int from,
+            List<Filter> filters,
+            boolean highlight,
+            List<FacetRequest> facetRequests) {
+        IndexSearcher searcher = null;
+        try {
+            float[] queryEmbedding = embeddingService.embed(queryText);
+            if (queryEmbedding == null || queryEmbedding.length == 0) {
+                LOGGER.warning(() -> "Empty embedding for query on shard " + shardId);
+                return new SearchResult(new ArrayList<>(), 0);
+            }
 
-			Query knnQuery = filterQuery != null
-					? new KnnFloatVectorQuery(FIELD_EMBEDDING, queryEmbedding, limit + from, filterQuery)
-					: new KnnFloatVectorQuery(FIELD_EMBEDDING, queryEmbedding, limit + from);
+            // Build filter query if filters exist
+            Query filterQuery = null;
+            if (filters != null && !filters.isEmpty()) {
+                filterQuery = filterQueryBuilder.buildQuery(filters);
+                if (filterQuery instanceof MatchAllDocsQuery) {
+                    filterQuery = null; // No actual filtering needed
+                }
+            }
 
-			searcher = searcherManager.acquire();
-			TopDocs topDocs = searcher.search(knnQuery, limit + from);
-			int totalHits = getTotalHits(searcher, knnQuery);
+            Query knnQuery = filterQuery != null
+                    ? new KnnFloatVectorQuery(FIELD_EMBEDDING, queryEmbedding, limit + from, filterQuery)
+                    : new KnnFloatVectorQuery(FIELD_EMBEDDING, queryEmbedding, limit + from);
 
-			Query highlightQuery = null;
-			if (highlight) {
-				try {
-					MultiFieldQueryParser parser = new MultiFieldQueryParser(DEFAULT_SEARCH_FIELDS, analyzer);
-					highlightQuery = parser.parse(queryText);
-				} catch (ParseException e) {
-					LOGGER.log(Level.WARNING, "Failed to parse query for highlighting", e);
-				}
-			}
+            searcher = searcherManager.acquire();
+            TopDocs topDocs = searcher.search(knnQuery, limit + from);
+            int totalHits = getTotalHits(searcher, knnQuery);
 
-			// Compute facets if requested
-			List<FacetResponse> facets = null;
-			if (facetRequests != null && !facetRequests.isEmpty()) {
-				facets = facetCalculator.computeFacets(searcher, knnQuery, facetRequests);
-			}
+            Query highlightQuery = null;
+            if (highlight) {
+                try {
+                    MultiFieldQueryParser parser = new MultiFieldQueryParser(DEFAULT_SEARCH_FIELDS, analyzer);
+                    highlightQuery = parser.parse(queryText);
+                } catch (ParseException e) {
+                    LOGGER.log(Level.WARNING, "Failed to parse query for highlighting", e);
+                }
+            }
 
-			SearchResult result = buildPagedResult(searcher, topDocs, limit, from, totalHits, highlightQuery);
-			result.setFacets(facets);
-			return result;
-		} catch (IOException e) {
-			LOGGER.log(Level.SEVERE, "I/O error during semantic search on shard " + shardId, e);
-			throw new IndexOperationException("I/O error on shard " + shardId, e);
-		} finally {
-			releaseSearcher(searcher);
-		}
-	}
+            // Compute facets if requested
+            List<FacetResponse> facets = null;
+            if (facetRequests != null && !facetRequests.isEmpty()) {
+                facets = facetCalculator.computeFacets(searcher, knnQuery, facetRequests);
+            }
 
-	/**
-	 * Combines the main query with filter queries.
-	 */
-	private Query combineWithFilters(Query mainQuery, List<Filter> filters) {
-		if (filters == null || filters.isEmpty()) {
-			return mainQuery;
-		}
+            SearchResult result = buildPagedResult(searcher, topDocs, limit, from, totalHits, highlightQuery);
+            result.setFacets(facets);
+            return result;
+        } catch (IOException e) {
+            LOGGER.log(Level.SEVERE, "I/O error during semantic search on shard " + shardId, e);
+            throw new IndexOperationException("I/O error on shard " + shardId, e);
+        } finally {
+            releaseSearcher(searcher);
+        }
+    }
 
-		Query filterQuery = filterQueryBuilder.buildQuery(filters);
-		if (filterQuery instanceof MatchAllDocsQuery) {
-			return mainQuery;
-		}
+    /**
+     * Combines the main query with filter queries.
+     */
+    private Query combineWithFilters(Query mainQuery, List<Filter> filters) {
+        if (filters == null || filters.isEmpty()) {
+            return mainQuery;
+        }
 
-		return new BooleanQuery.Builder()
-				.add(mainQuery, BooleanClause.Occur.MUST)
-				.add(filterQuery, BooleanClause.Occur.FILTER)
-				.build();
-	}
+        Query filterQuery = filterQueryBuilder.buildQuery(filters);
+        if (filterQuery instanceof MatchAllDocsQuery) {
+            return mainQuery;
+        }
 
-	@SuppressWarnings("all")
-	private SearchResult buildPagedResult(IndexSearcher searcher,
-			TopDocs topDocs,
-			int limit,
-			int from,
-			int totalHits,
-			Query highlightQuery) throws IOException {
-		ScoreDoc[] scoreDocs = topDocs.scoreDocs;
+        return new BooleanQuery.Builder()
+                .add(mainQuery, BooleanClause.Occur.MUST)
+                .add(filterQuery, BooleanClause.Occur.FILTER)
+                .build();
+    }
 
-		int end = Math.min(scoreDocs.length, from + limit);
-		if (from >= scoreDocs.length || from >= end) {
-			return new SearchResult(new ArrayList<>(), totalHits);
-		}
+    @SuppressWarnings("all")
+    private SearchResult buildPagedResult(
+            IndexSearcher searcher, TopDocs topDocs, int limit, int from, int totalHits, Query highlightQuery)
+            throws IOException {
+        ScoreDoc[] scoreDocs = topDocs.scoreDocs;
 
-		List<SearchHit> hits = new ArrayList<>(end - from);
-		for (int i = from; i < end; i++) {
-			ScoreDoc sd = scoreDocs[i];
-			StoredFields storedField = searcher.storedFields();
-			Document doc = storedField.document(sd.doc);
-			String docId = doc.get(FIELD_ID);
-			if (docId == null) {
-				continue;
-			}
+        int end = Math.min(scoreDocs.length, from + limit);
+        if (from >= scoreDocs.length || from >= end) {
+            return new SearchResult(new ArrayList<>(), totalHits);
+        }
 
-			String title = doc.get(FIELD_TITLE);
-			String content = doc.get(FIELD_CONTENT);
+        List<SearchHit> hits = new ArrayList<>(end - from);
+        for (int i = from; i < end; i++) {
+            ScoreDoc sd = scoreDocs[i];
+            StoredFields storedField = searcher.storedFields();
+            Document doc = storedField.document(sd.doc);
+            String docId = doc.get(FIELD_ID);
+            if (docId == null) {
+                continue;
+            }
 
-			// Collect all other stored fields (excluding id, title, content)
-			Map<String, String> fields = new HashMap<>();
-			Set<String> processedFields = new HashSet<>();
-			for (IndexableField field : doc.getFields()) {
-				String fieldName = field.name();
-				if (!FIELD_ID.equals(fieldName) && !FIELD_TITLE.equals(fieldName) && !FIELD_CONTENT.equals(fieldName)
-						&& !processedFields.contains(fieldName)) {
-					// Get stored value - doc.get() works for all stored field types
-					String fieldValue = doc.get(fieldName);
-					if (fieldValue != null) {
-						fields.put(fieldName, fieldValue);
-						processedFields.add(fieldName);
-					}
-				}
-			}
+            String title = doc.get(FIELD_TITLE);
+            String content = doc.get(FIELD_CONTENT);
 
-			// Apply highlighting if requested
-			Map<String, String> highlightedFields = null;
-			if (highlightQuery != null) {
-				highlightedFields = applyHighlighting(highlightQuery, title, content);
-			}
+            // Collect all other stored fields (excluding id, title, content)
+            Map<String, String> fields = new HashMap<>();
+            Set<String> processedFields = new HashSet<>();
+            for (IndexableField field : doc.getFields()) {
+                String fieldName = field.name();
+                if (!FIELD_ID.equals(fieldName)
+                        && !FIELD_TITLE.equals(fieldName)
+                        && !FIELD_CONTENT.equals(fieldName)
+                        && !processedFields.contains(fieldName)) {
+                    // Get stored value - doc.get() works for all stored field types
+                    String fieldValue = doc.get(fieldName);
+                    if (fieldValue != null) {
+                        fields.put(fieldName, fieldValue);
+                        processedFields.add(fieldName);
+                    }
+                }
+            }
 
-			Map<String, String> fieldsMap = fields.isEmpty() ? null : fields;
-			if (highlightedFields != null && !highlightedFields.isEmpty()) {
-				hits.add(new SearchHit(docId, title, content, sd.score, highlightedFields, fieldsMap));
-			} else {
-				hits.add(new SearchHit(docId, title, content, sd.score, null, fieldsMap));
-			}
-		}
+            // Apply highlighting if requested
+            Map<String, String> highlightedFields = null;
+            if (highlightQuery != null) {
+                highlightedFields = applyHighlighting(highlightQuery, title, content);
+            }
 
-		return new SearchResult(hits, totalHits);
-	}
+            Map<String, String> fieldsMap = fields.isEmpty() ? null : fields;
+            if (highlightedFields != null && !highlightedFields.isEmpty()) {
+                hits.add(new SearchHit(docId, title, content, sd.score, highlightedFields, fieldsMap));
+            } else {
+                hits.add(new SearchHit(docId, title, content, sd.score, null, fieldsMap));
+            }
+        }
 
-	/**
-	 * Applies highlighting to the title and content fields.
-	 */
-	private Map<String, String> applyHighlighting(Query query, String title, String content) {
-		Map<String, String> fieldContents = new HashMap<>();
-		if (title != null && !title.isEmpty()) {
-			fieldContents.put(FIELD_TITLE, title);
-		}
-		if (content != null && !content.isEmpty()) {
-			fieldContents.put(FIELD_CONTENT, content);
-		}
+        return new SearchResult(hits, totalHits);
+    }
 
-		if (fieldContents.isEmpty()) {
-			return null;
-		}
+    /**
+     * Applies highlighting to the title and content fields.
+     */
+    private Map<String, String> applyHighlighting(Query query, String title, String content) {
+        Map<String, String> fieldContents = new HashMap<>();
+        if (title != null && !title.isEmpty()) {
+            fieldContents.put(FIELD_TITLE, title);
+        }
+        if (content != null && !content.isEmpty()) {
+            fieldContents.put(FIELD_CONTENT, content);
+        }
 
-		return textHighlighter.highlight(query, fieldContents, HIGHLIGHTABLE_FIELDS);
-	}
+        if (fieldContents.isEmpty()) {
+            return null;
+        }
 
-	/**
-	 * Commit all pending index changes and refresh the searcher.
-	 */
-	public void commit() throws IOException {
-		indexWriter.commit();
-		searcherManager.maybeRefresh();
-	}
+        return textHighlighter.highlight(query, fieldContents, HIGHLIGHTABLE_FIELDS);
+    }
 
-	@SuppressWarnings("all")
-	private Document toLuceneDocument(SearchDocument doc) throws IOException {
-		Document luceneDoc = new Document();
+    /**
+     * Commit all pending index changes and refresh the searcher.
+     */
+    public void commit() throws IOException {
+        indexWriter.commit();
+        searcherManager.maybeRefresh();
+    }
 
-		// 1) ID: stored, not tokenized
-		luceneDoc.add(new StringField(FIELD_ID, doc.getId(), Field.Store.YES));
+    @SuppressWarnings("all")
+    private Document toLuceneDocument(SearchDocument doc) throws IOException {
+        Document luceneDoc = new Document();
 
-		// 2) Build combined text from all fields (excluding id)
-		StringBuilder contentBuilder = new StringBuilder();
-		for (Map.Entry<String, String> entry : doc.getFields().entrySet()) {
-			String name = entry.getKey();
-			String value = entry.getValue();
-			if (value == null || value.isBlank()) {
-				continue;
-			}
-			if (!FIELD_ID.equals(name)) {
-				contentBuilder.append(value).append(' ');
-			}
-			if (FIELD_TITLE.equals(name)) {
-				luceneDoc.add(new StoredField(FIELD_TITLE, value));
-			}
-			if (FIELD_CONTENT.equals(name)) {
-				luceneDoc.add(new StoredField(FIELD_CONTENT, value));
-			}
+        // 1) ID: stored, not tokenized
+        luceneDoc.add(new StringField(FIELD_ID, doc.getId(), Field.Store.YES));
 
-			// Index field based on configuration
-			addConfiguredField(luceneDoc, name, value);
-		}
+        // 2) Build combined text from all fields (excluding id)
+        StringBuilder contentBuilder = new StringBuilder();
+        for (Map.Entry<String, String> entry : doc.getFields().entrySet()) {
+            String name = entry.getKey();
+            String value = entry.getValue();
+            if (value == null || value.isBlank()) {
+                continue;
+            }
+            if (!FIELD_ID.equals(name)) {
+                contentBuilder.append(value).append(' ');
+            }
+            if (FIELD_TITLE.equals(name)) {
+                luceneDoc.add(new StoredField(FIELD_TITLE, value));
+            }
+            if (FIELD_CONTENT.equals(name)) {
+                luceneDoc.add(new StoredField(FIELD_CONTENT, value));
+            }
 
-		String combinedText = contentBuilder.toString().trim();
+            // Index field based on configuration
+            addConfiguredField(luceneDoc, name, value);
+        }
 
-		// 3) Full-text field for BM25 / keyword search
-		if (!combinedText.isEmpty()) {
-			luceneDoc.add(new TextField(FIELD_CONTENT, combinedText, Field.Store.NO));
-		}
+        String combinedText = contentBuilder.toString().trim();
 
-		// 4) Embedding for semantic search
-		if (!combinedText.isEmpty()) {
-			float[] embedding = embeddingService.embed(combinedText);
-			if (embedding != null && embedding.length > 0) {
-				luceneDoc.add(new KnnFloatVectorField(FIELD_EMBEDDING, embedding));
-			}
-		}
+        // 3) Full-text field for BM25 / keyword search
+        if (!combinedText.isEmpty()) {
+            luceneDoc.add(new TextField(FIELD_CONTENT, combinedText, Field.Store.NO));
+        }
 
-		return luceneDoc;
-	}
+        // 4) Embedding for semantic search
+        if (!combinedText.isEmpty()) {
+            float[] embedding = embeddingService.embed(combinedText);
+            if (embedding != null && embedding.length > 0) {
+                luceneDoc.add(new KnnFloatVectorField(FIELD_EMBEDDING, embedding));
+            }
+        }
 
-	/**
-	 * Adds a field to the Lucene document based on its FieldConfig.
-	 * This enables filtering, sorting, and faceting on configured fields.
-	 */
-	@SuppressWarnings("all")
-	private void addConfiguredField(Document luceneDoc, String fieldName, String value) {
-		FieldConfig config = fieldConfigMap.get(fieldName);
-		if (config == null) {
-			return;
-		}
+        return luceneDoc;
+    }
 
-		FieldType fieldType = config.getType();
-		boolean filterable = config.isFilterable();
-		boolean sortable = config.isSortable();
-		boolean facetable = config.isFacetable();
+    /**
+     * Adds a field to the Lucene document based on its FieldConfig.
+     * This enables filtering, sorting, and faceting on configured fields.
+     */
+    @SuppressWarnings("all")
+    private void addConfiguredField(Document luceneDoc, String fieldName, String value) {
+        FieldConfig config = fieldConfigMap.get(fieldName);
+        if (config == null) {
+            return;
+        }
 
-		if (!filterable && !sortable && !facetable) {
-			return;
-		}
+        FieldType fieldType = config.getType();
+        boolean filterable = config.isFilterable();
+        boolean sortable = config.isSortable();
+        boolean facetable = config.isFacetable();
 
-		try {
-			switch (fieldType) {
-				case INTEGER -> {
-					int intValue = Integer.parseInt(value);
-					if (filterable) {
-						luceneDoc.add(new IntPoint(fieldName, intValue));
-					}
-					if (sortable) {
-						luceneDoc.add(new NumericDocValuesField(fieldName, intValue));
-					}
-					if (facetable) {
-						// Term-style faceting for numeric values (e.g., year=1994). Range/histogram
-						// facets are handled separately.
-						luceneDoc.add(new SortedSetDocValuesFacetField(fieldName, value));
-					}
-					luceneDoc.add(new StoredField(fieldName, intValue));
-				}
-				case LONG, DATE -> {
-					long longValue = Long.parseLong(value);
-					if (filterable) {
-						luceneDoc.add(new LongPoint(fieldName, longValue));
-					}
-					if (sortable) {
-						luceneDoc.add(new NumericDocValuesField(fieldName, longValue));
-					}
-					if (facetable) {
-						// Term-style faceting for numeric values.
-						luceneDoc.add(new SortedSetDocValuesFacetField(fieldName, value));
-					}
-					luceneDoc.add(new StoredField(fieldName, longValue));
-				}
-				case DOUBLE -> {
-					double doubleValue = Double.parseDouble(value);
-					if (filterable) {
-						luceneDoc.add(new DoublePoint(fieldName, doubleValue));
-					}
-					if (sortable) {
-						luceneDoc.add(new DoubleDocValuesField(fieldName, doubleValue));
-					}
-					if (facetable) {
-						// Term-style faceting for numeric values.
-						luceneDoc.add(new SortedSetDocValuesFacetField(fieldName, value));
-					}
-					luceneDoc.add(new StoredField(fieldName, doubleValue));
-				}
-				case STRING -> {
-					if (filterable) {
-						luceneDoc.add(new StringField(fieldName, value, Field.Store.YES));
-					} else {
-						// Store value even when not filterable (needed for retrieval in fields map)
-						luceneDoc.add(new StoredField(fieldName, value));
-					}
-					if (sortable) {
-						luceneDoc.add(new SortedDocValuesField(fieldName, new BytesRef(value)));
-					}
-					if (facetable) {
-						// Add facet field for faceting
-						luceneDoc.add(new SortedSetDocValuesFacetField(fieldName, value));
-					}
-				}
-			}
-		} catch (NumberFormatException e) {
-			LOGGER.log(Level.WARNING, "Failed to parse field " + fieldName + " with value " + value, e);
-		}
-	}
+        if (!filterable && !sortable && !facetable) {
+            return;
+        }
 
-	private int getTotalHits(IndexSearcher searcher, Query query) throws IOException {
-		TotalHitCountCollector countCollector = new TotalHitCountCollector();
-		searcher.search(query, countCollector);
-		return countCollector.getTotalHits();
-	}
+        try {
+            switch (fieldType) {
+                case INTEGER -> {
+                    int intValue = Integer.parseInt(value);
+                    if (filterable) {
+                        luceneDoc.add(new IntPoint(fieldName, intValue));
+                    }
+                    if (sortable) {
+                        luceneDoc.add(new NumericDocValuesField(fieldName, intValue));
+                    }
+                    if (facetable) {
+                        // Term-style faceting for numeric values (e.g., year=1994). Range/histogram
+                        // facets are handled separately.
+                        luceneDoc.add(new SortedSetDocValuesFacetField(fieldName, value));
+                    }
+                    luceneDoc.add(new StoredField(fieldName, intValue));
+                }
+                case LONG, DATE -> {
+                    long longValue = Long.parseLong(value);
+                    if (filterable) {
+                        luceneDoc.add(new LongPoint(fieldName, longValue));
+                    }
+                    if (sortable) {
+                        luceneDoc.add(new NumericDocValuesField(fieldName, longValue));
+                    }
+                    if (facetable) {
+                        // Term-style faceting for numeric values.
+                        luceneDoc.add(new SortedSetDocValuesFacetField(fieldName, value));
+                    }
+                    luceneDoc.add(new StoredField(fieldName, longValue));
+                }
+                case DOUBLE -> {
+                    double doubleValue = Double.parseDouble(value);
+                    if (filterable) {
+                        luceneDoc.add(new DoublePoint(fieldName, doubleValue));
+                    }
+                    if (sortable) {
+                        luceneDoc.add(new DoubleDocValuesField(fieldName, doubleValue));
+                    }
+                    if (facetable) {
+                        // Term-style faceting for numeric values.
+                        luceneDoc.add(new SortedSetDocValuesFacetField(fieldName, value));
+                    }
+                    luceneDoc.add(new StoredField(fieldName, doubleValue));
+                }
+                case STRING -> {
+                    if (filterable) {
+                        luceneDoc.add(new StringField(fieldName, value, Field.Store.YES));
+                    } else {
+                        // Store value even when not filterable (needed for retrieval in fields map)
+                        luceneDoc.add(new StoredField(fieldName, value));
+                    }
+                    if (sortable) {
+                        luceneDoc.add(new SortedDocValuesField(fieldName, new BytesRef(value)));
+                    }
+                    if (facetable) {
+                        // Add facet field for faceting
+                        luceneDoc.add(new SortedSetDocValuesFacetField(fieldName, value));
+                    }
+                }
+            }
+        } catch (NumberFormatException e) {
+            LOGGER.log(Level.WARNING, "Failed to parse field " + fieldName + " with value " + value, e);
+        }
+    }
 
-	private void releaseSearcher(IndexSearcher searcher) {
-		if (searcher != null) {
-			try {
-				searcherManager.release(searcher);
-			} catch (IOException e) {
-				LOGGER.log(Level.WARNING, "Failed to release searcher for shard " + shardId, e);
-			}
-		}
-	}
+    private int getTotalHits(IndexSearcher searcher, Query query) throws IOException {
+        TotalHitCountCollector countCollector = new TotalHitCountCollector();
+        searcher.search(query, countCollector);
+        return countCollector.getTotalHits();
+    }
 
-	@Override
-	@SuppressWarnings("all")
-	public void close() throws IOException {
-		IOException first = null;
-		try {
-			searcherManager.close();
-		} catch (IOException e) {
-			first = e;
-		}
-		try {
-			indexWriter.close();
-		} catch (IOException e) {
-			if (first == null) {
-				first = e;
-			} else {
-				LOGGER.log(Level.WARNING, "Suppressed exception while closing IndexWriter for shard " + shardId, e);
-			}
-		}
-		try {
-			directory.close();
-		} catch (IOException e) {
-			if (first == null) {
-				first = e;
-			} else {
-				LOGGER.log(Level.WARNING, "Suppressed exception while closing Directory for shard " + shardId, e);
-			}
-		}
-		try {
-			analyzer.close();
-		} catch (Exception e) {
-			if (first != null) {
-				throw first;
-			} else {
-				LOGGER.log(Level.WARNING, "Suppressed exception while closing analyzer for shard " + shardId, e);
-				throw e;
-			}
-		}
-		if (first != null)
-			throw first;
-	}
+    private void releaseSearcher(IndexSearcher searcher) {
+        if (searcher != null) {
+            try {
+                searcherManager.release(searcher);
+            } catch (IOException e) {
+                LOGGER.log(Level.WARNING, "Failed to release searcher for shard " + shardId, e);
+            }
+        }
+    }
+
+    @Override
+    @SuppressWarnings("all")
+    public void close() throws IOException {
+        IOException first = null;
+        try {
+            searcherManager.close();
+        } catch (IOException e) {
+            first = e;
+        }
+        try {
+            indexWriter.close();
+        } catch (IOException e) {
+            if (first == null) {
+                first = e;
+            } else {
+                LOGGER.log(Level.WARNING, "Suppressed exception while closing IndexWriter for shard " + shardId, e);
+            }
+        }
+        try {
+            directory.close();
+        } catch (IOException e) {
+            if (first == null) {
+                first = e;
+            } else {
+                LOGGER.log(Level.WARNING, "Suppressed exception while closing Directory for shard " + shardId, e);
+            }
+        }
+        try {
+            analyzer.close();
+        } catch (Exception e) {
+            if (first != null) {
+                throw first;
+            } else {
+                LOGGER.log(Level.WARNING, "Suppressed exception while closing analyzer for shard " + shardId, e);
+                throw e;
+            }
+        }
+        if (first != null) throw first;
+    }
 }

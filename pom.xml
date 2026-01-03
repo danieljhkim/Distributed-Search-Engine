@@ -282,11 +282,10 @@
                     <artifactId>spotless-maven-plugin</artifactId>
                     <version>${spotless.maven.plugin.version}</version>
                     <configuration>
-                      <java>
-                        <eclipse>
-                            <file>${maven.multiModuleProjectDirectory}/config/eclipse-formatter.xml</file>
-                        </eclipse>
-                      </java>
+                        <java>
+                            <palantirJavaFormat/> <removeUnusedImports/>
+                            <formatAnnotations/>
+                        </java>
                     </configuration>
                 </plugin>
             </plugins>

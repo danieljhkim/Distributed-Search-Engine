@@ -1,131 +1,142 @@
 version: 2
-updates:
-  # Keep GitHub Actions up to date (workflow actions like actions/checkout, docker/*, etc.)
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "saturday"
-      time: "03:00"
-    open-pull-requests-limit: 10
-    labels:
-      - "dependencies"
-      - "github-actions"
-    groups:
-      github-actions:
-        patterns:
-          - "*"
 
-  # Maven dependencies (root / multi-module)
+updates:
+  # Maven dependencies
   - package-ecosystem: "maven"
     directory: "/"
     schedule:
       interval: "weekly"
-      day: "saturday"
-      time: "03:10"
-    open-pull-requests-limit: 10
-    labels:
-      - "dependencies"
-      - "java"
-      - "maven"
+      day: "monday"
+    open-pull-requests-limit: 5
     groups:
-      maven-dependencies:
+      # Group Spring Boot updates together
+      spring-boot:
         patterns:
-          - "*"
+          - "org.springframework.boot:*"
+          - "org.springframework:*"
+          - "org.springframework.data:*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Group gRPC updates together
+      grpc:
+        patterns:
+          - "io.grpc:*"
+          - "com.google.protobuf:*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Group logging dependencies
+      logging:
+        patterns:
+          - "org.slf4j:*"
+          - "org.apache.logging.log4j:*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Group test dependencies
+      test:
+        patterns:
+          - "org.junit.jupiter:*"
+          - "org.mockito:*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      # Prevent Java version bumps from 21
+      - dependency-name: "maven"
+        update-types: ["version-update:semver-major"]
+      # Prevent Spring Boot major version bumps (stay on 3.x)
+      - dependency-name: "org.springframework.boot:*"
+        update-types: ["version-update:semver-major"]
+      # Prevent gRPC major version bumps
+      - dependency-name: "io.grpc:*"
+        update-types: ["version-update:semver-major"]
+      # Prevent protobuf major version bumps
+      - dependency-name: "com.google.protobuf:*"
+        update-types: ["version-update:semver-major"]
+      # Prevent Jackson major version bumps
+      - dependency-name: "com.fasterxml.jackson.*:*"
+        update-types: ["version-update:semver-major"]
+      # Prevent Log4j major version bumps
+      - dependency-name: "org.apache.logging.log4j:*"
+        update-types: ["version-update:semver-major"]
+      # Prevent SLF4J major version bumps
+      - dependency-name: "org.slf4j:*"
+        update-types: ["version-update:semver-major"]
+      # Prevent JUnit major version bumps (stay on 5.x)
+      - dependency-name: "org.junit.jupiter:*"
+        update-types: ["version-update:semver-major"]
 
-  # Dockerfiles (each service)
-  - package-ecosystem: "docker"
-    directory: "/dk.gateway"
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
     schedule:
       interval: "weekly"
-      day: "saturday"
-      time: "03:20"
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-      - "docker"
+      day: "monday"
+    open-pull-requests-limit: 3
     groups:
-      docker-base-images:
+      # Group all GitHub Actions updates
+      github-actions:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
     ignore:
-      # Avoid major tag jumps (e.g., 21 -> 25) for base images
-      - dependency-name: "eclipse-temurin"
-        update-types:
-          - "version-update:semver-major"
+      # Prevent major version bumps for actions
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
-      - dependency-name: "maven"
-        update-types:
-          - "version-update:semver-major"
-
+  # Docker base images
   - package-ecosystem: "docker"
     directory: "/dk.coordinator"
     schedule:
       interval: "weekly"
-      day: "saturday"
-      time: "03:20"
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-      - "docker"
-    groups:
-      docker-base-images:
-        patterns:
-          - "*"
+      day: "monday"
+    open-pull-requests-limit: 2
     ignore:
-      # Avoid major tag jumps (e.g., 21 -> 25) for base images
+      # Keep Eclipse Temurin on Java 21
       - dependency-name: "eclipse-temurin"
-        update-types:
-          - "version-update:semver-major"
-
+        versions: ["22", "22-jre", ">= 22"]
       - dependency-name: "maven"
-        update-types:
-          - "version-update:semver-major"
+        versions: [">= 4"]
 
   - package-ecosystem: "docker"
     directory: "/dk.index-node"
     schedule:
       interval: "weekly"
-      day: "saturday"
-      time: "03:20"
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-      - "docker"
-    groups:
-      docker-base-images:
-        patterns:
-          - "*"
+      day: "monday"
+    open-pull-requests-limit: 2
     ignore:
-      # Avoid major tag jumps (e.g., 21 -> 25) for base images
+      # Keep Eclipse Temurin on Java 21
       - dependency-name: "eclipse-temurin"
-        update-types:
-          - "version-update:semver-major"
-
+        versions: ["22", "22-jre", ">= 22"]
       - dependency-name: "maven"
-        update-types:
-          - "version-update:semver-major"
+        versions: [">= 4"]
+
+  - package-ecosystem: "docker"
+    directory: "/dk.gateway"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 2
+    ignore:
+      # Keep Eclipse Temurin on Java 21
+      - dependency-name: "eclipse-temurin"
+        versions: ["22", "22-jre", ">= 22"]
+      - dependency-name: "maven"
+        versions: [">= 4"]
 
   - package-ecosystem: "docker"
     directory: "/dk.query-node"
     schedule:
       interval: "weekly"
-      day: "saturday"
-      time: "03:20"
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-      - "docker"
-    groups:
-      docker-base-images:
-        patterns:
-          - "*"
+      day: "monday"
+    open-pull-requests-limit: 2
     ignore:
-      # Avoid major tag jumps (e.g., 21 -> 25) for base images
+      # Keep Eclipse Temurin on Java 21
       - dependency-name: "eclipse-temurin"
-        update-types:
-          - "version-update:semver-major"
-
+        versions: ["22", "22-jre", ">= 22"]
       - dependency-name: "maven"
-        update-types:
-          - "version-update:semver-major"
+        versions: [">= 4"]

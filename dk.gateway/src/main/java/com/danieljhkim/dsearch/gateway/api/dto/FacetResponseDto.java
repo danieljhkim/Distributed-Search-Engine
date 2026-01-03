@@ -1,7 +1,6 @@
 package com.danieljhkim.dsearch.gateway.api.dto;
 
 import java.util.List;
-
 import lombok.Getter;
 import lombok.Setter;
 
@@ -12,14 +11,13 @@ import lombok.Setter;
 @Getter
 public class FacetResponseDto {
 
-	private String field;
-	private List<FacetBucketDto> buckets;
+    private String field;
+    private List<FacetBucketDto> buckets;
 
-	public FacetResponseDto() {
-	}
+    public FacetResponseDto() {}
 
-	public FacetResponseDto(String field, List<FacetBucketDto> buckets) {
-		this.field = field;
-		this.buckets = buckets;
-	}
+    public FacetResponseDto(String field, List<FacetBucketDto> buckets) {
+        this.field = field;
+        this.buckets = buckets;
+    }
 }

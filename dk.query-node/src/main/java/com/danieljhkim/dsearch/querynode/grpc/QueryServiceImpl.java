@@ -1,115 +1,113 @@
 package com.danieljhkim.dsearch.querynode.grpc;
 
-import java.util.List;
-import java.util.logging.Level;
-import java.util.logging.Logger;
-
-import com.danieljhkim.dsearch.proto.common.FusionStrategy;
-import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.common.exception.ParseGoneWrongException;
 import com.danieljhkim.dsearch.common.model.SearchResult;
 import com.danieljhkim.dsearch.common.validation.RequestLimitsValidator;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.Filter;
+import com.danieljhkim.dsearch.proto.common.FusionStrategy;
+import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.proto.query.QueryRequest;
 import com.danieljhkim.dsearch.proto.query.QueryResponse;
 import com.danieljhkim.dsearch.proto.query.QueryServiceGrpc;
 import com.danieljhkim.dsearch.proto.query.SearchHit;
 import com.danieljhkim.dsearch.querynode.search.SearchExecutor;
-
 import io.grpc.stub.StreamObserver;
+import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
 
-	private static final Logger LOGGER = Logger.getLogger(QueryServiceImpl.class.getName());
+    private static final Logger LOGGER = Logger.getLogger(QueryServiceImpl.class.getName());
 
-	private final SearchExecutor searchExecutor;
-	private final BaseIndexService indexService;
+    private final SearchExecutor searchExecutor;
+    private final BaseIndexService indexService;
 
-	public QueryServiceImpl(SearchExecutor searchExecutor, BaseIndexService indexService) {
-		this.searchExecutor = searchExecutor;
-		this.indexService = indexService;
-	}
+    public QueryServiceImpl(SearchExecutor searchExecutor, BaseIndexService indexService) {
+        this.searchExecutor = searchExecutor;
+        this.indexService = indexService;
+    }
 
-	@Override
-	public void search(QueryRequest request, StreamObserver<QueryResponse> responseObserver) {
-		String queryString = request.getQueryString();
-		int page = request.getPage();
-		int size = request.getSize();
-		String partitionId = request.getPartitionId();
-		SearchType searchType = request.getSearchType();
-		List<Filter> filters = request.getFiltersList();
-		boolean highlight = request.getHighlight();
-		List<FacetRequest> facetRequests = request.getFacetsList();
+    @Override
+    public void search(QueryRequest request, StreamObserver<QueryResponse> responseObserver) {
+        String queryString = request.getQueryString();
+        int page = request.getPage();
+        int size = request.getSize();
+        String partitionId = request.getPartitionId();
+        SearchType searchType = request.getSearchType();
+        List<Filter> filters = request.getFiltersList();
+        boolean highlight = request.getHighlight();
+        List<FacetRequest> facetRequests = request.getFacetsList();
 
-		RequestLimitsValidator.validateRequestLimits(queryString, size);
+        RequestLimitsValidator.validateRequestLimits(queryString, size);
 
-		try {
-			SearchResult result;
-			if (searchType == SearchType.HYBRID) {
-				FusionStrategy fusionStrategy = request.getFusionStrategy();
-				result = searchExecutor.searchHybrid(
-						queryString,
-						partitionId,
-						page,
-						size,
-						indexService,
-						fusionStrategy,
-						filters,
-						highlight,
-						facetRequests);
-			} else {
-				result = searchExecutor.search(
-						queryString,
-						partitionId,
-						page,
-						size,
-						searchType,
-						indexService,
-						filters,
-						highlight,
-						facetRequests);
-			}
-			QueryResponse response = buildQueryResponse(result, page, size);
-			responseObserver.onNext(response);
-			responseObserver.onCompleted();
-		} catch (Exception e) {
-			LOGGER.log(Level.WARNING, "Failed to parse query: " + queryString, e);
-			responseObserver.onError(new ParseGoneWrongException("Failed to parse query: " + queryString, e));
-		}
-	}
+        try {
+            SearchResult result;
+            if (searchType == SearchType.HYBRID) {
+                FusionStrategy fusionStrategy = request.getFusionStrategy();
+                result = searchExecutor.searchHybrid(
+                        queryString,
+                        partitionId,
+                        page,
+                        size,
+                        indexService,
+                        fusionStrategy,
+                        filters,
+                        highlight,
+                        facetRequests);
+            } else {
+                result = searchExecutor.search(
+                        queryString,
+                        partitionId,
+                        page,
+                        size,
+                        searchType,
+                        indexService,
+                        filters,
+                        highlight,
+                        facetRequests);
+            }
+            QueryResponse response = buildQueryResponse(result, page, size);
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "Failed to parse query: " + queryString, e);
+            responseObserver.onError(new ParseGoneWrongException("Failed to parse query: " + queryString, e));
+        }
+    }
 
-	private QueryResponse buildQueryResponse(SearchResult result, int page, int size) {
-		QueryResponse.Builder respBuilder = QueryResponse.newBuilder()
-				.setTotalHits(result.getTotalHits())
-				.setPage(page)
-				.setSize(size);
-		for (com.danieljhkim.dsearch.common.model.SearchHit hit : result.getHits()) {
-			SearchHit.Builder hitBuilder = SearchHit.newBuilder()
-					.setDocId(hit.getDocId())
-					.setScore(hit.getScore());
+    private QueryResponse buildQueryResponse(SearchResult result, int page, int size) {
+        QueryResponse.Builder respBuilder = QueryResponse.newBuilder()
+                .setTotalHits(result.getTotalHits())
+                .setPage(page)
+                .setSize(size);
+        for (com.danieljhkim.dsearch.common.model.SearchHit hit : result.getHits()) {
+            SearchHit.Builder hitBuilder =
+                    SearchHit.newBuilder().setDocId(hit.getDocId()).setScore(hit.getScore());
 
-			if (hit.getTitle() != null) {
-				hitBuilder.setTitle(hit.getTitle());
-			}
-			if (hit.getContent() != null) {
-				hitBuilder.setContent(hit.getContent());
-			}
-			if (hit.getHighlightedFields() != null && !hit.getHighlightedFields().isEmpty()) {
-				hitBuilder.putAllHighlightedFields(hit.getHighlightedFields());
-			}
-			if (hit.getFields() != null && !hit.getFields().isEmpty()) {
-				hitBuilder.putAllFields(hit.getFields());
-			}
-			SearchHit protoHit = hitBuilder.build();
-			respBuilder.addHits(protoHit);
-		}
+            if (hit.getTitle() != null) {
+                hitBuilder.setTitle(hit.getTitle());
+            }
+            if (hit.getContent() != null) {
+                hitBuilder.setContent(hit.getContent());
+            }
+            if (hit.getHighlightedFields() != null
+                    && !hit.getHighlightedFields().isEmpty()) {
+                hitBuilder.putAllHighlightedFields(hit.getHighlightedFields());
+            }
+            if (hit.getFields() != null && !hit.getFields().isEmpty()) {
+                hitBuilder.putAllFields(hit.getFields());
+            }
+            SearchHit protoHit = hitBuilder.build();
+            respBuilder.addHits(protoHit);
+        }
 
-		// Add aggregated facets to response
-		if (result.getFacets() != null && !result.getFacets().isEmpty()) {
-			respBuilder.addAllFacets(result.getFacets());
-		}
+        // Add aggregated facets to response
+        if (result.getFacets() != null && !result.getFacets().isEmpty()) {
+            respBuilder.addAllFacets(result.getFacets());
+        }
 
-		return respBuilder.build();
-	}
+        return respBuilder.build();
+    }
 }

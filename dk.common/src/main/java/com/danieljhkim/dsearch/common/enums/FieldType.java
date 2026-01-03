@@ -5,28 +5,28 @@ package com.danieljhkim.dsearch.common.enums;
  * Used to determine how fields are indexed and queried in Lucene.
  */
 public enum FieldType {
-	/**
-	 * String field - indexed as exact match (StringField) or full-text (TextField)
-	 */
-	STRING,
+    /**
+     * String field - indexed as exact match (StringField) or full-text (TextField)
+     */
+    STRING,
 
-	/**
-	 * Integer field - indexed using IntPoint for range queries
-	 */
-	INTEGER,
+    /**
+     * Integer field - indexed using IntPoint for range queries
+     */
+    INTEGER,
 
-	/**
-	 * Long field - indexed using LongPoint for range queries
-	 */
-	LONG,
+    /**
+     * Long field - indexed using LongPoint for range queries
+     */
+    LONG,
 
-	/**
-	 * Double field - indexed using DoublePoint for range queries
-	 */
-	DOUBLE,
+    /**
+     * Double field - indexed using DoublePoint for range queries
+     */
+    DOUBLE,
 
-	/**
-	 * Date field - stored as epoch milliseconds (long) for range queries
-	 */
-	DATE
+    /**
+     * Date field - stored as epoch milliseconds (long) for range queries
+     */
+    DATE
 }

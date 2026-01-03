@@ -7,17 +7,17 @@ import org.junit.jupiter.api.Test;
 
 class IndexNodeApplicationTest {
 
-	@Test
-	void testApplicationClassExists() {
-		assertNotNull(IndexNodeApplication.class);
-	}
+    @Test
+    void testApplicationClassExists() {
+        assertNotNull(IndexNodeApplication.class);
+    }
 
-	@Test
-	void testMainMethodExists() {
-		// Verify main method exists and is accessible
-		assertDoesNotThrow(() -> {
-			java.lang.reflect.Method mainMethod = IndexNodeApplication.class.getMethod("main", String[].class);
-			assertNotNull(mainMethod);
-		});
-	}
+    @Test
+    void testMainMethodExists() {
+        // Verify main method exists and is accessible
+        assertDoesNotThrow(() -> {
+            java.lang.reflect.Method mainMethod = IndexNodeApplication.class.getMethod("main", String[].class);
+            assertNotNull(mainMethod);
+        });
+    }
 }

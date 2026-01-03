@@ -7,15 +7,13 @@ import lombok.Setter;
 @Getter
 public class IndexResponseDto {
 
-	private String id;
-	private boolean success;
+    private String id;
+    private boolean success;
 
-	public IndexResponseDto() {
-	}
+    public IndexResponseDto() {}
 
-	public IndexResponseDto(String id, boolean success) {
-		this.id = id;
-		this.success = success;
-	}
-
+    public IndexResponseDto(String id, boolean success) {
+        this.id = id;
+        this.success = success;
+    }
 }

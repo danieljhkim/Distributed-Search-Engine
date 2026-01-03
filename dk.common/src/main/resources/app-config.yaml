@@ -9,7 +9,7 @@ indexNodes:
     - id: "0"
       host: "localhost"
       port: 5000
-      healthPort: "5100"
+      healthPort: 5100
     - id: "1"
       host: "localhost"
       port: 5001
