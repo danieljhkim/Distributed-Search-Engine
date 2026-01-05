@@ -5,6 +5,7 @@ serviceDiscovery:
 indexNodes:
   routingStrategy: "LEAST_LOADED"
   componentLabel: "dsearch-index-node"
+  replicationFactor: 2
   nodes:
     - id: "0"
       host: "localhost"

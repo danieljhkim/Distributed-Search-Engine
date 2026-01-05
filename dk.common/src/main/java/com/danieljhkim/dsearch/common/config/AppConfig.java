@@ -36,6 +36,7 @@ public class AppConfig {
         private List<NodeConfig> nodes;
         private RoutingStrategy routingStrategy;
         private String componentLabel;
+        private int replicationFactor = 1;
 
         @Override
         public String toString() {

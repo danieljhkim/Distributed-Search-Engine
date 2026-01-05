@@ -23,6 +23,7 @@ public class QueryNodeServer {
 
     private final Server server;
     private HTTPServer metricsServer;
+    private final int prometheusPort;
 
     public QueryNodeServer(
             int port, SearchExecutor searchExecutor, BaseIndexService indexService, AppConfig appConfig) {
@@ -35,12 +36,12 @@ public class QueryNodeServer {
                 .intercept(new CorrelationIdServerInterceptor())
                 .intercept(new PrometheusGrpcServerInterceptor())
                 .build();
-
-        startPrometheusMetricsServer(port + 2000);
+        this.prometheusPort = port + 2000;
     }
 
     public void start() throws IOException, InterruptedException {
         server.start();
+        startPrometheusMetricsServer(this.prometheusPort);
         server.awaitTermination();
     }
 

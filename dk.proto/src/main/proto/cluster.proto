@@ -33,6 +33,7 @@ message GetClusterInfoResponse {
     repeated NodeInfo nodes = 1;
     string routingStrategy = 2;
     string componentLabel = 3;
+    int32 replicationFactor = 4;
 }
 
 message HeartbeatRequest {

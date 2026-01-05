@@ -1,5 +1,7 @@
 package com.danieljhkim.dsearch.common.grpc;
 
+import com.danieljhkim.dsearch.common.cluster.NodeGroup;
+import com.danieljhkim.dsearch.common.cluster.NodeGroupManager;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.config.ConfigLoader;
 import com.danieljhkim.dsearch.common.enums.RoutingStrategy;
@@ -8,18 +10,13 @@ import com.danieljhkim.dsearch.common.shard.ShardState;
 import com.danieljhkim.dsearch.common.shard.ShardStateStore;
 import com.danieljhkim.dsearch.common.tracing.CorrelationIdClientInterceptor;
 import com.danieljhkim.dsearch.proto.cluster.ClusterServiceGrpc;
-import com.danieljhkim.dsearch.proto.cluster.GetClusterInfoRequest;
-import com.danieljhkim.dsearch.proto.cluster.GetClusterInfoResponse;
-import com.danieljhkim.dsearch.proto.cluster.NodeInfo;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import io.grpc.Channel;
 import io.grpc.ClientInterceptors;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.Executors;
@@ -35,14 +32,20 @@ public class NodeClientManager<T> {
 
     private static final Logger LOGGER = Logger.getLogger(NodeClientManager.class.getName());
     private static final CorrelationIdClientInterceptor tracingInterceptor = new CorrelationIdClientInterceptor();
+
+    @Getter
     private static NodeClientManager<ClusterServiceGrpc.ClusterServiceBlockingStub> coordinatorManager;
+
     private static AppConfig defaultConfig;
     private static PrometheusGrpcClientInterceptor metricsInterceptor;
+    private static NodeGroupManager nodeGroupManager;
 
     static {
         try {
             defaultConfig = ConfigLoader.load();
+            nodeGroupManager = new NodeGroupManager();
             coordinatorManager = loadClientManager(NodeRole.NODE_ROLE_COORDINATOR, ClusterServiceGrpc::newBlockingStub);
+            nodeGroupManager.setCoordinatorManager(coordinatorManager);
         } catch (IOException | RuntimeException e) {
             LOGGER.log(Level.SEVERE, "Failed to load application configuration", e);
         }
@@ -82,13 +85,13 @@ public class NodeClientManager<T> {
     }
 
     public static <T> NodeClientManager<T> loadClientManager(NodeRole role, Function<Channel, T> clientFactory) {
-        AppConfig.NodeGroupConfig appConfig = getNodeGroupConfig(role);
+        NodeGroup appConfig = nodeGroupManager.getNodeGroup(role);
         if (metricsInterceptor == null) {
             String component = appConfig.getComponentLabel() != null ? appConfig.getComponentLabel() : "gateway";
             metricsInterceptor = new PrometheusGrpcClientInterceptor(component);
         }
-        Map<String, NodeClient<T>> clientMap = appConfig.getNodes().stream()
-                .collect(Collectors.toMap(node -> String.valueOf(node.getId()), node -> {
+        Map<String, NodeClient<T>> clientMap = appConfig.getAllNodes().stream()
+                .collect(Collectors.toMap(node -> String.valueOf(node.getNodeId()), node -> {
                     ManagedChannel channel = ManagedChannelBuilder.forAddress(node.getHost(), node.getPort())
                             .usePlaintext()
                             .build();
@@ -96,68 +99,9 @@ public class NodeClientManager<T> {
                             ClientInterceptors.intercept(channel, tracingInterceptor, metricsInterceptor);
                     T stub = clientFactory.apply(interceptedChannel);
                     return new NodeClient<>(
-                            String.valueOf(node.getId()), stub, channel, node.getHost(), node.getHealthPort());
+                            String.valueOf(node.getNodeId()), stub, channel, node.getHost(), node.getHealthPort());
                 }));
         return new NodeClientManager<>(clientMap, appConfig.getRoutingStrategy(), role, clientFactory);
-    }
-
-    @SuppressWarnings("all")
-    public static AppConfig.NodeGroupConfig getNodeGroupConfig(NodeRole role) {
-        if (role == NodeRole.NODE_ROLE_COORDINATOR) {
-            // hack: for coordinator role, use static config.
-            return getStaticNodeGroupConfig(role);
-        }
-        // If service discovery is disabled just use the static config from
-        // app-config.yaml
-        if (!isServiceDiscoveryEnabled()
-                || coordinatorManager == null
-                || defaultConfig == null
-                || defaultConfig.getCoordinatorNodes() == null) {
-            return getStaticNodeGroupConfig(role);
-        }
-        GetClusterInfoRequest request =
-                GetClusterInfoRequest.newBuilder().setRole(role).build();
-        try {
-            GetClusterInfoResponse response = coordinatorManager.nextClient().getClusterInfo(request);
-            AppConfig.NodeGroupConfig nodeGroupConfig = new AppConfig.NodeGroupConfig();
-            nodeGroupConfig.setComponentLabel(response.getComponentLabel());
-            nodeGroupConfig.setRoutingStrategy(RoutingStrategy.valueOf(response.getRoutingStrategy()));
-
-            List<AppConfig.NodeConfig> nodeConfigs = new ArrayList<>();
-            for (NodeInfo nodeProto : response.getNodesList()) {
-                AppConfig.NodeConfig nodeConfig = new AppConfig.NodeConfig();
-                nodeConfig.setId(nodeProto.getNodeId());
-                nodeConfig.setHost(nodeProto.getHost());
-                nodeConfig.setPort(nodeProto.getPort());
-                nodeConfig.setHealthPort(nodeProto.getHealthPort());
-                nodeConfigs.add(nodeConfig);
-            }
-            nodeGroupConfig.setNodes(nodeConfigs);
-            return nodeGroupConfig;
-        } catch (Exception e) {
-            LOGGER.warning(() -> "Failed to fetch cluster info from coordinator for role " + role
-                    + ". Falling back to static configuration. Cause: " + e.toString());
-            return getStaticNodeGroupConfig(role);
-        }
-    }
-
-    private static AppConfig.NodeGroupConfig getStaticNodeGroupConfig(NodeRole role) {
-        if (defaultConfig == null) {
-            return null;
-        }
-        return switch (role) {
-            case NODE_ROLE_INDEX -> defaultConfig.getIndexNodes();
-            case NODE_ROLE_QUERY -> defaultConfig.getQueryNodes();
-            case NODE_ROLE_COORDINATOR -> defaultConfig.getCoordinatorNodes();
-            default -> throw new IllegalArgumentException("Unsupported role: " + role);
-        };
-    }
-
-    private static boolean isServiceDiscoveryEnabled() {
-        if (defaultConfig == null || defaultConfig.getServiceDiscovery() == null) {
-            return false;
-        }
-        return defaultConfig.getServiceDiscovery().isEnabled();
     }
 
     /**
@@ -243,27 +187,27 @@ public class NodeClientManager<T> {
         for (NodeClient<T> client : clientMap.values()) {
             client.setActive(false);
         }
-        AppConfig.NodeGroupConfig cfg = getNodeGroupConfig(this.nodeRole);
+        NodeGroup cfg = nodeGroupManager.getNodeGroup(this.nodeRole);
         if (cfg == null || cfg.getNodes() == null) {
             return;
         }
-        for (AppConfig.NodeConfig nodeConfig : cfg.getNodes()) {
-            NodeClient<T> existing = clientMap.get(nodeConfig.getId());
+        for (NodeGroup.NodeInfo nodeConfig : cfg.getAllNodes()) {
+            NodeClient<T> existing = clientMap.get(nodeConfig.getNodeId());
             if (existing == null) {
-                clientMap.put(nodeConfig.getId(), initClient(nodeConfig));
+                clientMap.put(nodeConfig.getNodeId(), initClient(nodeConfig));
             } else {
                 existing.setActive(true);
             }
         }
     }
 
-    private NodeClient<T> initClient(AppConfig.NodeConfig node) {
+    private NodeClient<T> initClient(NodeGroup.NodeInfo node) {
         ManagedChannel channel = ManagedChannelBuilder.forAddress(node.getHost(), node.getPort())
                 .usePlaintext()
                 .build();
         Channel interceptedChannel = ClientInterceptors.intercept(channel, tracingInterceptor, metricsInterceptor);
         T stub = clientFactory.apply(interceptedChannel);
-        return new NodeClient<>(String.valueOf(node.getId()), stub, channel, node.getHost(), node.getHealthPort());
+        return new NodeClient<>(String.valueOf(node.getNodeId()), stub, channel, node.getHost(), node.getHealthPort());
     }
 
     public void shutdown() {

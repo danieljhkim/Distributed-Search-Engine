@@ -1,5 +1,6 @@
 package com.danieljhkim.dsearch.coordinator.grpc;
 
+import com.danieljhkim.dsearch.common.cluster.NodeGroup;
 import com.danieljhkim.dsearch.coordinator.cluster.ClusterMembershipService;
 import com.danieljhkim.dsearch.proto.cluster.ClusterServiceGrpc;
 import com.danieljhkim.dsearch.proto.cluster.GetClusterInfoRequest;
@@ -21,8 +22,9 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
 
     @Override
     public void registerNode(RegisterNodeRequest request, StreamObserver<RegisterNodeResponse> responseObserver) {
+        // TODO: Validate request fields
         membershipService.registerNode(
-                new ClusterMembershipService.NodeInfo(
+                new NodeGroup.NodeInfo(
                         request.getNodeId(),
                         request.getHost(),
                         request.getPort(),
@@ -40,13 +42,7 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
     public void getClusterInfo(GetClusterInfoRequest request, StreamObserver<GetClusterInfoResponse> responseObserver) {
         try {
             NodeRole role = request.getRole();
-            ClusterMembershipService.NodeGroup group =
-                    switch (role) {
-                        case NODE_ROLE_INDEX -> membershipService.getIndexGroup();
-                        case NODE_ROLE_QUERY -> membershipService.getQueryGroup();
-                        case NODE_ROLE_COORDINATOR -> membershipService.getCoordinatorGroup();
-                        default -> null;
-                    };
+            NodeGroup group = membershipService.resolveGroup(role);
             if (group == null) {
                 responseObserver.onError(Status.NOT_FOUND
                         .withDescription("No node group registered for role: " + role)
@@ -57,15 +53,15 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
                     .setComponentLabel(group.getComponentLabel())
                     .setRoutingStrategy(group.getRoutingStrategy().name());
 
-            for (ClusterMembershipService.NodeInfo ni : group.getAllNodes()) {
+            for (NodeGroup.NodeInfo ni : group.getAllNodes()) {
                 if (!ni.isHealthy()) {
                     continue;
                 }
                 resp.addNodes(NodeInfo.newBuilder()
-                        .setNodeId(ni.nodeId())
-                        .setHost(ni.host())
-                        .setPort(ni.port())
-                        .setHealthPort(ni.healthPort())
+                        .setNodeId(ni.getNodeId())
+                        .setHost(ni.getHost())
+                        .setPort(ni.getPort())
+                        .setHealthPort(ni.getHealthPort())
                         .setRole(role)
                         .build());
             }
