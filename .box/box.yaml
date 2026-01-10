@@ -43,6 +43,18 @@ commands:
   report:
     run: ".box/scripts/report.sh"
     description: "Summarize latest test artifacts in .box/reports/."
+  api-metrics:
+    run: ".box/scripts/api-metrics.sh"
+    description: "Fetch Prometheus metrics from /actuator/prometheus"
+  api-cluster-status:
+    run: ".box/scripts/api-cluster-status.sh"
+    description: "Get detailed cluster status via /cluster/health"
+  api-search:
+    run: ".box/scripts/api-search.sh"
+    description: "Execute search query via /api/v1/search (pass JSON as arg)"
+  api-index:
+    run: ".box/scripts/api-index.sh"
+    description: "Index a document via /api/v1/index (pass JSON as arg)"
 
 artifacts:
   logs_dir: "logs/"
