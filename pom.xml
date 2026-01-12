@@ -30,8 +30,8 @@
     <properties>
         <maven.compiler.release>21</maven.compiler.release>
         <spring.boot.version>3.3.0</spring.boot.version>
-        <grpc.version>1.65.0</grpc.version>
-        <protobuf.version>3.25.3</protobuf.version>
+        <grpc.version>1.78.0</grpc.version>
+        <protobuf.version>3.25.8</protobuf.version>
         <lucene.version>9.8.0</lucene.version>
         <lombok.version>1.18.42</lombok.version>
         <junit.jupiter.version>5.10.2</junit.jupiter.version>
