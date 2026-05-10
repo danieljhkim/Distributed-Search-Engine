@@ -269,6 +269,10 @@ public class NodeClientManager<T> {
         rebuildActiveClientSnapshot();
     }
 
+    public List<String> getActiveNodeIds() {
+        return activeClientsSnapshot().stream().map(NodeClient::getNodeId).toList();
+    }
+
     List<NodeClient<T>> activeClientsSnapshot() {
         return activeClients;
     }
