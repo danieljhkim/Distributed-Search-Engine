@@ -10,6 +10,7 @@ import com.danieljhkim.dsearch.common.model.SearchResult;
 import com.danieljhkim.dsearch.indexnode.index.facet.FacetCalculator;
 import com.danieljhkim.dsearch.indexnode.index.highlight.TextHighlighter;
 import com.danieljhkim.dsearch.indexnode.index.query.FilterQueryBuilder;
+import com.danieljhkim.dsearch.ml.embedding.TextEmbedder;
 import com.danieljhkim.dsearch.ml.embedding.TextEmbeddingService;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.FacetResponse;
@@ -23,6 +24,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.logging.Level;
 import lombok.Getter;
@@ -84,7 +86,8 @@ public class ShardIndex implements Closeable {
     private final Analyzer analyzer;
     private final IndexWriter indexWriter;
     private final SearcherManager searcherManager;
-    private final TextEmbeddingService embeddingService;
+    private final TextEmbedder embeddingService;
+    private final Closeable ownedEmbeddingService;
 
     // Query builders for filters, highlighting, and faceting
     private final FilterQueryBuilder filterQueryBuilder;
@@ -97,6 +100,20 @@ public class ShardIndex implements Closeable {
     }
 
     public ShardIndex(String shardId, Path baseDir, Map<String, FieldConfig> fieldConfigMap) {
+        this(shardId, baseDir, fieldConfigMap, new TextEmbeddingService(), true);
+    }
+
+    public ShardIndex(
+            String shardId, Path baseDir, Map<String, FieldConfig> fieldConfigMap, TextEmbedder embeddingService) {
+        this(shardId, baseDir, fieldConfigMap, embeddingService, false);
+    }
+
+    private ShardIndex(
+            String shardId,
+            Path baseDir,
+            Map<String, FieldConfig> fieldConfigMap,
+            TextEmbedder embeddingService,
+            boolean ownsEmbeddingService) {
         try {
             this.shardId = shardId;
             this.indexPath = baseDir.resolve("shard-" + shardId);
@@ -113,7 +130,9 @@ public class ShardIndex implements Closeable {
                 indexWriter.commit();
             }
 
-            this.embeddingService = new TextEmbeddingService();
+            this.embeddingService = Objects.requireNonNull(embeddingService, "embeddingService");
+            this.ownedEmbeddingService =
+                    ownsEmbeddingService && embeddingService instanceof Closeable closeable ? closeable : null;
             DirectoryReader initialReader = DirectoryReader.open(directory);
             this.searcherManager = new SearcherManager(initialReader, null);
 
@@ -565,11 +584,27 @@ public class ShardIndex implements Closeable {
         try {
             analyzer.close();
         } catch (Exception e) {
-            if (first != null) {
-                throw first;
+            IOException closeFailure = e instanceof IOException ioException
+                    ? ioException
+                    : new IOException("Failed to close analyzer for shard " + shardId, e);
+            if (first == null) {
+                first = closeFailure;
             } else {
                 LOGGER.log(Level.WARNING, "Suppressed exception while closing analyzer for shard " + shardId, e);
-                throw e;
+                first.addSuppressed(closeFailure);
+            }
+        }
+        try {
+            if (ownedEmbeddingService != null) {
+                ownedEmbeddingService.close();
+            }
+        } catch (IOException e) {
+            if (first == null) {
+                first = e;
+            } else {
+                LOGGER.log(
+                        Level.WARNING, "Suppressed exception while closing embedding service for shard " + shardId, e);
+                first.addSuppressed(e);
             }
         }
         if (first != null) throw first;
