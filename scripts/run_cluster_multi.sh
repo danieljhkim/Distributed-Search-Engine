@@ -95,7 +95,7 @@ start_query_nodes() {
 start_gateway() {
   echo "Starting Gateway..."
 
-  # Gateway talks to coordinator; your Java code can call ClusterService to get shard map
+  # Gateway can talk to coordinator for health-aware node discovery; shard-map RPC is deferred.
   export COORDINATOR_HOST="localhost"
   export COORDINATOR_PORT
   export SERVER_PORT="$GATEWAY_PORT"   # Spring Boot

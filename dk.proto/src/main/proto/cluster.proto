@@ -26,6 +26,7 @@ message RegisterNodeResponse {
 
 message GetClusterInfoRequest {
   NodeRole role = 1;
+  // Reserved for future partition-aware discovery. Current coordinator ignores this field.
   string partition_id = 2;
 }
 
@@ -33,9 +34,12 @@ message GetClusterInfoResponse {
     repeated NodeInfo nodes = 1;
     string routingStrategy = 2;
     string componentLabel = 3;
+    // Current runtime has no replication layer; coordinator returns 1.
     int32 replicationFactor = 4;
 }
 
+// Deferred. The current coordinator uses HTTP health checks instead of client heartbeats
+// and returns UNIMPLEMENTED for this RPC.
 message HeartbeatRequest {
   string node_id = 1;
 }
@@ -44,6 +48,8 @@ message HeartbeatResponse {
   bool success = 1;
 }
 
+// Deferred. The gateway/index-node runtime owns shard placement today and the
+// coordinator returns UNIMPLEMENTED for this RPC.
 message GetShardMapRequest {}
 
 message ShardLocation {
