@@ -16,6 +16,7 @@ import com.danieljhkim.dsearch.proto.common.FacetBucket;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.FacetResponse;
 import com.danieljhkim.dsearch.proto.common.Filter;
+import com.danieljhkim.dsearch.proto.common.FusionStrategy;
 import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
 import com.danieljhkim.dsearch.querynode.grpc.BaseIndexService;
@@ -44,6 +45,44 @@ class SearchExecutorTest {
         if (shardExecutor != null) {
             shardExecutor.shutdownNow();
         }
+    }
+
+    @Test
+    void successfulFanoutAcrossMultipleNodesSortsAndPaginatesHitsWithFields() {
+        RecordingIndexService indexService = new RecordingIndexService()
+                .success(
+                        "1",
+                        result(
+                                List.of(
+                                        hit("doc-low", 1.0f, Map.of("source", "node-1", "rank", "4")),
+                                        hit("doc-high", 9.0f, Map.of("source", "node-1", "rank", "2"))),
+                                7,
+                                null))
+                .success(
+                        "2",
+                        result(
+                                List.of(
+                                        hit("doc-top", 10.0f, Map.of("source", "node-2", "rank", "1")),
+                                        hit("doc-mid", 7.0f, Map.of("source", "node-2", "rank", "3"))),
+                                5,
+                                null));
+
+        SearchResult result = searchExecutor(node("1", true), node("2", true))
+                .search("coffee", "shard-a", 1, 2, SearchType.BM25, indexService);
+
+        assertDocIds(List.of("doc-mid", "doc-low"), result);
+        assertEquals(12L, result.getTotalHits());
+        assertEquals(1, result.getPage());
+
+        SearchHit firstHit = result.getHits().getFirst();
+        assertEquals("title-doc-mid", firstHit.getTitle());
+        assertEquals("content-doc-mid", firstHit.getContent());
+        assertEquals(Map.of("source", "node-2", "rank", "3"), firstHit.getFields());
+        assertEquals(Map.of("content", "highlight-doc-mid"), firstHit.getHighlightedFields());
+
+        assertEquals(2, indexService.calls().size());
+        assertTrue(indexService.calls().stream().allMatch(call -> call.searchType() == SearchType.BM25));
+        assertTrue(indexService.calls().stream().allMatch(call -> call.topK() == 4));
     }
 
     @Test
@@ -137,7 +176,65 @@ class SearchExecutorTest {
         assertEquals(2L, result.getTotalHits());
         assertEquals(1, result.getFacets().size());
         assertEquals("category", result.getFacets().getFirst().getField());
+        assertEquals(
+                List.of("a", "c"),
+                result.getFacets().getFirst().getBucketsList().stream()
+                        .map(FacetBucket::getValue)
+                        .toList());
         assertEquals(Map.of("a", 5L, "c", 4L), bucketCounts(result.getFacets().getFirst()));
+    }
+
+    @Test
+    void hybridSearchFusesBm25AndSemanticResultsWithDeterministicScoreOrdering() {
+        RecordingIndexService indexService = new RecordingIndexService()
+                .success(
+                        "1",
+                        SearchType.BM25,
+                        result(
+                                List.of(
+                                        hit("doc-a", 10.0f, Map.of("source", "bm25", "node", "1")),
+                                        hit("doc-c", 1.0f, Map.of("source", "bm25", "node", "1"))),
+                                2,
+                                null))
+                .success(
+                        "2",
+                        SearchType.BM25,
+                        result(List.of(hit("doc-b", 5.0f, Map.of("source", "bm25", "node", "2"))), 1, null))
+                .success(
+                        "1",
+                        SearchType.SEMANTIC,
+                        result(
+                                List.of(
+                                        hit("doc-b", 9.0f, Map.of("source", "semantic", "node", "1")),
+                                        hit("doc-d", 2.0f, Map.of("source", "semantic", "node", "1"))),
+                                2,
+                                null))
+                .success(
+                        "2",
+                        SearchType.SEMANTIC,
+                        result(List.of(hit("doc-c", 6.0f, Map.of("source", "semantic", "node", "2"))), 1, null));
+
+        SearchResult result = searchExecutor(node("1", true), node("2", true))
+                .searchHybrid("coffee", "shard-a", 0, 3, indexService, FusionStrategy.WEIGHTED);
+
+        assertDocIds(List.of("doc-b", "doc-a", "doc-c"), result);
+        assertEquals(3L, result.getTotalHits());
+        assertEquals("bm25", result.getHits().getFirst().getFields().get("source"));
+        assertTrue(result.getHits().get(0).getScore() > result.getHits().get(1).getScore());
+        assertTrue(result.getHits().get(1).getScore() > result.getHits().get(2).getScore());
+
+        assertEquals(4, indexService.calls().size());
+        assertEquals(
+                2,
+                indexService.calls().stream()
+                        .filter(call -> call.searchType() == SearchType.BM25)
+                        .count());
+        assertEquals(
+                2,
+                indexService.calls().stream()
+                        .filter(call -> call.searchType() == SearchType.SEMANTIC)
+                        .count());
+        assertTrue(indexService.calls().stream().allMatch(call -> call.topK() == 3));
     }
 
     private SearchExecutor searchExecutor(NodeSpec... nodes) {
@@ -173,12 +270,27 @@ class SearchExecutorTest {
         return new SearchHit(docId, "title-" + docId, "content-" + docId, score);
     }
 
+    private static SearchHit hit(String docId, float score, Map<String, String> fields) {
+        return new SearchHit(
+                docId, "title-" + docId, "content-" + docId, score, Map.of("content", "highlight-" + docId), fields);
+    }
+
     private static SearchResult result(SearchHit hit) {
         return result(List.of(hit), null);
     }
 
     private static SearchResult result(List<SearchHit> hits, List<FacetResponse> facets) {
         return new SearchResult(hits, hits.size(), 0, facets);
+    }
+
+    private static SearchResult result(List<SearchHit> hits, long totalHits, List<FacetResponse> facets) {
+        return new SearchResult(hits, totalHits, 0, facets);
+    }
+
+    private static void assertDocIds(List<String> expectedDocIds, SearchResult result) {
+        assertEquals(
+                expectedDocIds,
+                result.getHits().stream().map(SearchHit::getDocId).toList());
     }
 
     private static FacetResponse facet(String field, Bucket... buckets) {
@@ -212,22 +324,41 @@ class SearchExecutorTest {
 
     private record Bucket(String value, long count) {}
 
+    private record RequestKey(String nodeId, SearchType searchType) {}
+
+    private record SearchCall(
+            String nodeId,
+            String shardId,
+            int topK,
+            SearchType searchType,
+            List<Filter> filters,
+            boolean highlight,
+            List<FacetRequest> facetRequests,
+            Duration deadline) {}
+
     private interface NodeBehavior {
         SearchResult execute();
     }
 
     private static final class RecordingIndexService implements BaseIndexService {
-        private final Map<String, NodeBehavior> behaviors = new ConcurrentHashMap<>();
+        private final Map<String, NodeBehavior> nodeBehaviors = new ConcurrentHashMap<>();
+        private final Map<RequestKey, NodeBehavior> typedBehaviors = new ConcurrentHashMap<>();
         private final List<String> calledNodes = Collections.synchronizedList(new ArrayList<>());
         private final List<Duration> deadlines = Collections.synchronizedList(new ArrayList<>());
+        private final List<SearchCall> calls = Collections.synchronizedList(new ArrayList<>());
 
         RecordingIndexService success(String nodeId, SearchResult result) {
-            behaviors.put(nodeId, () -> result);
+            nodeBehaviors.put(nodeId, () -> result);
+            return this;
+        }
+
+        RecordingIndexService success(String nodeId, SearchType searchType, SearchResult result) {
+            typedBehaviors.put(new RequestKey(nodeId, searchType), () -> result);
             return this;
         }
 
         RecordingIndexService slowSuccess(String nodeId, Duration delay, SearchResult result) {
-            behaviors.put(nodeId, () -> {
+            nodeBehaviors.put(nodeId, () -> {
                 try {
                     Thread.sleep(delay.toMillis());
                 } catch (InterruptedException e) {
@@ -240,7 +371,7 @@ class SearchExecutorTest {
         }
 
         RecordingIndexService failure(String nodeId, RuntimeException failure) {
-            behaviors.put(nodeId, () -> {
+            nodeBehaviors.put(nodeId, () -> {
                 throw failure;
             });
             return this;
@@ -265,7 +396,11 @@ class SearchExecutorTest {
                 Duration deadline) {
             calledNodes.add(nodeId);
             deadlines.add(deadline);
-            NodeBehavior behavior = behaviors.get(nodeId);
+            calls.add(new SearchCall(nodeId, shardId, topK, searchType, filters, highlight, facetRequests, deadline));
+            NodeBehavior behavior = typedBehaviors.get(new RequestKey(nodeId, searchType));
+            if (behavior == null) {
+                behavior = nodeBehaviors.get(nodeId);
+            }
             if (behavior == null) {
                 throw new AssertionError("Unexpected node call: " + nodeId);
             }
@@ -278,6 +413,10 @@ class SearchExecutorTest {
 
         List<Duration> deadlines() {
             return List.copyOf(deadlines);
+        }
+
+        List<SearchCall> calls() {
+            return List.copyOf(calls);
         }
     }
 }
