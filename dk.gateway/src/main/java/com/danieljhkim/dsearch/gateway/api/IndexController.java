@@ -6,9 +6,12 @@ import com.danieljhkim.dsearch.gateway.service.GatewayIndexService;
 import io.micrometer.core.annotation.Timed;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -34,6 +37,23 @@ public class IndexController {
         } finally {
             sample.stop(Timer.builder("dsearch.gateway.index.latency")
                     .tag("partitionId", req.getPartitionId() != null ? req.getPartitionId() : "UNKNOWN")
+                    .register(meterRegistry));
+        }
+    }
+
+    @Timed(
+            value = "dsearch.delete.http",
+            extraTags = {"endpoint", "/api/v1/index/{id}"})
+    @DeleteMapping(value = "/{id}", produces = "application/json")
+    public IndexResponseDto deleteDocument(
+            @PathVariable("id") String id,
+            @RequestParam(name = "partitionId", defaultValue = "default") String partitionId) {
+        Timer.Sample sample = Timer.start(meterRegistry);
+        try {
+            return indexService.delete(id, partitionId);
+        } finally {
+            sample.stop(Timer.builder("dsearch.gateway.delete.latency")
+                    .tag("partitionId", partitionId != null ? partitionId : "UNKNOWN")
                     .register(meterRegistry));
         }
     }
