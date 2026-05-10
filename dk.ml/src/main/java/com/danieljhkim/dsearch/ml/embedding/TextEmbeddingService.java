@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -20,17 +21,20 @@ public class TextEmbeddingService implements TextEmbedder, Closeable {
     private final boolean predictorPerCall;
     private final BlockingQueue<Predictor<String, float[]>> predictorPool;
     private final List<Predictor<String, float[]>> pooledPredictors;
+    private final AtomicInteger embeddingDimension = new AtomicInteger();
 
     public TextEmbeddingService() {
         this(EmbeddingModelManager.getInstance());
     }
 
     TextEmbeddingService(EmbeddingModelManager modelManager) {
+        this(modelManager, predictorPerCall(modelManager), predictorPoolSize(modelManager));
+    }
+
+    TextEmbeddingService(EmbeddingModelManager modelManager, boolean predictorPerCall, int predictorPoolSize) {
         this.modelManager = Objects.requireNonNull(modelManager, "modelManager");
-        AppConfig.TextEmbeddingConfig config =
-                modelManager.getAppConfig().getMl().getModels().getTextEmbedding();
-        this.predictorPerCall = config.isPredictorPerCall();
-        int predictorPoolSize = Math.max(1, config.getPredictorPoolSize());
+        this.predictorPerCall = predictorPerCall;
+        predictorPoolSize = Math.max(1, predictorPoolSize);
         if (predictorPerCall) {
             this.predictorPool = null;
             this.pooledPredictors = new ArrayList<>();
@@ -44,6 +48,54 @@ public class TextEmbeddingService implements TextEmbedder, Closeable {
                 pooledPredictors.add(predictor);
             }
         }
+    }
+
+    private static boolean predictorPerCall(EmbeddingModelManager modelManager) {
+        return booleanConfigValue(
+                textEmbeddingConfig(modelManager), false, "isPredictorPerCall", "getPredictorPerCall");
+    }
+
+    private static int predictorPoolSize(EmbeddingModelManager modelManager) {
+        return intConfigValue(textEmbeddingConfig(modelManager), 1, "getPredictorPoolSize");
+    }
+
+    private static AppConfig.TextEmbeddingConfig textEmbeddingConfig(EmbeddingModelManager modelManager) {
+        return Objects.requireNonNull(modelManager, "modelManager")
+                .getAppConfig()
+                .getMl()
+                .getModels()
+                .getTextEmbedding();
+    }
+
+    private static boolean booleanConfigValue(
+            AppConfig.TextEmbeddingConfig config, boolean defaultValue, String... methodNames) {
+        for (String methodName : methodNames) {
+            try {
+                Object value = config.getClass().getMethod(methodName).invoke(config);
+                if (value instanceof Boolean booleanValue) {
+                    return booleanValue;
+                }
+            } catch (NoSuchMethodException e) {
+                // Older dk.common snapshots did not expose this optional setting.
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException("Failed to read text embedding config method: " + methodName, e);
+            }
+        }
+        return defaultValue;
+    }
+
+    private static int intConfigValue(AppConfig.TextEmbeddingConfig config, int defaultValue, String methodName) {
+        try {
+            Object value = config.getClass().getMethod(methodName).invoke(config);
+            if (value instanceof Number numberValue) {
+                return numberValue.intValue();
+            }
+        } catch (NoSuchMethodException e) {
+            // Older dk.common snapshots did not expose this optional setting.
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Failed to read text embedding config method: " + methodName, e);
+        }
+        return defaultValue;
     }
 
     /**
@@ -61,7 +113,7 @@ public class TextEmbeddingService implements TextEmbedder, Closeable {
 
         Predictor<String, float[]> predictor = borrowPredictor();
         try {
-            return predictor.predict(text);
+            return validateEmbedding(predictor.predict(text));
         } catch (TranslateException e) {
             LOGGER.log(Level.SEVERE, "Failed to compute embedding", e);
             throw new RuntimeException("Failed to compute embedding", e);
@@ -73,11 +125,32 @@ public class TextEmbeddingService implements TextEmbedder, Closeable {
     private float[] embedWithNewPredictor(String text) {
         try (Predictor<String, float[]> predictor =
                 modelManager.getDefaultModel().newPredictor()) {
-            return predictor.predict(text);
+            return validateEmbedding(predictor.predict(text));
         } catch (TranslateException e) {
             LOGGER.log(Level.SEVERE, "Failed to compute embedding", e);
             throw new RuntimeException("Failed to compute embedding", e);
         }
+    }
+
+    private float[] validateEmbedding(float[] embedding) {
+        if (embedding == null) {
+            throw new IllegalStateException("Embedding predictor returned null");
+        }
+        if (embedding.length == 0) {
+            throw new IllegalStateException("Embedding predictor returned an empty vector");
+        }
+
+        int knownDimension = embeddingDimension.get();
+        if (knownDimension == 0 && embeddingDimension.compareAndSet(0, embedding.length)) {
+            return embedding;
+        }
+
+        int expectedDimension = embeddingDimension.get();
+        if (embedding.length != expectedDimension) {
+            throw new IllegalStateException(
+                    "Embedding dimension changed from " + expectedDimension + " to " + embedding.length);
+        }
+        return embedding;
     }
 
     private Predictor<String, float[]> borrowPredictor() {

@@ -9,6 +9,7 @@ import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.config.ConfigLoader;
 import java.io.IOException;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -22,14 +23,20 @@ public class EmbeddingModelManager {
     private final AppConfig appConfig;
     private final String DEFAULT_MODEL_URL;
     private final String DEFAULT_ENGINE;
+    private final ModelLoader modelLoader;
     private final Map<String, ZooModel<String, float[]>> modelCache = new ConcurrentHashMap<>();
     private ZooModel<String, float[]> defaultModel;
 
     private EmbeddingModelManager() throws IOException {
-        this.appConfig = ConfigLoader.load();
+        this(ConfigLoader.load(), EmbeddingModelManager::loadModel);
+    }
+
+    EmbeddingModelManager(AppConfig appConfig, ModelLoader modelLoader) {
+        this.appConfig = Objects.requireNonNull(appConfig, "appConfig");
         this.DEFAULT_MODEL_URL =
                 appConfig.getMl().getModels().getTextEmbedding().getUrl();
         this.DEFAULT_ENGINE = appConfig.getMl().getModels().getTextEmbedding().getEngine();
+        this.modelLoader = Objects.requireNonNull(modelLoader, "modelLoader");
     }
 
     public static EmbeddingModelManager getInstance() {
@@ -51,12 +58,12 @@ public class EmbeddingModelManager {
 
     private void init() {
         LOGGER.info(() -> "Loading default embedding model: " + DEFAULT_MODEL_URL);
-        this.defaultModel = loadModel(DEFAULT_MODEL_URL, DEFAULT_ENGINE);
+        this.defaultModel = modelLoader.load(DEFAULT_MODEL_URL, DEFAULT_ENGINE);
         modelCache.put(DEFAULT_MODEL_URL, this.defaultModel);
         LOGGER.info(() -> "Default embedding model loaded successfully: " + DEFAULT_MODEL_URL);
     }
 
-    private ZooModel<String, float[]> loadModel(String modelUrl, String engine) {
+    private static ZooModel<String, float[]> loadModel(String modelUrl, String engine) {
         try {
             Criteria<String, float[]> criteria = Criteria.builder()
                     .setTypes(String.class, float[].class)
@@ -82,7 +89,7 @@ public class EmbeddingModelManager {
             if (cached != null) {
                 return cached;
             }
-            ZooModel<String, float[]> loaded = loadModel(modelUrl, engine);
+            ZooModel<String, float[]> loaded = modelLoader.load(modelUrl, engine);
             modelCache.put(modelUrl, loaded);
             return loaded;
         }
@@ -92,5 +99,10 @@ public class EmbeddingModelManager {
         modelCache.values().forEach(ZooModel::close);
         modelCache.clear();
         defaultModel = null;
+    }
+
+    @FunctionalInterface
+    interface ModelLoader {
+        ZooModel<String, float[]> load(String modelUrl, String engine);
     }
 }
