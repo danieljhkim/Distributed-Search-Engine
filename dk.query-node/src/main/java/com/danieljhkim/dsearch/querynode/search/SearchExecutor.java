@@ -15,7 +15,10 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -32,13 +35,21 @@ public class SearchExecutor implements Closeable {
 
     private final ExecutorService shardExecutor;
     private final NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager;
-    private final Duration shardTimeout = Duration.ofSeconds(2);
+    private final Duration shardTimeout;
 
     public SearchExecutor(
             ExecutorService shardExecutor,
             NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager) {
-        this.shardExecutor = shardExecutor;
-        this.nodeClientManager = nodeClientManager;
+        this(shardExecutor, nodeClientManager, Duration.ofSeconds(2));
+    }
+
+    SearchExecutor(
+            ExecutorService shardExecutor,
+            NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager,
+            Duration shardTimeout) {
+        this.shardExecutor = Objects.requireNonNull(shardExecutor, "shardExecutor must not be null");
+        this.nodeClientManager = Objects.requireNonNull(nodeClientManager, "nodeClientManager must not be null");
+        this.shardTimeout = Objects.requireNonNull(shardTimeout, "shardTimeout must not be null");
     }
 
     public SearchExecutor(NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager) {
@@ -132,9 +143,9 @@ public class SearchExecutor implements Closeable {
         Map<String, Long> nodeTimingsMs = new ConcurrentHashMap<>();
 
         // Fan out
-        List<Map.Entry<String, CompletableFuture<SearchResult>>> futures = new ArrayList<>();
-        for (String nodeId : nodeClientManager.getClientMap().keySet()) {
-            futures.add(Map.entry(
+        List<NodeSearchTask> futures = new ArrayList<>();
+        for (String nodeId : nodeClientManager.getActiveNodeIds()) {
+            futures.add(new NodeSearchTask(
                     nodeId,
                     submitNodeSearch(
                             requestId,
@@ -165,20 +176,14 @@ public class SearchExecutor implements Closeable {
         // Materialize facets in request order
         List<FacetResponse> aggregatedFacets = buildAggregatedFacets(facetRequests, acc.facetAggregation);
 
-        // log a summary per request
         long sumMs = nodeTimingsMs.values().stream().mapToLong(Long::longValue).sum();
-        LOG.info(
-                "Search fanout summary: requestId={}, shardId={}, searchType={}, totalHits={}, page={}, size={}, totalNodeTimeMs={}, nodeTimingsMs={}",
-                requestId,
-                shardId,
-                searchType,
-                acc.totalHits,
-                page,
-                size,
-                sumMs,
-                nodeTimingsMs);
+        SearchResult.FanoutMetadata fanoutMetadata = new SearchResult.FanoutMetadata(
+                futures.size(), acc.successfulNodes, acc.failedNodes, acc.timedOutNodes);
+        logFanoutSummary(
+                requestId, shardId, searchType, acc.totalHits, page, size, sumMs, nodeTimingsMs, fanoutMetadata);
 
-        return new SearchResult(pageHits, acc.totalHits, page, aggregatedFacets.isEmpty() ? null : aggregatedFacets);
+        return new SearchResult(
+                pageHits, acc.totalHits, page, aggregatedFacets.isEmpty() ? null : aggregatedFacets, fanoutMetadata);
     }
 
     private CompletableFuture<SearchResult> submitNodeSearch(
@@ -209,7 +214,8 @@ public class SearchExecutor implements Closeable {
                                 searchType,
                                 filters,
                                 highlight,
-                                facetRequests);
+                                facetRequests,
+                                shardTimeout);
                     } finally {
                         long tookMs = (System.nanoTime() - startNanos) / 1_000_000L;
                         nodeTimingsMs.put(nodeId, tookMs);
@@ -229,69 +235,108 @@ public class SearchExecutor implements Closeable {
     }
 
     private MergeAccumulator awaitAndMerge(
-            List<Map.Entry<String, CompletableFuture<SearchResult>>> futures,
-            long deadlineNanos,
-            String requestId,
-            String shardId,
-            SearchType searchType) {
+            List<NodeSearchTask> futures, long deadlineNanos, String requestId, String shardId, SearchType searchType) {
 
         MergeAccumulator acc = new MergeAccumulator();
 
-        for (Map.Entry<String, CompletableFuture<SearchResult>> entry : futures) {
-            String nodeId = entry.getKey();
-            CompletableFuture<SearchResult> future = entry.getValue();
-            long remainingNanos = deadlineNanos - System.nanoTime();
-            if (remainingNanos <= 0) {
+        if (futures.isEmpty()) {
+            LOG.warn(
+                    "Search fanout failed: no active index nodes; requestId={}, shardId={}, searchType={}",
+                    requestId,
+                    shardId,
+                    searchType);
+            return acc;
+        }
+
+        long remainingNanos = deadlineNanos - System.nanoTime();
+        if (remainingNanos > 0) {
+            CompletableFuture<?>[] allNodeFutures =
+                    futures.stream().map(NodeSearchTask::future).toArray(CompletableFuture[]::new);
+            try {
+                CompletableFuture.allOf(allNodeFutures).get(remainingNanos, TimeUnit.NANOSECONDS);
+            } catch (TimeoutException te) {
                 LOG.warn(
-                        "Global shard search timeout budget exhausted; skipping remaining nodes; requestId={}, shardId={}, searchType={}",
+                        "Search fanout deadline reached; requestId={}, shardId={}, searchType={}, unfinishedNodes={}",
+                        requestId,
+                        shardId,
+                        searchType,
+                        countUnfinished(futures));
+            } catch (ExecutionException ee) {
+                // Individual node failures are classified below so the summary remains structured.
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                LOG.warn(
+                        "Search fanout interrupted while awaiting index nodes; requestId={}, shardId={}, searchType={}",
                         requestId,
                         shardId,
                         searchType);
-                break;
             }
+        } else {
+            LOG.warn(
+                    "Search fanout deadline exhausted before awaiting index nodes; requestId={}, shardId={}, searchType={}",
+                    requestId,
+                    shardId,
+                    searchType);
+        }
 
+        for (NodeSearchTask task : futures) {
+            String nodeId = task.nodeId();
+            CompletableFuture<SearchResult> future = task.future();
+            if (!future.isDone()) {
+                acc.timedOutNodes++;
+                LOG.warn(
+                        "Node search timed out; requestId={}, shardId={}, searchType={}, nodeId={}",
+                        requestId,
+                        shardId,
+                        searchType,
+                        nodeId);
+                continue;
+            }
             try {
-                SearchResult shardResult = future.get(remainingNanos, TimeUnit.NANOSECONDS);
+                SearchResult shardResult = future.join();
+                acc.successfulNodes++;
                 if (shardResult != null) {
                     acc.totalHits += shardResult.getTotalHits();
                     acc.allHits.addAll(shardResult.getHits());
                     aggregateFacets(acc.facetAggregation, shardResult.getFacets());
                 }
-            } catch (TimeoutException te) {
+            } catch (CancellationException ce) {
+                acc.timedOutNodes++;
                 LOG.warn(
-                        "Node search timed out before global deadline; requestId={}, shardId={}, searchType={}, nodeId={}",
+                        "Node search cancelled after timeout; requestId={}, shardId={}, searchType={}, nodeId={}",
                         requestId,
                         shardId,
                         searchType,
-                        nodeId,
-                        te);
-            } catch (ExecutionException ee) {
-                LOG.error(
-                        "Node search failed; requestId={}, shardId={}, searchType={}, nodeId={}",
-                        requestId,
-                        shardId,
-                        searchType,
-                        nodeId,
-                        ee.getCause());
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
+                        nodeId);
+            } catch (CompletionException ce) {
+                acc.failedNodes++;
+                Throwable cause = ce.getCause() != null ? ce.getCause() : ce;
                 LOG.warn(
-                        "Node search interrupted; requestId={}, shardId={}, searchType={}, nodeId={}",
+                        "Node search failed; requestId={}, shardId={}, searchType={}, nodeId={}, failureType={}, failureMessage={}",
                         requestId,
                         shardId,
                         searchType,
                         nodeId,
-                        ie);
-                break;
+                        cause.getClass().getSimpleName(),
+                        safeFailureMessage(cause));
             }
         }
 
         return acc;
     }
 
-    private void cancelOutstanding(List<Map.Entry<String, CompletableFuture<SearchResult>>> futures) {
-        for (Map.Entry<String, CompletableFuture<SearchResult>> entry : futures) {
-            CompletableFuture<SearchResult> future = entry.getValue();
+    private static long countUnfinished(List<NodeSearchTask> futures) {
+        return futures.stream().filter(task -> !task.future().isDone()).count();
+    }
+
+    private static String safeFailureMessage(Throwable failure) {
+        String message = failure.getMessage();
+        return message == null || message.isBlank() ? "<none>" : message;
+    }
+
+    private void cancelOutstanding(List<NodeSearchTask> futures) {
+        for (NodeSearchTask task : futures) {
+            CompletableFuture<SearchResult> future = task.future();
             if (!future.isDone()) {
                 future.cancel(true);
             }
@@ -368,7 +413,46 @@ public class SearchExecutor implements Closeable {
         final List<SearchHit> allHits = new ArrayList<>();
         long totalHits = 0L;
         final Map<String, Map<String, Long>> facetAggregation = new HashMap<>();
+        int successfulNodes = 0;
+        int failedNodes = 0;
+        int timedOutNodes = 0;
     }
+
+    private void logFanoutSummary(
+            String requestId,
+            String shardId,
+            SearchType searchType,
+            long totalHits,
+            int page,
+            int size,
+            long totalNodeTimeMs,
+            Map<String, Long> nodeTimingsMs,
+            SearchResult.FanoutMetadata fanoutMetadata) {
+        String message =
+                "Search fanout summary: requestId={}, shardId={}, searchType={}, fanoutStatus={}, totalHits={}, page={}, size={}, attemptedNodes={}, succeededNodes={}, failedNodes={}, timedOutNodes={}, totalNodeTimeMs={}, nodeTimingsMs={}";
+        Object[] args = {
+            requestId,
+            shardId,
+            searchType,
+            fanoutMetadata.status(),
+            totalHits,
+            page,
+            size,
+            fanoutMetadata.attemptedNodes(),
+            fanoutMetadata.succeededNodes(),
+            fanoutMetadata.failedNodes(),
+            fanoutMetadata.timedOutNodes(),
+            totalNodeTimeMs,
+            nodeTimingsMs
+        };
+        if (fanoutMetadata.status() == SearchResult.FanoutStatus.SUCCESS) {
+            LOG.info(message, args);
+        } else {
+            LOG.warn(message, args);
+        }
+    }
+
+    private record NodeSearchTask(String nodeId, CompletableFuture<SearchResult> future) {}
 
     @Override
     public void close() throws IOException {
