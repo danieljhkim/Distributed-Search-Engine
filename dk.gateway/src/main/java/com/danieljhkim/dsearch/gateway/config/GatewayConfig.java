@@ -1,5 +1,6 @@
 package com.danieljhkim.dsearch.gateway.config;
 
+import com.danieljhkim.dsearch.common.cluster.NodeGroupManager;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.config.ConfigLoader;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
@@ -10,28 +11,39 @@ import com.danieljhkim.dsearch.proto.query.QueryServiceGrpc;
 import java.io.IOException;
 import lombok.Getter;
 import lombok.Setter;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Lazy;
 
 @Configuration
 public class GatewayConfig {
 
     @Bean
-    public NodeClientManager<QueryServiceGrpc.QueryServiceBlockingStub> queryNodeClientManager() {
-        return NodeClientManager.loadClientManager(NodeRole.NODE_ROLE_QUERY, QueryServiceGrpc::newBlockingStub);
+    public NodeClientManager<QueryServiceGrpc.QueryServiceBlockingStub> queryNodeClientManager(
+            NodeGroupManager nodeGroupManager,
+            @Qualifier("clusterNodeClientManager") NodeClientManager<ClusterServiceGrpc.ClusterServiceBlockingStub> clusterNodeClientManager) {
+        nodeGroupManager.setCoordinatorManager(clusterNodeClientManager);
+        return NodeClientManager.loadClientManager(
+                NodeRole.NODE_ROLE_QUERY, QueryServiceGrpc::newBlockingStub, nodeGroupManager);
     }
 
     @Bean
-    public NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> indexNodeClientManager() {
-        return NodeClientManager.loadClientManager(NodeRole.NODE_ROLE_INDEX, IndexServiceGrpc::newBlockingStub);
+    public NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> indexNodeClientManager(
+            NodeGroupManager nodeGroupManager,
+            @Qualifier("clusterNodeClientManager") NodeClientManager<ClusterServiceGrpc.ClusterServiceBlockingStub> clusterNodeClientManager) {
+        nodeGroupManager.setCoordinatorManager(clusterNodeClientManager);
+        return NodeClientManager.loadClientManager(
+                NodeRole.NODE_ROLE_INDEX, IndexServiceGrpc::newBlockingStub, nodeGroupManager);
     }
 
-    @Lazy
     @Bean
-    public NodeClientManager<ClusterServiceGrpc.ClusterServiceBlockingStub> clusterNodeClientManager() {
-        return NodeClientManager.loadClientManager(NodeRole.NODE_ROLE_COORDINATOR, ClusterServiceGrpc::newBlockingStub);
+    public NodeClientManager<ClusterServiceGrpc.ClusterServiceBlockingStub> clusterNodeClientManager(
+            NodeGroupManager nodeGroupManager) {
+        NodeClientManager<ClusterServiceGrpc.ClusterServiceBlockingStub> manager = NodeClientManager.loadClientManager(
+                NodeRole.NODE_ROLE_COORDINATOR, ClusterServiceGrpc::newBlockingStub, nodeGroupManager);
+        nodeGroupManager.setCoordinatorManager(manager);
+        return manager;
     }
 
     @Bean
@@ -41,6 +53,11 @@ public class GatewayConfig {
         } catch (IOException e) {
             throw new RuntimeException("Failed to load application configuration", e);
         }
+    }
+
+    @Bean
+    public NodeGroupManager nodeGroupManager(AppConfig appConfig) {
+        return new NodeGroupManager(appConfig);
     }
 
     @Bean

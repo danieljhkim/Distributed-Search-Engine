@@ -8,6 +8,7 @@ import com.danieljhkim.dsearch.proto.cluster.GetClusterInfoRequest;
 import com.danieljhkim.dsearch.proto.cluster.GetClusterInfoResponse;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import java.io.IOException;
+import java.util.Objects;
 import java.util.logging.Logger;
 import lombok.Setter;
 
@@ -23,7 +24,11 @@ public class NodeGroupManager {
     private NodeGroup coordinatorGroup;
 
     public NodeGroupManager() throws RuntimeException, IOException {
-        this.defaultConfig = ConfigLoader.load();
+        this(ConfigLoader.load());
+    }
+
+    public NodeGroupManager(AppConfig defaultConfig) {
+        this.defaultConfig = Objects.requireNonNull(defaultConfig, "defaultConfig must not be null");
         this.coordinatorGroup = loadStaticNodeGroup(NodeRole.NODE_ROLE_COORDINATOR);
         this.indexGroup = loadStaticNodeGroup(NodeRole.NODE_ROLE_INDEX);
         this.queryGroup = loadStaticNodeGroup(NodeRole.NODE_ROLE_QUERY);
@@ -91,5 +96,13 @@ public class NodeGroupManager {
             return false;
         }
         return defaultConfig.getServiceDiscovery().isEnabled();
+    }
+
+    public AppConfig.ServiceDiscoveryConfig getServiceDiscoveryConfig() {
+        return defaultConfig.getServiceDiscovery();
+    }
+
+    public boolean hasCoordinatorManager() {
+        return coordinatorManager != null;
     }
 }
