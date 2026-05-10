@@ -29,9 +29,9 @@
 
     <properties>
         <maven.compiler.release>21</maven.compiler.release>
-        <spring.boot.version>3.3.0</spring.boot.version>
-        <grpc.version>1.65.0</grpc.version>
-        <protobuf.version>3.25.3</protobuf.version>
+        <spring.boot.version>3.5.12</spring.boot.version>
+        <grpc.version>1.75.0</grpc.version>
+        <protobuf.version>3.25.5</protobuf.version>
         <lucene.version>9.8.0</lucene.version>
         <lombok.version>1.18.42</lombok.version>
         <junit.jupiter.version>5.10.2</junit.jupiter.version>
@@ -48,7 +48,7 @@
         <jackson.version>2.15.2</jackson.version>
         <snakeyaml.version>2.2</snakeyaml.version>
         <!-- ML -->
-        <djl.version>0.28.0</djl.version>
+        <djl.version>0.31.1</djl.version>
         <!-- Logging -->
         <logback.version>1.5.6</logback.version>
         <!-- Misc -->
