@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -29,7 +30,9 @@ public class IndexNodeApplication {
         AppConfig appConfig = ConfigLoader.load();
         List<FieldConfig> fieldConfigs = appConfig.getFieldConfigs();
 
-        IndexManager indexManager = new IndexManager(baseDir, 1, Duration.ofSeconds(6), fieldConfigs);
+        IndexingRuntimeConfig indexingConfig = resolveIndexingConfig(appConfig, System.getenv());
+        IndexManager indexManager = new IndexManager(
+                baseDir, indexingConfig.maxBufferedOpsPerShard(), indexingConfig.maxFlushInterval(), fieldConfigs);
         IndexNodeServer indexNodeServer = new IndexNodeServer(grpcPort, indexManager);
         HttpServer healthServer = HealthHttpServer.start(healthPort, "index-node");
 
@@ -53,4 +56,35 @@ public class IndexNodeApplication {
 
         indexNodeServer.start();
     }
+
+    static IndexingRuntimeConfig resolveIndexingConfig(AppConfig appConfig, Map<String, String> environment) {
+        AppConfig.IndexingConfig config = appConfig.getIndexing();
+        int maxBufferedOpsPerShard =
+                config != null ? config.getMaxBufferedOpsPerShard() : IndexManager.DEFAULT_MAX_BUFFERED_OPS_PER_SHARD;
+        int maxFlushIntervalSeconds = config != null
+                ? config.getMaxFlushIntervalSeconds()
+                : (int) IndexManager.DEFAULT_MAX_FLUSH_INTERVAL.toSeconds();
+
+        maxBufferedOpsPerShard =
+                readPositiveInt(environment, "INDEX_NODE_MAX_BUFFERED_OPS_PER_SHARD", maxBufferedOpsPerShard);
+        maxFlushIntervalSeconds =
+                readPositiveInt(environment, "INDEX_NODE_MAX_FLUSH_INTERVAL_SECONDS", maxFlushIntervalSeconds);
+
+        return new IndexingRuntimeConfig(maxBufferedOpsPerShard, Duration.ofSeconds(maxFlushIntervalSeconds));
+    }
+
+    private static int readPositiveInt(Map<String, String> environment, String name, int defaultValue) {
+        String rawValue = environment.get(name);
+        if (rawValue == null || rawValue.isBlank()) {
+            return defaultValue;
+        }
+
+        int parsedValue = Integer.parseInt(rawValue);
+        if (parsedValue < 1) {
+            throw new IllegalArgumentException(name + " must be greater than 0");
+        }
+        return parsedValue;
+    }
+
+    static record IndexingRuntimeConfig(int maxBufferedOpsPerShard, Duration maxFlushInterval) {}
 }
