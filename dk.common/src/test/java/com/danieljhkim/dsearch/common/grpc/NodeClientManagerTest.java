@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -45,6 +46,45 @@ class NodeClientManagerTest {
     }
 
     @Test
+    void roundRobinRoutingNeverSelectsInitiallyInactiveClients() {
+        Map<String, NodeClient<String>> clients = clients("0", "1");
+        clients.get("0").setActive(false);
+        NodeClientManager<String> manager =
+                new NodeClientManager<>(clients, RoutingStrategy.ROUND_ROBIN, NodeRole.NODE_ROLE_INDEX, ch -> "");
+
+        assertEquals(List.of("1"), activeNodeIds(manager));
+        assertEquals("stub-1", manager.nextClient());
+        assertEquals("stub-1", manager.nextClient());
+    }
+
+    @Test
+    void leastLoadedRoutingNeverSelectsInitiallyInactiveClients() {
+        Map<String, NodeClient<String>> clients = clients("0", "1");
+        clients.get("0").setActive(false);
+        clients.get("1").getOrCreateShardState("p0").getDocCount().set(7);
+        NodeClientManager<String> manager =
+                new NodeClientManager<>(clients, RoutingStrategy.LEAST_LOADED, NodeRole.NODE_ROLE_INDEX, ch -> "");
+
+        assertEquals("stub-1", manager.nextClient("p0", true));
+        assertEquals(8, clients.get("1").getShardDocCount("p0"));
+    }
+
+    @Test
+    void discoveryRefreshDeactivatingNodeRemovesItFromRoundRobinRouting() {
+        AtomicReference<NodeGroup> discovered = new AtomicReference<>(nodeGroup(RoutingStrategy.ROUND_ROBIN, "0", "1"));
+        NodeClientManager<String> manager = discoveryBackedManager(RoutingStrategy.ROUND_ROBIN, discovered, "0", "1");
+
+        discovered.set(nodeGroup(RoutingStrategy.ROUND_ROBIN, "1"));
+        manager.refreshClientsFromCluster();
+
+        assertFalse(manager.getClientMap().get("0").isActive());
+        assertTrue(manager.getClientMap().get("1").isActive());
+        assertEquals(List.of("1"), activeNodeIds(manager));
+        assertEquals("stub-1", manager.nextClient());
+        assertEquals("stub-1", manager.nextClient());
+    }
+
+    @Test
     void discoveryRefreshDeactivatingNodeRemovesItFromLeastLoadedRouting() {
         AtomicReference<NodeGroup> discovered =
                 new AtomicReference<>(nodeGroup(RoutingStrategy.LEAST_LOADED, "0", "1"));
@@ -81,6 +121,21 @@ class NodeClientManagerTest {
         verify(ownedChannel0).shutdown();
         verify(ownedChannel1).shutdown();
         verify(coordinatorChannel, never()).shutdown();
+    }
+
+    @Test
+    void shutdownIsIdempotentForAlreadyClosedChannels() {
+        ManagedChannel channel = mockChannelThatBecomesShutdown();
+        NodeClientManager<String> manager = new NodeClientManager<>(
+                Map.of("0", new NodeClient<>("0", "stub-0", channel, "localhost", 9000)),
+                RoutingStrategy.ROUND_ROBIN,
+                NodeRole.NODE_ROLE_INDEX,
+                ch -> "");
+
+        manager.shutdown();
+        manager.shutdown();
+
+        verify(channel, times(1)).shutdown();
     }
 
     private static NodeClientManager<String> discoveryBackedManager(
@@ -133,6 +188,14 @@ class NodeClientManagerTest {
     private static ManagedChannel mockChannel() {
         ManagedChannel channel = mock(ManagedChannel.class);
         when(channel.isShutdown()).thenReturn(false);
+        when(channel.isTerminated()).thenReturn(false);
+        when(channel.shutdown()).thenReturn(channel);
+        return channel;
+    }
+
+    private static ManagedChannel mockChannelThatBecomesShutdown() {
+        ManagedChannel channel = mock(ManagedChannel.class);
+        when(channel.isShutdown()).thenReturn(false, true);
         when(channel.isTerminated()).thenReturn(false);
         when(channel.shutdown()).thenReturn(channel);
         return channel;
