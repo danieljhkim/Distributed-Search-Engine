@@ -1,6 +1,7 @@
 package com.danieljhkim.dsearch.coordinator.grpc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -16,6 +17,7 @@ import com.danieljhkim.dsearch.proto.cluster.GetShardMapRequest;
 import com.danieljhkim.dsearch.proto.cluster.GetShardMapResponse;
 import com.danieljhkim.dsearch.proto.cluster.HeartbeatRequest;
 import com.danieljhkim.dsearch.proto.cluster.HeartbeatResponse;
+import com.danieljhkim.dsearch.proto.cluster.NodeInfo;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import com.danieljhkim.dsearch.proto.cluster.RegisterNodeRequest;
 import com.danieljhkim.dsearch.proto.cluster.RegisterNodeResponse;
@@ -27,7 +29,73 @@ import org.junit.jupiter.api.Test;
 class ClusterServiceImplTest {
 
     @Test
-    void registerNodeRegistersValidNode() {
+    void registerIndexNodeAndClusterInfoIncludesNodeAndGroupData() {
+        ClusterMembershipService membershipService = new ClusterMembershipService(appConfig());
+        ClusterServiceImpl service = new ClusterServiceImpl(membershipService);
+
+        RegisterNodeResponse registerResponse = registerNode(
+                service, registerRequest("index-live-0", "index-live.local", 5011, 5111, NodeRole.NODE_ROLE_INDEX));
+
+        assertTrue(registerResponse.getSuccess());
+        GetClusterInfoResponse clusterInfo = getClusterInfo(service, NodeRole.NODE_ROLE_INDEX);
+        assertEquals("index-nodes", clusterInfo.getComponentLabel());
+        assertEquals(RoutingStrategy.ROUND_ROBIN.name(), clusterInfo.getRoutingStrategy());
+        assertEquals(1, clusterInfo.getReplicationFactor());
+        assertNode(
+                findNode(clusterInfo, "index-live-0"),
+                "index-live-0",
+                "index-live.local",
+                5011,
+                5111,
+                NodeRole.NODE_ROLE_INDEX);
+    }
+
+    @Test
+    void registerQueryNodeAndClusterInfoIncludesNodeAndGroupData() {
+        ClusterMembershipService membershipService = new ClusterMembershipService(appConfig());
+        ClusterServiceImpl service = new ClusterServiceImpl(membershipService);
+
+        RegisterNodeResponse registerResponse = registerNode(
+                service, registerRequest("query-live-0", "query-live.local", 6011, 6111, NodeRole.NODE_ROLE_QUERY));
+
+        assertTrue(registerResponse.getSuccess());
+        GetClusterInfoResponse clusterInfo = getClusterInfo(service, NodeRole.NODE_ROLE_QUERY);
+        assertEquals("query-nodes", clusterInfo.getComponentLabel());
+        assertEquals(RoutingStrategy.LEAST_LOADED.name(), clusterInfo.getRoutingStrategy());
+        assertEquals(1, clusterInfo.getReplicationFactor());
+        assertNode(
+                findNode(clusterInfo, "query-live-0"),
+                "query-live-0",
+                "query-live.local",
+                6011,
+                6111,
+                NodeRole.NODE_ROLE_QUERY);
+    }
+
+    @Test
+    void duplicateRegistrationUpdatesExistingNode() {
+        ClusterServiceImpl service = new ClusterServiceImpl(new ClusterMembershipService(appConfig()));
+
+        RegisterNodeResponse firstResponse = registerNode(
+                service, registerRequest("index-live-0", "old.local", 5011, 5111, NodeRole.NODE_ROLE_INDEX));
+        RegisterNodeResponse secondResponse = registerNode(
+                service, registerRequest("index-live-0", "new.local", 5022, 5122, NodeRole.NODE_ROLE_INDEX));
+
+        assertTrue(firstResponse.getSuccess());
+        assertTrue(secondResponse.getSuccess());
+        GetClusterInfoResponse clusterInfo = getClusterInfo(service, NodeRole.NODE_ROLE_INDEX);
+        assertEquals(1, clusterInfo.getNodesCount());
+        assertNode(
+                findNode(clusterInfo, "index-live-0"),
+                "index-live-0",
+                "new.local",
+                5022,
+                5122,
+                NodeRole.NODE_ROLE_INDEX);
+    }
+
+    @Test
+    void registerNodeStoresValidNodeInMembership() {
         ClusterMembershipService membershipService = new ClusterMembershipService(appConfig());
         ClusterServiceImpl service = new ClusterServiceImpl(membershipService);
         CapturingObserver<RegisterNodeResponse> observer = new CapturingObserver<>();
@@ -45,28 +113,28 @@ class ClusterServiceImplTest {
         RegisterNodeRequest request =
                 validRegisterRequest().setRole(NodeRole.NODE_ROLE_UNKNOWN).build();
 
-        assertRegisterStatus(request, Status.Code.INVALID_ARGUMENT);
+        assertRegisterStatus(request, Status.Code.INVALID_ARGUMENT, "role must be INDEX, QUERY, or COORDINATOR");
     }
 
     @Test
     void registerNodeRejectsEmptyNodeId() {
         RegisterNodeRequest request = validRegisterRequest().setNodeId("").build();
 
-        assertRegisterStatus(request, Status.Code.INVALID_ARGUMENT);
+        assertRegisterStatus(request, Status.Code.INVALID_ARGUMENT, "node_id must not be empty");
     }
 
     @Test
     void registerNodeRejectsInvalidHost() {
         RegisterNodeRequest request = validRegisterRequest().setHost("bad host").build();
 
-        assertRegisterStatus(request, Status.Code.INVALID_ARGUMENT);
+        assertRegisterStatus(request, Status.Code.INVALID_ARGUMENT, "host must be a valid DNS name or IP literal");
     }
 
     @Test
     void registerNodeRejectsInvalidPort() {
         RegisterNodeRequest request = validRegisterRequest().setPort(0).build();
 
-        assertRegisterStatus(request, Status.Code.INVALID_ARGUMENT);
+        assertRegisterStatus(request, Status.Code.INVALID_ARGUMENT, "port must be between 1 and 65535");
     }
 
     @Test
@@ -74,7 +142,7 @@ class ClusterServiceImplTest {
         RegisterNodeRequest request =
                 validRegisterRequest().setHealthPort(70000).build();
 
-        assertRegisterStatus(request, Status.Code.INVALID_ARGUMENT);
+        assertRegisterStatus(request, Status.Code.INVALID_ARGUMENT, "health_port must be between 1 and 65535");
     }
 
     @Test
@@ -95,7 +163,7 @@ class ClusterServiceImplTest {
 
         service.registerNode(validRegisterRequest().build(), observer);
 
-        assertEquals(Status.Code.NOT_FOUND, Status.fromThrowable(observer.error).getCode());
+        assertStatus(observer.error, Status.Code.NOT_FOUND, "No node group registered for role: NODE_ROLE_INDEX");
     }
 
     @Test
@@ -108,9 +176,21 @@ class ClusterServiceImplTest {
 
         service.getClusterInfo(request, observer);
 
-        assertEquals(
-                Status.Code.INVALID_ARGUMENT,
-                Status.fromThrowable(observer.error).getCode());
+        assertStatus(observer.error, Status.Code.INVALID_ARGUMENT, "role must be INDEX, QUERY, or COORDINATOR");
+    }
+
+    @Test
+    void clusterInfoOmitsNodesMarkedUnhealthyWithoutSleeping() {
+        ClusterMembershipService membershipService = new ClusterMembershipService(appConfig());
+        ClusterServiceImpl service = new ClusterServiceImpl(membershipService);
+        registerNode(
+                service, registerRequest("query-live-0", "query-live.local", 6011, 6111, NodeRole.NODE_ROLE_QUERY));
+
+        membershipService.updateNodeHealth("query-live-0", NodeRole.NODE_ROLE_QUERY, false);
+
+        GetClusterInfoResponse clusterInfo = getClusterInfo(service, NodeRole.NODE_ROLE_QUERY);
+        assertFalse(clusterInfo.getNodesList().stream()
+                .anyMatch(node -> node.getNodeId().equals("query-live-0")));
     }
 
     @Test
@@ -120,8 +200,10 @@ class ClusterServiceImplTest {
 
         service.heartbeat(HeartbeatRequest.newBuilder().setNodeId("node-a").build(), observer);
 
-        assertEquals(
-                Status.Code.UNIMPLEMENTED, Status.fromThrowable(observer.error).getCode());
+        assertStatus(
+                observer.error,
+                Status.Code.UNIMPLEMENTED,
+                "Heartbeat RPC is deferred; coordinator health is tracked by HTTP health checks");
     }
 
     @Test
@@ -131,17 +213,75 @@ class ClusterServiceImplTest {
 
         service.getShardMap(GetShardMapRequest.getDefaultInstance(), observer);
 
-        assertEquals(
-                Status.Code.UNIMPLEMENTED, Status.fromThrowable(observer.error).getCode());
+        assertStatus(
+                observer.error,
+                Status.Code.UNIMPLEMENTED,
+                "Shard map RPC is deferred; shard placement is owned by gateway/index-node state");
     }
 
-    private static void assertRegisterStatus(RegisterNodeRequest request, Status.Code expectedCode) {
+    private static RegisterNodeResponse registerNode(ClusterServiceImpl service, RegisterNodeRequest request) {
+        CapturingObserver<RegisterNodeResponse> observer = new CapturingObserver<>();
+
+        service.registerNode(request, observer);
+
+        assertNull(observer.error);
+        assertTrue(observer.completed);
+        assertNotNull(observer.value);
+        return observer.value;
+    }
+
+    private static GetClusterInfoResponse getClusterInfo(ClusterServiceImpl service, NodeRole role) {
+        CapturingObserver<GetClusterInfoResponse> observer = new CapturingObserver<>();
+
+        service.getClusterInfo(GetClusterInfoRequest.newBuilder().setRole(role).build(), observer);
+
+        assertNull(observer.error);
+        assertTrue(observer.completed);
+        assertNotNull(observer.value);
+        return observer.value;
+    }
+
+    private static NodeInfo findNode(GetClusterInfoResponse response, String nodeId) {
+        return response.getNodesList().stream()
+                .filter(node -> node.getNodeId().equals(nodeId))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("expected node missing from cluster info: " + nodeId));
+    }
+
+    private static void assertNode(NodeInfo node, String nodeId, String host, int port, int healthPort, NodeRole role) {
+        assertEquals(nodeId, node.getNodeId());
+        assertEquals(host, node.getHost());
+        assertEquals(port, node.getPort());
+        assertEquals(healthPort, node.getHealthPort());
+        assertEquals(role, node.getRole());
+    }
+
+    private static void assertRegisterStatus(
+            RegisterNodeRequest request, Status.Code expectedCode, String expectedDescription) {
         ClusterServiceImpl service = new ClusterServiceImpl(new ClusterMembershipService(appConfig()));
         CapturingObserver<RegisterNodeResponse> observer = new CapturingObserver<>();
 
         service.registerNode(request, observer);
 
-        assertEquals(expectedCode, Status.fromThrowable(observer.error).getCode());
+        assertStatus(observer.error, expectedCode, expectedDescription);
+    }
+
+    private static void assertStatus(Throwable error, Status.Code expectedCode, String expectedDescription) {
+        assertNotNull(error);
+        Status status = Status.fromThrowable(error);
+        assertEquals(expectedCode, status.getCode());
+        assertEquals(expectedDescription, status.getDescription());
+    }
+
+    private static RegisterNodeRequest registerRequest(
+            String nodeId, String host, int port, int healthPort, NodeRole role) {
+        return RegisterNodeRequest.newBuilder()
+                .setNodeId(nodeId)
+                .setHost(host)
+                .setPort(port)
+                .setHealthPort(healthPort)
+                .setRole(role)
+                .build();
     }
 
     private static RegisterNodeRequest.Builder validRegisterRequest() {
@@ -155,24 +295,18 @@ class ClusterServiceImplTest {
 
     private static AppConfig appConfig() {
         AppConfig config = new AppConfig();
-        config.setIndexNodes(nodeGroupConfig("index-0", 5000, 5100));
-        config.setQueryNodes(nodeGroupConfig("query-0", 6000, 6100));
-        config.setCoordinatorNodes(nodeGroupConfig("coordinator-0", 7000, 7100));
+        config.setIndexNodes(nodeGroupConfig("index-nodes", RoutingStrategy.ROUND_ROBIN));
+        config.setQueryNodes(nodeGroupConfig("query-nodes", RoutingStrategy.LEAST_LOADED));
+        config.setCoordinatorNodes(nodeGroupConfig("coordinator-nodes", RoutingStrategy.ROUND_ROBIN));
         return config;
     }
 
-    private static AppConfig.NodeGroupConfig nodeGroupConfig(String id, int port, int healthPort) {
-        AppConfig.NodeConfig node = new AppConfig.NodeConfig();
-        node.setId(id);
-        node.setHost("localhost");
-        node.setPort(port);
-        node.setHealthPort(healthPort);
-
+    private static AppConfig.NodeGroupConfig nodeGroupConfig(String componentLabel, RoutingStrategy routingStrategy) {
         AppConfig.NodeGroupConfig group = new AppConfig.NodeGroupConfig();
-        group.setComponentLabel("component-" + id);
-        group.setRoutingStrategy(RoutingStrategy.ROUND_ROBIN);
+        group.setComponentLabel(componentLabel);
+        group.setRoutingStrategy(routingStrategy);
         group.setReplicationFactor(1);
-        group.setNodes(List.of(node));
+        group.setNodes(List.of());
         return group;
     }
 
