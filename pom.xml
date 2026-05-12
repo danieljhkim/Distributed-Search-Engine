@@ -34,7 +34,7 @@
         <protobuf.version>3.25.9</protobuf.version>
         <lucene.version>9.8.0</lucene.version>
         <lombok.version>1.18.46</lombok.version>
-        <junit.jupiter.version>5.12.2</junit.jupiter.version>
+        <junit.jupiter.version>5.14.4</junit.jupiter.version>
         <!-- Tooling / plugins -->
         <maven.surefire.version>3.5.5</maven.surefire.version>
         <maven.compiler.plugin.version>3.14.1</maven.compiler.plugin.version>
@@ -43,7 +43,7 @@
         <micrometer.registry.prometheus.version>1.15.11</micrometer.registry.prometheus.version>
         <prometheus.simpleclient.version>0.16.0</prometheus.simpleclient.version>
         <!-- Testing -->
-        <mockito.version>5.17.0</mockito.version>
+        <mockito.version>5.23.0</mockito.version>
         <!-- Serialization / config -->
         <jackson.version>2.21.2</jackson.version>
         <snakeyaml.version>2.4</snakeyaml.version>
