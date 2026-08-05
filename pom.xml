@@ -38,7 +38,7 @@
         <!-- Tooling / plugins -->
         <maven.surefire.version>3.5.5</maven.surefire.version>
         <maven.compiler.plugin.version>3.14.1</maven.compiler.plugin.version>
-        <spotless.maven.plugin.version>2.43.0</spotless.maven.plugin.version>
+        <spotless.maven.plugin.version>3.5.1</spotless.maven.plugin.version>
         <!-- Observability -->
         <micrometer.registry.prometheus.version>1.15.11</micrometer.registry.prometheus.version>
         <prometheus.simpleclient.version>0.16.0</prometheus.simpleclient.version>
