@@ -8,9 +8,13 @@ import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.proto.index.IndexSearchRequest;
 import com.danieljhkim.dsearch.proto.index.IndexSearchResponse;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 public class IndexService implements BaseIndexService {
+
+    private static final Duration DEFAULT_CALL_DEADLINE = Duration.ofSeconds(2);
 
     private final NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager;
 
@@ -48,6 +52,44 @@ public class IndexService implements BaseIndexService {
             List<Filter> filters,
             boolean highlight,
             List<FacetRequest> facetRequests) {
+        return search(
+                queryString,
+                nodeId,
+                partitionId,
+                page,
+                size,
+                searchType,
+                filters,
+                highlight,
+                facetRequests,
+                DEFAULT_CALL_DEADLINE);
+    }
+
+    @Override
+    public SearchResult searchShardTopK(
+            String queryString,
+            String nodeId,
+            String shardId,
+            int topK,
+            SearchType searchType,
+            List<Filter> filters,
+            boolean highlight,
+            List<FacetRequest> facetRequests,
+            Duration deadline) {
+        return search(queryString, nodeId, shardId, 0, topK, searchType, filters, highlight, facetRequests, deadline);
+    }
+
+    private SearchResult search(
+            String queryString,
+            String nodeId,
+            String partitionId,
+            int page,
+            int size,
+            SearchType searchType,
+            List<Filter> filters,
+            boolean highlight,
+            List<FacetRequest> facetRequests,
+            Duration deadline) {
         if (!nodeClientManager.getClientMap().containsKey(nodeId)) {
             throw new IllegalArgumentException("Unknown nodeId: " + nodeId);
         }
@@ -69,7 +111,14 @@ public class IndexService implements BaseIndexService {
 
         IndexServiceGrpc.IndexServiceBlockingStub stub =
                 nodeClientManager.getClientMap().get(nodeId).getStub();
-        IndexSearchResponse grpcResp = stub.searchIndex(grpcReqBuilder.build());
+        IndexSearchResponse grpcResp = withDeadline(stub, deadline).searchIndex(grpcReqBuilder.build());
         return mapToSearchResult(grpcResp, page);
+    }
+
+    private static IndexServiceGrpc.IndexServiceBlockingStub withDeadline(
+            IndexServiceGrpc.IndexServiceBlockingStub stub, Duration deadline) {
+        Duration effectiveDeadline = deadline != null ? deadline : DEFAULT_CALL_DEADLINE;
+        long timeoutNanos = Math.max(1L, effectiveDeadline.toNanos());
+        return stub.withDeadlineAfter(timeoutNanos, TimeUnit.NANOSECONDS);
     }
 }

@@ -1,10 +1,14 @@
 serviceDiscovery:
+  # Coordinator discovery is an in-memory health-aware registry.
+  # Heartbeat, shard-map, replication, and dynamic removal semantics are deferred.
   enabled: true
   refreshIntervalSeconds: 10
 
 indexNodes:
   routingStrategy: "LEAST_LOADED"
   componentLabel: "dsearch-index-node"
+  # Current runtime has no replication layer; keep this at 1 until replication is implemented.
+  replicationFactor: 1
   nodes:
     - id: "0"
       host: "localhost"
@@ -37,11 +41,17 @@ coordinatorNodes:
       port: 7000
       healthPort: 7100
 
+indexing:
+  maxBufferedOpsPerShard: 100
+  maxFlushIntervalSeconds: 5
+
 ml:
   models:
     textEmbedding:
       url: "djl://ai.djl.huggingface.pytorch/sentence-transformers/all-MiniLM-L6-v2"
       engine: "PyTorch"
+      predictorPoolSize: 1
+      predictorPerCall: false
 
 requestLimits:
   maxSize: 1000

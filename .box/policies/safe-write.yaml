@@ -2,7 +2,7 @@ version: 1
 mode: "safe-write"
 
 allow:
-  commands: [up, down, doctor, test, smoke, logs, reset]
+  commands: [up, down, doctor, test, smoke, logs, reset, api-metrics, api-cluster-status, api-search, api-index]
   read_paths:
     - ".box/"
     - ".box/contracts/"

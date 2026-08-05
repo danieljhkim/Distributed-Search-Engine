@@ -66,7 +66,7 @@ function withinReadPaths(filePath: string, policies: PoliciesYaml): boolean {
   });
 }
 
-function runShell(command: string, env: Record<string, string>, timeoutMs: number): Promise<{ code: number; stdout: string; stderr: string }> {
+function runShell(command: string, env: Record<string, string>, timeoutMs: number, stdin?: string): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, {
       shell: true,
@@ -89,6 +89,12 @@ function runShell(command: string, env: Record<string, string>, timeoutMs: numbe
       clearTimeout(killTimer);
       resolve({ code: code ?? 1, stdout, stderr });
     });
+
+    // Write stdin if provided, then close
+    if (stdin !== undefined) {
+      child.stdin.write(stdin);
+      child.stdin.end();
+    }
   });
 }
 
@@ -152,10 +158,16 @@ async function main() {
       const cmd = box.commands?.[cmdName]?.run;
       if (!cmd) throw new Error(`Unknown command in .box/box.yaml: ${cmdName}`);
 
-      const args: string[] = Array.isArray(input.args) ? input.args.map(String) : [];
-      const full = [cmd, ...args.map((a) => JSON.stringify(a))].join(" ");
+      const userArgs: string[] = Array.isArray(input.args) ? input.args.map(String) : [];
 
-      const r = await runShell(full, envFromBox, timeoutMs);
+      // Security: Pass args via environment variables to avoid shell injection
+      // Scripts can read from $BOX_ARG_0, $BOX_ARG_1, etc.
+      const argsEnv = userArgs.reduce((acc, arg, i) => {
+        acc[`BOX_ARG_${i}`] = arg;
+        return acc;
+      }, { BOX_ARG_COUNT: String(userArgs.length) } as Record<string, string>);
+
+      const r = await runShell(cmd, { ...envFromBox, ...argsEnv }, timeoutMs);
       return {
         content: [
           { type: "text", text: `exit_code=${r.code}\n\nSTDOUT:\n${r.stdout}\n\nSTDERR:\n${r.stderr}` },
@@ -214,6 +226,83 @@ async function main() {
       }
       const text = fs.readFileSync(abs, "utf8");
       return { content: [{ type: "text", text }] };
+    }
+
+    if (tool === "box-api-metrics") {
+      if (!allowlistedCommand("api-metrics", policies)) {
+        throw new Error("Command not allowlisted by .box/policies.yaml: api-metrics");
+      }
+      const cmd = box.commands?.["api-metrics"]?.run;
+      if (!cmd) throw new Error("Missing command in .box/box.yaml: api-metrics");
+      const r = await runShell(cmd, envFromBox, timeoutMs);
+      return {
+        content: [{ type: "text", text: r.stdout || r.stderr || "" }],
+        isError: r.code !== 0,
+      };
+    }
+
+    if (tool === "box-api-cluster-status") {
+      if (!allowlistedCommand("api-cluster-status", policies)) {
+        throw new Error("Command not allowlisted by .box/policies.yaml: api-cluster-status");
+      }
+      const cmd = box.commands?.["api-cluster-status"]?.run;
+      if (!cmd) throw new Error("Missing command in .box/box.yaml: api-cluster-status");
+      const r = await runShell(cmd, envFromBox, timeoutMs);
+      return {
+        content: [{ type: "text", text: r.stdout || r.stderr || "" }],
+        isError: r.code !== 0,
+      };
+    }
+
+    if (tool === "box-api-search") {
+      if (!allowlistedCommand("api-search", policies)) {
+        throw new Error("Command not allowlisted by .box/policies.yaml: api-search");
+      }
+      const cmd = box.commands?.["api-search"]?.run;
+      if (!cmd) throw new Error("Missing command in .box/box.yaml: api-search");
+
+      // Build JSON payload from input
+      const payload: Record<string, unknown> = {
+        query: input.query,
+        partitionId: input.partitionId,
+      };
+      if (input.searchType) payload.searchType = input.searchType;
+      if (input.fusionStrategy) payload.fusionStrategy = input.fusionStrategy;
+      if (input.pageSize) payload.pageSize = input.pageSize;
+      if (input.filters) payload.filters = input.filters;
+      if (input.facets) payload.facets = input.facets;
+      if (input.sortFields) payload.sortFields = input.sortFields;
+
+      // Pass JSON via stdin to avoid shell injection
+      const jsonStr = JSON.stringify(payload);
+      const r = await runShell(cmd, envFromBox, timeoutMs, jsonStr);
+      return {
+        content: [{ type: "text", text: r.stdout || r.stderr || "" }],
+        isError: r.code !== 0,
+      };
+    }
+
+    if (tool === "box-api-index") {
+      if (!allowlistedCommand("api-index", policies)) {
+        throw new Error("Command not allowlisted by .box/policies.yaml: api-index");
+      }
+      const cmd = box.commands?.["api-index"]?.run;
+      if (!cmd) throw new Error("Missing command in .box/box.yaml: api-index");
+
+      // Build JSON payload from input
+      const payload: Record<string, unknown> = {
+        partitionId: input.partitionId,
+        fields: input.fields,
+      };
+      if (input.id) payload.id = input.id;
+
+      // Pass JSON via stdin to avoid shell injection
+      const jsonStr = JSON.stringify(payload);
+      const r = await runShell(cmd, envFromBox, timeoutMs, jsonStr);
+      return {
+        content: [{ type: "text", text: r.stdout || r.stderr || "" }],
+        isError: r.code !== 0,
+      };
     }
 
     throw new Error(`Unknown tool: ${tool}`);

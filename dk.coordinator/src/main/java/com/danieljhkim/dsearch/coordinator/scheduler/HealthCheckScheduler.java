@@ -1,5 +1,6 @@
 package com.danieljhkim.dsearch.coordinator.scheduler;
 
+import com.danieljhkim.dsearch.common.cluster.NodeGroup;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.coordinator.cluster.ClusterMembershipService;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
@@ -54,24 +55,22 @@ public class HealthCheckScheduler {
     }
 
     private void checkClusterHealth() {
-        for (ClusterMembershipService.NodeInfo nodeInfo :
-                membershipService.getIndexGroup().getAllNodes()) {
+        for (NodeGroup.NodeInfo nodeInfo : membershipService.getIndexGroup().getAllNodes()) {
             boolean isHealthy = checkNodeHealth(nodeInfo);
             if (isHealthy != nodeInfo.isHealthy()) {
-                membershipService.updateNodeHealth(nodeInfo.nodeId(), NodeRole.NODE_ROLE_INDEX, isHealthy);
+                membershipService.updateNodeHealth(nodeInfo.getNodeId(), NodeRole.NODE_ROLE_INDEX, isHealthy);
             }
         }
-        for (ClusterMembershipService.NodeInfo nodeInfo :
-                membershipService.getQueryGroup().getAllNodes()) {
+        for (NodeGroup.NodeInfo nodeInfo : membershipService.getQueryGroup().getAllNodes()) {
             boolean isHealthy = checkNodeHealth(nodeInfo);
             if (isHealthy != nodeInfo.isHealthy()) {
-                membershipService.updateNodeHealth(nodeInfo.nodeId(), NodeRole.NODE_ROLE_QUERY, isHealthy);
+                membershipService.updateNodeHealth(nodeInfo.getNodeId(), NodeRole.NODE_ROLE_QUERY, isHealthy);
             }
         }
     }
 
-    private boolean checkNodeHealth(ClusterMembershipService.NodeInfo nodeInfo) {
-        String healthCheckUrl = String.format("http://%s:%d/health", nodeInfo.host(), nodeInfo.healthPort());
+    private boolean checkNodeHealth(NodeGroup.NodeInfo nodeInfo) {
+        String healthCheckUrl = String.format("http://%s:%d/health", nodeInfo.getHost(), nodeInfo.getHealthPort());
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(healthCheckUrl))
                 .timeout(Duration.ofMillis(500))
@@ -83,7 +82,8 @@ public class HealthCheckScheduler {
         } catch (Exception e) {
             LOGGER.log(
                     Level.WARNING,
-                    "Health check failed for node: " + nodeInfo.healthPort() + ":" + nodeInfo.healthPort(),
+                    "Health check failed for node: " + nodeInfo.getNodeId() + " (" + nodeInfo.getHost() + ":"
+                            + nodeInfo.getHealthPort() + ")",
                     e);
             return false;
         }

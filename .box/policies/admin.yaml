@@ -2,7 +2,7 @@ version: 1
 mode: "admin"
 
 allow:
-  commands: [up, down, doctor, test, smoke, logs, reset]
+  commands: [up, down, doctor, test, smoke, logs, reset, api-metrics, api-cluster-status, api-search, api-index]
   read_paths:
     - "."
   write_paths:

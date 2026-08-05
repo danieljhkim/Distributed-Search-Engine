@@ -3,6 +3,8 @@ package com.danieljhkim.dsearch.gateway.service;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
+import com.danieljhkim.dsearch.proto.index.DeleteDocumentRequest;
+import com.danieljhkim.dsearch.proto.index.DeleteDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.Document;
 import com.danieljhkim.dsearch.proto.index.Field;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentRequest;
@@ -46,5 +48,21 @@ public class GatewayIndexService {
                 .build();
         IndexDocumentResponse resp = indexStub.indexDocument(grpcReq);
         return new IndexResponseDto(resp.getId(), resp.getSuccess());
+    }
+
+    public IndexResponseDto delete(String id, String partitionId) {
+        if (id == null || id.isBlank()) {
+            throw new IllegalArgumentException("id must not be blank");
+        }
+
+        String resolvedPartitionId = partitionId != null && !partitionId.isBlank() ? partitionId : "default";
+        var indexStub = indexNodeClientManager.nextClient(resolvedPartitionId, false);
+
+        DeleteDocumentRequest grpcReq = DeleteDocumentRequest.newBuilder()
+                .setPartitionId(resolvedPartitionId)
+                .setId(id)
+                .build();
+        DeleteDocumentResponse resp = indexStub.deleteDocument(grpcReq);
+        return new IndexResponseDto(id, resp.getSuccess());
     }
 }
