@@ -41,6 +41,47 @@
       "name": "box-health",
       "description": "Run configured health checks from box.yaml",
       "inputSchema": { "type": "object", "properties": {} }
+    },
+    {
+      "name": "box-api-metrics",
+      "description": "Fetch Prometheus metrics from the dsearch cluster",
+      "inputSchema": { "type": "object", "properties": {} }
+    },
+    {
+      "name": "box-api-cluster-status",
+      "description": "Get detailed dsearch cluster status (all nodes)",
+      "inputSchema": { "type": "object", "properties": {} }
+    },
+    {
+      "name": "box-api-search",
+      "description": "Execute a search query against dsearch",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Search query text" },
+          "partitionId": { "type": "string", "description": "Partition/shard ID" },
+          "searchType": { "type": "string", "enum": ["BM25", "SEMANTIC", "HYBRID"], "description": "Search type" },
+          "fusionStrategy": { "type": "string", "enum": ["RRF", "SCORE_SUM", "WEIGHTED"], "description": "Fusion strategy for hybrid search" },
+          "pageSize": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Number of results per page" },
+          "filters": { "type": "array", "items": { "type": "object" }, "description": "Filter conditions" },
+          "facets": { "type": "array", "items": { "type": "object" }, "description": "Facet requests" },
+          "sortFields": { "type": "array", "items": { "type": "object" }, "description": "Sort fields" }
+        },
+        "required": ["query", "partitionId"]
+      }
+    },
+    {
+      "name": "box-api-index",
+      "description": "Index a document into dsearch",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "partitionId": { "type": "string", "description": "Partition/shard ID" },
+          "id": { "type": "string", "description": "Document ID (optional, auto-generated if not provided)" },
+          "fields": { "type": "object", "description": "Document fields to index" }
+        },
+        "required": ["partitionId", "fields"]
+      }
     }
   ]
 }

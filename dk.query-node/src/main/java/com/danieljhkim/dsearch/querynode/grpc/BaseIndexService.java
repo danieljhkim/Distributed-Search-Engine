@@ -7,6 +7,7 @@ import com.danieljhkim.dsearch.proto.common.FacetResponse;
 import com.danieljhkim.dsearch.proto.common.Filter;
 import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.proto.index.IndexSearchResponse;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -69,6 +70,19 @@ public interface BaseIndexService {
             boolean highlight,
             List<FacetRequest> facetRequests) {
         return search(queryString, nodeId, shardId, 0, topK, searchType, filters, highlight, facetRequests);
+    }
+
+    default SearchResult searchShardTopK(
+            String queryString,
+            String nodeId,
+            String shardId,
+            int topK,
+            SearchType searchType,
+            List<Filter> filters,
+            boolean highlight,
+            List<FacetRequest> facetRequests,
+            Duration deadline) {
+        return searchShardTopK(queryString, nodeId, shardId, topK, searchType, filters, highlight, facetRequests);
     }
 
     default SearchResult mapToSearchResult(IndexSearchResponse grpcResp, int page) {

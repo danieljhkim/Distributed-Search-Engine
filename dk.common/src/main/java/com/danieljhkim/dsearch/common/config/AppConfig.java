@@ -14,6 +14,7 @@ public class AppConfig {
     private NodeGroupConfig queryNodes;
     private NodeGroupConfig coordinatorNodes;
     private NodeGroupConfig gatewayNodes;
+    private IndexingConfig indexing;
     private MlConfig ml;
     private RequestLimitsConfig requestLimits;
     private List<FieldConfig> fieldConfigs;
@@ -36,6 +37,7 @@ public class AppConfig {
         private List<NodeConfig> nodes;
         private RoutingStrategy routingStrategy;
         private String componentLabel;
+        private int replicationFactor = 1;
 
         @Override
         public String toString() {
@@ -92,10 +94,30 @@ public class AppConfig {
     public static class TextEmbeddingConfig {
         private String url;
         private String engine;
+        private int predictorPoolSize = 1;
+        private boolean predictorPerCall = false;
 
         @Override
         public String toString() {
-            return "TextEmbeddingConfig{" + "url='" + url + '\'' + ", engine='" + engine + '\'' + '}';
+            return "TextEmbeddingConfig{" + "url='"
+                    + url + '\'' + ", engine='"
+                    + engine + '\'' + ", predictorPoolSize="
+                    + predictorPoolSize + ", predictorPerCall="
+                    + predictorPerCall + '}';
+        }
+    }
+
+    @Setter
+    @Getter
+    public static class IndexingConfig {
+        private int maxBufferedOpsPerShard = 100;
+        private int maxFlushIntervalSeconds = 5;
+
+        @Override
+        public String toString() {
+            return "IndexingConfig{" + "maxBufferedOpsPerShard="
+                    + maxBufferedOpsPerShard + ", maxFlushIntervalSeconds="
+                    + maxFlushIntervalSeconds + '}';
         }
     }
 

@@ -3,6 +3,8 @@ package com.danieljhkim.dsearch.indexnode.index;
 import com.danieljhkim.dsearch.common.config.AppConfig.FieldConfig;
 import com.danieljhkim.dsearch.common.model.SearchDocument;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.ml.embedding.TextEmbedder;
+import com.danieljhkim.dsearch.ml.embedding.TextEmbeddingService;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.Filter;
 import com.danieljhkim.dsearch.proto.common.SearchType;
@@ -15,6 +17,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -28,6 +31,8 @@ public class IndexManager implements Closeable {
 
     private static final Logger LOGGER = Logger.getLogger(IndexManager.class.getName());
     private static final String SHARD_PREFIX = "shard-";
+    public static final int DEFAULT_MAX_BUFFERED_OPS_PER_SHARD = 100;
+    public static final Duration DEFAULT_MAX_FLUSH_INTERVAL = Duration.ofSeconds(5);
 
     /**
      * How many index/delete operations to buffer per shard before forcing a commit.
@@ -41,6 +46,8 @@ public class IndexManager implements Closeable {
     private final Duration maxFlushInterval;
 
     private final Path baseDir;
+    private final TextEmbedder embeddingService;
+    private final Closeable ownedEmbeddingService;
     private final Map<String, ShardIndex> shardIndexes = new ConcurrentHashMap<>();
 
     // Per-shard in-memory buffer of pending operations
@@ -52,7 +59,7 @@ public class IndexManager implements Closeable {
     private final Map<String, FieldConfig> fieldConfigMap;
 
     public IndexManager(Path baseDir) {
-        this(baseDir, 1, Duration.ofSeconds(6), null);
+        this(baseDir, DEFAULT_MAX_BUFFERED_OPS_PER_SHARD, DEFAULT_MAX_FLUSH_INTERVAL, null);
     }
 
     public IndexManager(Path baseDir, int maxBufferedOpsPerShard, Duration maxFlushInterval) {
@@ -61,9 +68,37 @@ public class IndexManager implements Closeable {
 
     public IndexManager(
             Path baseDir, int maxBufferedOpsPerShard, Duration maxFlushInterval, List<FieldConfig> fieldConfigs) {
+        this(baseDir, maxBufferedOpsPerShard, maxFlushInterval, fieldConfigs, new TextEmbeddingService(), true);
+    }
+
+    public IndexManager(
+            Path baseDir,
+            int maxBufferedOpsPerShard,
+            Duration maxFlushInterval,
+            List<FieldConfig> fieldConfigs,
+            TextEmbedder embeddingService) {
+        this(baseDir, maxBufferedOpsPerShard, maxFlushInterval, fieldConfigs, embeddingService, false);
+    }
+
+    private IndexManager(
+            Path baseDir,
+            int maxBufferedOpsPerShard,
+            Duration maxFlushInterval,
+            List<FieldConfig> fieldConfigs,
+            TextEmbedder embeddingService,
+            boolean ownsEmbeddingService) {
+        if (maxBufferedOpsPerShard < 1) {
+            throw new IllegalArgumentException("maxBufferedOpsPerShard must be greater than 0");
+        }
+        if (maxFlushInterval == null || maxFlushInterval.compareTo(Duration.ZERO) <= 0) {
+            throw new IllegalArgumentException("maxFlushInterval must be greater than zero");
+        }
         this.baseDir = baseDir;
         this.maxBufferedOpsPerShard = maxBufferedOpsPerShard;
         this.maxFlushInterval = maxFlushInterval;
+        this.embeddingService = Objects.requireNonNull(embeddingService, "embeddingService");
+        this.ownedEmbeddingService =
+                ownsEmbeddingService && embeddingService instanceof Closeable closeable ? closeable : null;
 
         // Build field config map
         this.fieldConfigMap = new HashMap<>();
@@ -82,7 +117,7 @@ public class IndexManager implements Closeable {
         });
 
         // Periodic flush based on time
-        long intervalMillis = maxFlushInterval.toMillis();
+        long intervalMillis = Math.max(1L, maxFlushInterval.toMillis());
         flushScheduler.scheduleAtFixedRate(
                 this::flushBuffersOnSchedule, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
     }
@@ -101,7 +136,7 @@ public class IndexManager implements Closeable {
                         .filter(name -> name.startsWith(SHARD_PREFIX))
                         .forEach(dirName -> {
                             String shardId = dirName.substring(SHARD_PREFIX.length());
-                            ShardIndex shardIndex = new ShardIndex(shardId, baseDir, fieldConfigMap);
+                            ShardIndex shardIndex = new ShardIndex(shardId, baseDir, fieldConfigMap, embeddingService);
                             shardIndexes.put(shardId, shardIndex);
                             shardBuffers.put(shardId, new ShardBuffer());
                         });
@@ -113,7 +148,7 @@ public class IndexManager implements Closeable {
 
     private ShardIndex getOrCreateShard(String shardId) {
         ShardIndex index = shardIndexes.computeIfAbsent(shardId, id -> {
-            ShardIndex si = new ShardIndex(id, baseDir, fieldConfigMap);
+            ShardIndex si = new ShardIndex(id, baseDir, fieldConfigMap, embeddingService);
             shardBuffers.put(id, new ShardBuffer());
             return si;
         });
@@ -137,10 +172,8 @@ public class IndexManager implements Closeable {
 
         buffer.lock.lock();
         try {
-            buffer.pendingDocs.add(doc);
-            buffer.pendingOpsCount++;
-            // Optional: keep a doc counter if you want doc-count-based metrics
-            if (buffer.pendingOpsCount >= maxBufferedOpsPerShard) {
+            buffer.add(BufferedOperation.index(doc));
+            if (buffer.pendingOperations.size() >= maxBufferedOpsPerShard) {
                 flushShardBufferLocked(partitionId, shardIndex, buffer);
             }
         } finally {
@@ -157,9 +190,8 @@ public class IndexManager implements Closeable {
         ShardBuffer buffer = getBuffer(partitionId);
         buffer.lock.lock();
         try {
-            buffer.pendingDeletes.add(docId);
-            buffer.pendingOpsCount++;
-            if (buffer.pendingOpsCount >= maxBufferedOpsPerShard) {
+            buffer.add(BufferedOperation.delete(docId));
+            if (buffer.pendingOperations.size() >= maxBufferedOpsPerShard) {
                 flushShardBufferLocked(partitionId, shardIndex, buffer);
             }
         } finally {
@@ -240,10 +272,10 @@ public class IndexManager implements Closeable {
                 continue;
             }
             try {
-                if (buffer.pendingOpsCount == 0) {
+                if (buffer.pendingOperations.isEmpty()) {
                     continue;
                 }
-                long elapsedNanos = nowNanos - buffer.lastFlushNanos;
+                long elapsedNanos = nowNanos - buffer.firstPendingNanos;
                 if (elapsedNanos >= maxFlushInterval.toNanos()) {
                     try {
                         flushShardBufferLocked(partitionId, shardIndex, buffer);
@@ -263,25 +295,21 @@ public class IndexManager implements Closeable {
      */
     private void flushShardBufferLocked(String partitionId, ShardIndex shardIndex, ShardBuffer buffer)
             throws IOException {
-        if (buffer.pendingOpsCount == 0) {
+        if (buffer.pendingOperations.isEmpty()) {
             return;
         }
         // Apply buffered operations
-        for (SearchDocument doc : buffer.pendingDocs) {
-            shardIndex.index(doc);
-        }
-        for (String docId : buffer.pendingDeletes) {
-            shardIndex.delete(docId);
+        for (BufferedOperation operation : buffer.pendingOperations) {
+            operation.apply(shardIndex);
         }
 
         shardIndex.commit();
         // Clear the buffer and reset counters
-        buffer.pendingDocs.clear();
-        buffer.pendingDeletes.clear();
-        buffer.pendingOpsCount = 0;
-        buffer.lastFlushNanos = System.nanoTime();
+        buffer.pendingOperations.clear();
+        buffer.firstPendingNanos = 0L;
+        long flushNanos = System.nanoTime();
 
-        LOGGER.fine(() -> "Flushed shard buffer for partitionId=" + partitionId + " at " + buffer.lastFlushNanos);
+        LOGGER.fine(() -> "Flushed shard buffer for partitionId=" + partitionId + " at " + flushNanos);
     }
 
     @Override
@@ -296,19 +324,43 @@ public class IndexManager implements Closeable {
             flushScheduler.shutdownNow();
         }
 
-        // Final flush & close all shards
-        for (Map.Entry<String, ShardIndex> entry : shardIndexes.entrySet()) {
-            String shardId = entry.getKey();
-            ShardIndex shardIndex = entry.getValue();
-            ShardBuffer buffer = getBuffer(shardId);
+        IOException first = null;
+        try {
+            // Final flush & close all shards
+            for (Map.Entry<String, ShardIndex> entry : shardIndexes.entrySet()) {
+                String shardId = entry.getKey();
+                ShardIndex shardIndex = entry.getValue();
+                ShardBuffer buffer = getBuffer(shardId);
 
-            buffer.lock.lock();
-            try {
-                flushShardBufferLocked(shardId, shardIndex, buffer);
-                shardIndex.close();
-            } finally {
-                buffer.lock.unlock();
+                buffer.lock.lock();
+                try {
+                    flushShardBufferLocked(shardId, shardIndex, buffer);
+                    shardIndex.close();
+                } catch (IOException e) {
+                    if (first == null) {
+                        first = e;
+                    } else {
+                        first.addSuppressed(e);
+                    }
+                } finally {
+                    buffer.lock.unlock();
+                }
             }
+        } finally {
+            if (ownedEmbeddingService != null) {
+                try {
+                    ownedEmbeddingService.close();
+                } catch (IOException e) {
+                    if (first == null) {
+                        first = e;
+                    } else {
+                        first.addSuppressed(e);
+                    }
+                }
+            }
+        }
+        if (first != null) {
+            throw first;
         }
     }
 
@@ -318,9 +370,36 @@ public class IndexManager implements Closeable {
      */
     private static final class ShardBuffer {
         final ReentrantLock lock = new ReentrantLock();
-        final List<SearchDocument> pendingDocs = new ArrayList<>();
-        final List<String> pendingDeletes = new ArrayList<>();
-        int pendingOpsCount = 0;
-        long lastFlushNanos = System.nanoTime();
+        final List<BufferedOperation> pendingOperations = new ArrayList<>();
+        long firstPendingNanos = 0L;
+
+        void add(BufferedOperation operation) {
+            if (pendingOperations.isEmpty()) {
+                firstPendingNanos = System.nanoTime();
+            }
+            pendingOperations.add(operation);
+        }
+    }
+
+    private record BufferedOperation(OperationType type, SearchDocument document, String docId) {
+        static BufferedOperation index(SearchDocument document) {
+            return new BufferedOperation(OperationType.INDEX, document, null);
+        }
+
+        static BufferedOperation delete(String docId) {
+            return new BufferedOperation(OperationType.DELETE, null, docId);
+        }
+
+        void apply(ShardIndex shardIndex) throws IOException {
+            switch (type) {
+                case INDEX -> shardIndex.index(document);
+                case DELETE -> shardIndex.delete(docId);
+            }
+        }
+    }
+
+    private enum OperationType {
+        INDEX,
+        DELETE
     }
 }

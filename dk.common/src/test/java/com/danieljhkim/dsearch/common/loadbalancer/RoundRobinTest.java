@@ -1,6 +1,7 @@
 package com.danieljhkim.dsearch.common.loadbalancer;
 
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertIterableEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 
@@ -8,67 +9,84 @@ import com.danieljhkim.dsearch.common.grpc.NodeClient;
 import io.grpc.ManagedChannel;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
 class RoundRobinTest {
 
-    private List<NodeClient<String>> createMockClients(int count) {
-        List<NodeClient<String>> clients = new ArrayList<>();
-        for (int i = 0; i < count; i++) {
-            // Use mocks instead of real gRPC channels to avoid transport dependency
-            ManagedChannel mockChannel = mock(ManagedChannel.class);
-            String stub = "stub-" + i;
-            NodeClient<String> client = new NodeClient<>("node-" + i, stub, mockChannel, "localhost", 8080 + i);
-            // isActive defaults to true, so no need to set it
-            clients.add(client);
-        }
-        return clients;
+    @Test
+    void constructorRejectsEmptyStaticClientList() {
+        assertThrows(IllegalArgumentException.class, () -> new RoundRobin<>(List.of()));
     }
 
     @Test
-    void testRoundRobin_EmptyList() {
-        assertThrows(IllegalArgumentException.class, () -> new RoundRobin<>(new ArrayList<>()));
-    }
-
-    @Test
-    void testRoundRobin_NullList() {
+    void constructorRejectsNullStaticClientList() {
         assertThrows(IllegalArgumentException.class, () -> new RoundRobin<>(null));
     }
 
     @Test
-    void testNext_SingleItem() {
-        List<NodeClient<String>> clients = createMockClients(1);
-        RoundRobin<String> rr = new RoundRobin<>(clients);
-        NodeClient<String> client = rr.next();
-        assertNotNull(client);
+    void nextReturnsStableSequenceAndWrapsAround() {
+        RoundRobin<String> roundRobin = new RoundRobin<>(clients("node-0", "node-1", "node-2"));
+
+        List<String> selectedNodeIds = IntStream.range(0, 5)
+                .mapToObj(i -> roundRobin.next().getNodeId())
+                .toList();
+
+        assertIterableEquals(List.of("node-0", "node-1", "node-2", "node-0", "node-1"), selectedNodeIds);
     }
 
     @Test
-    void testNext_MultipleItems() {
-        List<NodeClient<String>> clients = createMockClients(3);
-        RoundRobin<String> rr = new RoundRobin<>(clients);
+    void dynamicRoundRobinRejectsEmptySupplierResults() {
+        RoundRobin<String> roundRobin = RoundRobin.dynamic(List::of);
 
-        NodeClient<String> client1 = rr.next();
-        assertNotNull(client1);
-
-        NodeClient<String> client2 = rr.next();
-        assertNotNull(client2);
-
-        NodeClient<String> client3 = rr.next();
-        assertNotNull(client3);
+        assertThrows(IllegalStateException.class, roundRobin::next);
     }
 
     @Test
-    void testNext_WrapsAround() {
-        List<NodeClient<String>> clients = createMockClients(2);
-        RoundRobin<String> rr = new RoundRobin<>(clients);
+    void dynamicRoundRobinRejectsAllInactiveClients() {
+        List<NodeClient<String>> clients = clients("node-0", "node-1");
+        clients.forEach(client -> client.setActive(false));
+        RoundRobin<String> roundRobin = RoundRobin.dynamic(() -> clients);
 
-        NodeClient<String> client1 = rr.next();
-        NodeClient<String> client2 = rr.next();
-        NodeClient<String> client3 = rr.next(); // Should wrap around
+        assertThrows(IllegalStateException.class, roundRobin::next);
+    }
 
-        assertNotNull(client1);
-        assertNotNull(client2);
-        assertNotNull(client3);
+    @Test
+    void dynamicRoundRobinSkipsInactiveAndRemovedClients() {
+        List<NodeClient<String>> clients = new ArrayList<>(clients("node-0", "node-1", "node-2"));
+        RoundRobin<String> roundRobin = RoundRobin.dynamic(() -> clients);
+
+        assertEquals("node-0", roundRobin.next().getNodeId());
+
+        clients.get(1).setActive(false);
+        assertEquals("node-2", roundRobin.next().getNodeId());
+
+        clients.removeIf(client -> client.getNodeId().equals("node-2"));
+        assertEquals("node-0", roundRobin.next().getNodeId());
+        assertEquals("node-0", roundRobin.next().getNodeId());
+    }
+
+    @Test
+    void dynamicRoundRobinSelectsNewlyAddedClients() {
+        List<NodeClient<String>> clients = new ArrayList<>(clients("node-0"));
+        RoundRobin<String> roundRobin = RoundRobin.dynamic(() -> clients);
+
+        assertEquals("node-0", roundRobin.next().getNodeId());
+
+        clients.add(client("node-1"));
+
+        assertEquals("node-1", roundRobin.next().getNodeId());
+        assertEquals("node-0", roundRobin.next().getNodeId());
+    }
+
+    private static List<NodeClient<String>> clients(String... nodeIds) {
+        return IntStream.range(0, nodeIds.length)
+                .mapToObj(i -> client(nodeIds[i]))
+                .toList();
+    }
+
+    private static NodeClient<String> client(String nodeId) {
+        ManagedChannel channel = mock(ManagedChannel.class);
+        return new NodeClient<>(nodeId, "stub-" + nodeId, channel, "localhost", 8080);
     }
 }

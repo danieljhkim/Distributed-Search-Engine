@@ -14,6 +14,7 @@ public class SearchResult {
     private final int page_size;
     private int page;
     private List<FacetResponse> facets;
+    private FanoutMetadata fanoutMetadata;
 
     public SearchResult(List<SearchHit> hits, long totalHits, int page) {
         this.hits = List.copyOf(hits);
@@ -31,10 +32,34 @@ public class SearchResult {
     }
 
     public SearchResult(List<SearchHit> hits, long totalHits, int page, List<FacetResponse> facets) {
+        this(hits, totalHits, page, facets, null);
+    }
+
+    public SearchResult(
+            List<SearchHit> hits, long totalHits, int page, List<FacetResponse> facets, FanoutMetadata fanoutMetadata) {
         this.hits = List.copyOf(hits);
         this.totalHits = totalHits;
         this.page = page;
         this.page_size = hits.size();
         this.facets = facets != null ? List.copyOf(facets) : null;
+        this.fanoutMetadata = fanoutMetadata;
+    }
+
+    public enum FanoutStatus {
+        SUCCESS,
+        PARTIAL_FAILURE,
+        FAILED
+    }
+
+    public record FanoutMetadata(int attemptedNodes, int succeededNodes, int failedNodes, int timedOutNodes) {
+        public FanoutStatus status() {
+            if (attemptedNodes == 0 || succeededNodes == 0) {
+                return FanoutStatus.FAILED;
+            }
+            if (failedNodes > 0 || timedOutNodes > 0 || succeededNodes < attemptedNodes) {
+                return FanoutStatus.PARTIAL_FAILURE;
+            }
+            return FanoutStatus.SUCCESS;
+        }
     }
 }

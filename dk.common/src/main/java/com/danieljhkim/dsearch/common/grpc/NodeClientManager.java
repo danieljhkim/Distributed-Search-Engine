@@ -1,5 +1,7 @@
 package com.danieljhkim.dsearch.common.grpc;
 
+import com.danieljhkim.dsearch.common.cluster.NodeGroup;
+import com.danieljhkim.dsearch.common.cluster.NodeGroupManager;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.config.ConfigLoader;
 import com.danieljhkim.dsearch.common.enums.RoutingStrategy;
@@ -8,70 +10,74 @@ import com.danieljhkim.dsearch.common.shard.ShardState;
 import com.danieljhkim.dsearch.common.shard.ShardStateStore;
 import com.danieljhkim.dsearch.common.tracing.CorrelationIdClientInterceptor;
 import com.danieljhkim.dsearch.proto.cluster.ClusterServiceGrpc;
-import com.danieljhkim.dsearch.proto.cluster.GetClusterInfoRequest;
-import com.danieljhkim.dsearch.proto.cluster.GetClusterInfoResponse;
-import com.danieljhkim.dsearch.proto.cluster.NodeInfo;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import io.grpc.Channel;
 import io.grpc.ClientInterceptors;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import java.io.IOException;
-import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
-import java.util.logging.Level;
 import java.util.logging.Logger;
-import java.util.stream.Collectors;
 import lombok.Getter;
 
 public class NodeClientManager<T> {
 
     private static final Logger LOGGER = Logger.getLogger(NodeClientManager.class.getName());
-    private static final CorrelationIdClientInterceptor tracingInterceptor = new CorrelationIdClientInterceptor();
-    private static NodeClientManager<ClusterServiceGrpc.ClusterServiceBlockingStub> coordinatorManager;
-    private static AppConfig defaultConfig;
-    private static PrometheusGrpcClientInterceptor metricsInterceptor;
-
-    static {
-        try {
-            defaultConfig = ConfigLoader.load();
-            coordinatorManager = loadClientManager(NodeRole.NODE_ROLE_COORDINATOR, ClusterServiceGrpc::newBlockingStub);
-        } catch (IOException | RuntimeException e) {
-            LOGGER.log(Level.SEVERE, "Failed to load application configuration", e);
-        }
-    }
+    private static final CorrelationIdClientInterceptor TRACING_INTERCEPTOR = new CorrelationIdClientInterceptor();
 
     private final RoundRobin<T> rr;
 
     @Getter
     private final Map<String, NodeClient<T>> clientMap;
 
+    private volatile List<NodeClient<T>> activeClients;
     private final RoutingStrategy routingStrategy;
     private final NodeClientHealthRefresher healthRefresher;
     private final NodeRole nodeRole;
-    private final Function<Channel, T> clientFactory;
+    private final Function<NodeRole, NodeGroup> nodeGroupResolver;
+    private final Function<NodeGroup.NodeInfo, NodeClient<T>> nodeClientFactory;
 
     public NodeClientManager(
             Map<String, NodeClient<T>> clientMap,
             RoutingStrategy routingStrategy,
             NodeRole nodeRole,
             Function<Channel, T> clientFactory) {
-        this.nodeRole = nodeRole;
-        this.clientFactory = clientFactory;
-        this.clientMap = Objects.requireNonNull(clientMap, "clientMap must not be null");
-        this.rr = new RoundRobin<>(this.clientMap.values().stream().toList());
-        this.routingStrategy = routingStrategy;
+        this(clientMap, routingStrategy, nodeRole, role -> null, null, node -> {
+            throw new IllegalStateException("No node client factory configured for service discovery refresh");
+        });
+    }
 
-        AppConfig.ServiceDiscoveryConfig sd = defaultConfig != null ? defaultConfig.getServiceDiscovery() : null;
-        if (sd != null && sd.isEnabled()) {
-            int interval = sd.getRefreshIntervalSeconds();
+    NodeClientManager(
+            Map<String, NodeClient<T>> clientMap,
+            RoutingStrategy routingStrategy,
+            NodeRole nodeRole,
+            Function<NodeRole, NodeGroup> nodeGroupResolver,
+            AppConfig.ServiceDiscoveryConfig serviceDiscoveryConfig,
+            Function<NodeGroup.NodeInfo, NodeClient<T>> nodeClientFactory) {
+        Objects.requireNonNull(clientMap, "clientMap must not be null");
+        if (clientMap.isEmpty()) {
+            throw new IllegalArgumentException("clientMap must not be empty");
+        }
+        this.nodeRole = Objects.requireNonNull(nodeRole, "nodeRole must not be null");
+        this.clientMap = new ConcurrentHashMap<>(clientMap);
+        this.routingStrategy = Objects.requireNonNull(routingStrategy, "routingStrategy must not be null");
+        this.nodeGroupResolver = Objects.requireNonNull(nodeGroupResolver, "nodeGroupResolver must not be null");
+        this.nodeClientFactory = Objects.requireNonNull(nodeClientFactory, "nodeClientFactory must not be null");
+        rebuildActiveClientSnapshot();
+        this.rr = RoundRobin.dynamic(this::activeClientsSnapshot);
+
+        if (serviceDiscoveryConfig != null && serviceDiscoveryConfig.isEnabled()) {
+            int interval = Math.max(1, serviceDiscoveryConfig.getRefreshIntervalSeconds());
             this.healthRefresher = new NodeClientHealthRefresher(interval);
             LOGGER.info(() -> "Service discovery enabled for role " + nodeRole + " with refresh interval: " + interval
                     + " seconds");
@@ -82,82 +88,81 @@ public class NodeClientManager<T> {
     }
 
     public static <T> NodeClientManager<T> loadClientManager(NodeRole role, Function<Channel, T> clientFactory) {
-        AppConfig.NodeGroupConfig appConfig = getNodeGroupConfig(role);
-        if (metricsInterceptor == null) {
-            String component = appConfig.getComponentLabel() != null ? appConfig.getComponentLabel() : "gateway";
-            metricsInterceptor = new PrometheusGrpcClientInterceptor(component);
-        }
-        Map<String, NodeClient<T>> clientMap = appConfig.getNodes().stream()
-                .collect(Collectors.toMap(node -> String.valueOf(node.getId()), node -> {
-                    ManagedChannel channel = ManagedChannelBuilder.forAddress(node.getHost(), node.getPort())
-                            .usePlaintext()
-                            .build();
-                    Channel interceptedChannel =
-                            ClientInterceptors.intercept(channel, tracingInterceptor, metricsInterceptor);
-                    T stub = clientFactory.apply(interceptedChannel);
-                    return new NodeClient<>(
-                            String.valueOf(node.getId()), stub, channel, node.getHost(), node.getHealthPort());
-                }));
-        return new NodeClientManager<>(clientMap, appConfig.getRoutingStrategy(), role, clientFactory);
-    }
-
-    @SuppressWarnings("all")
-    public static AppConfig.NodeGroupConfig getNodeGroupConfig(NodeRole role) {
-        if (role == NodeRole.NODE_ROLE_COORDINATOR) {
-            // hack: for coordinator role, use static config.
-            return getStaticNodeGroupConfig(role);
-        }
-        // If service discovery is disabled just use the static config from
-        // app-config.yaml
-        if (!isServiceDiscoveryEnabled()
-                || coordinatorManager == null
-                || defaultConfig == null
-                || defaultConfig.getCoordinatorNodes() == null) {
-            return getStaticNodeGroupConfig(role);
-        }
-        GetClusterInfoRequest request =
-                GetClusterInfoRequest.newBuilder().setRole(role).build();
         try {
-            GetClusterInfoResponse response = coordinatorManager.nextClient().getClusterInfo(request);
-            AppConfig.NodeGroupConfig nodeGroupConfig = new AppConfig.NodeGroupConfig();
-            nodeGroupConfig.setComponentLabel(response.getComponentLabel());
-            nodeGroupConfig.setRoutingStrategy(RoutingStrategy.valueOf(response.getRoutingStrategy()));
-
-            List<AppConfig.NodeConfig> nodeConfigs = new ArrayList<>();
-            for (NodeInfo nodeProto : response.getNodesList()) {
-                AppConfig.NodeConfig nodeConfig = new AppConfig.NodeConfig();
-                nodeConfig.setId(nodeProto.getNodeId());
-                nodeConfig.setHost(nodeProto.getHost());
-                nodeConfig.setPort(nodeProto.getPort());
-                nodeConfig.setHealthPort(nodeProto.getHealthPort());
-                nodeConfigs.add(nodeConfig);
+            AppConfig appConfig = ConfigLoader.load();
+            NodeGroupManager nodeGroupManager = new NodeGroupManager(appConfig);
+            if (role != NodeRole.NODE_ROLE_COORDINATOR) {
+                configureCoordinatorManager(nodeGroupManager);
             }
-            nodeGroupConfig.setNodes(nodeConfigs);
-            return nodeGroupConfig;
-        } catch (Exception e) {
-            LOGGER.warning(() -> "Failed to fetch cluster info from coordinator for role " + role
-                    + ". Falling back to static configuration. Cause: " + e.toString());
-            return getStaticNodeGroupConfig(role);
+            return loadClientManager(role, clientFactory, nodeGroupManager);
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to load application configuration", e);
         }
     }
 
-    private static AppConfig.NodeGroupConfig getStaticNodeGroupConfig(NodeRole role) {
-        if (defaultConfig == null) {
-            return null;
-        }
-        return switch (role) {
-            case NODE_ROLE_INDEX -> defaultConfig.getIndexNodes();
-            case NODE_ROLE_QUERY -> defaultConfig.getQueryNodes();
-            case NODE_ROLE_COORDINATOR -> defaultConfig.getCoordinatorNodes();
-            default -> throw new IllegalArgumentException("Unsupported role: " + role);
-        };
+    public static <T> NodeClientManager<T> loadClientManager(
+            NodeRole role, Function<Channel, T> clientFactory, NodeGroupManager nodeGroupManager) {
+        boolean useServiceDiscovery = role != NodeRole.NODE_ROLE_COORDINATOR;
+        return loadClientManager(role, clientFactory, nodeGroupManager, useServiceDiscovery);
     }
 
-    private static boolean isServiceDiscoveryEnabled() {
-        if (defaultConfig == null || defaultConfig.getServiceDiscovery() == null) {
-            return false;
+    private static void configureCoordinatorManager(NodeGroupManager nodeGroupManager) {
+        if (!nodeGroupManager.isServiceDiscoveryEnabled() || nodeGroupManager.hasCoordinatorManager()) {
+            return;
         }
-        return defaultConfig.getServiceDiscovery().isEnabled();
+        NodeClientManager<ClusterServiceGrpc.ClusterServiceBlockingStub> coordinatorManager = loadClientManager(
+                NodeRole.NODE_ROLE_COORDINATOR, ClusterServiceGrpc::newBlockingStub, nodeGroupManager, false);
+        nodeGroupManager.setCoordinatorManager(coordinatorManager);
+    }
+
+    private static <T> NodeClientManager<T> loadClientManager(
+            NodeRole role,
+            Function<Channel, T> clientFactory,
+            NodeGroupManager nodeGroupManager,
+            boolean useServiceDiscovery) {
+        Objects.requireNonNull(role, "role must not be null");
+        Objects.requireNonNull(clientFactory, "clientFactory must not be null");
+        Objects.requireNonNull(nodeGroupManager, "nodeGroupManager must not be null");
+
+        NodeGroup nodeGroup = useServiceDiscovery
+                ? nodeGroupManager.getNodeGroup(role)
+                : nodeGroupManager.getStaticNodeGroupConfig(role);
+        if (nodeGroup == null) {
+            throw new IllegalStateException("No node group configured for role: " + role);
+        }
+
+        PrometheusGrpcClientInterceptor metricsInterceptor =
+                new PrometheusGrpcClientInterceptor(componentLabel(nodeGroup));
+        Map<String, NodeClient<T>> clientMap = new HashMap<>();
+        for (NodeGroup.NodeInfo node : nodeGroup.getAllNodes()) {
+            clientMap.put(node.getNodeId(), createNodeClient(node, clientFactory, metricsInterceptor));
+        }
+
+        AppConfig.ServiceDiscoveryConfig serviceDiscoveryConfig =
+                useServiceDiscovery ? nodeGroupManager.getServiceDiscoveryConfig() : null;
+        return new NodeClientManager<>(
+                clientMap,
+                nodeGroup.getRoutingStrategy(),
+                role,
+                nodeGroupManager::getNodeGroup,
+                serviceDiscoveryConfig,
+                node -> createNodeClient(node, clientFactory, metricsInterceptor));
+    }
+
+    private static String componentLabel(NodeGroup nodeGroup) {
+        return nodeGroup.getComponentLabel() != null ? nodeGroup.getComponentLabel() : "gateway";
+    }
+
+    private static <T> NodeClient<T> createNodeClient(
+            NodeGroup.NodeInfo node,
+            Function<Channel, T> clientFactory,
+            PrometheusGrpcClientInterceptor metricsInterceptor) {
+        ManagedChannel channel = ManagedChannelBuilder.forAddress(node.getHost(), node.getPort())
+                .usePlaintext()
+                .build();
+        Channel interceptedChannel = ClientInterceptors.intercept(channel, TRACING_INTERCEPTOR, metricsInterceptor);
+        T stub = clientFactory.apply(interceptedChannel);
+        return new NodeClient<>(node.getNodeId(), stub, channel, node.getHost(), node.getHealthPort());
     }
 
     /**
@@ -182,11 +187,11 @@ public class NodeClientManager<T> {
     public T nextLeastLoadedClient(String partitionId, boolean isWriteOperation) { // TODO: handle update
         NodeClient<T> leastLoadedClient = null;
         long minDocCount = Long.MAX_VALUE;
-        for (NodeClient<T> client : clientMap.values()) {
+        for (NodeClient<T> client : activeClientsSnapshot()) {
             long shardDocCount = client.getShardDocCount(partitionId);
             LOGGER.info(() ->
                     "Client " + client.getNodeId() + " has partition " + partitionId + " doc count: " + shardDocCount);
-            if (shardDocCount < minDocCount && client.isActive()) {
+            if (shardDocCount < minDocCount) {
                 minDocCount = shardDocCount;
                 leastLoadedClient = client;
             }
@@ -240,30 +245,43 @@ public class NodeClientManager<T> {
     }
 
     void refreshClientsFromCluster() {
-        for (NodeClient<T> client : clientMap.values()) {
-            client.setActive(false);
-        }
-        AppConfig.NodeGroupConfig cfg = getNodeGroupConfig(this.nodeRole);
+        NodeGroup cfg = nodeGroupResolver.apply(this.nodeRole);
         if (cfg == null || cfg.getNodes() == null) {
+            LOGGER.warning(() -> "No node group available while refreshing role " + nodeRole);
             return;
         }
-        for (AppConfig.NodeConfig nodeConfig : cfg.getNodes()) {
-            NodeClient<T> existing = clientMap.get(nodeConfig.getId());
-            if (existing == null) {
-                clientMap.put(nodeConfig.getId(), initClient(nodeConfig));
-            } else {
-                existing.setActive(true);
+
+        List<NodeGroup.NodeInfo> discoveredNodes = cfg.getAllNodes();
+        Set<String> discoveredNodeIds = discoveredNodes.stream()
+                .map(NodeGroup.NodeInfo::getNodeId)
+                .collect(java.util.stream.Collectors.toSet());
+
+        for (NodeGroup.NodeInfo nodeConfig : discoveredNodes) {
+            NodeClient<T> client =
+                    clientMap.computeIfAbsent(nodeConfig.getNodeId(), id -> nodeClientFactory.apply(nodeConfig));
+            client.setActive(true);
+        }
+        for (NodeClient<T> client : clientMap.values()) {
+            if (!discoveredNodeIds.contains(client.getNodeId())) {
+                client.setActive(false);
             }
         }
+        rebuildActiveClientSnapshot();
     }
 
-    private NodeClient<T> initClient(AppConfig.NodeConfig node) {
-        ManagedChannel channel = ManagedChannelBuilder.forAddress(node.getHost(), node.getPort())
-                .usePlaintext()
-                .build();
-        Channel interceptedChannel = ClientInterceptors.intercept(channel, tracingInterceptor, metricsInterceptor);
-        T stub = clientFactory.apply(interceptedChannel);
-        return new NodeClient<>(String.valueOf(node.getId()), stub, channel, node.getHost(), node.getHealthPort());
+    public List<String> getActiveNodeIds() {
+        return activeClientsSnapshot().stream().map(NodeClient::getNodeId).toList();
+    }
+
+    List<NodeClient<T>> activeClientsSnapshot() {
+        return activeClients;
+    }
+
+    private void rebuildActiveClientSnapshot() {
+        this.activeClients = this.clientMap.values().stream()
+                .filter(NodeClient::isActive)
+                .sorted(Comparator.comparing(NodeClient::getNodeId))
+                .toList();
     }
 
     public void shutdown() {
@@ -276,7 +294,6 @@ public class NodeClientManager<T> {
                 channel.shutdown();
             }
         }
-        coordinatorManager.shutdown();
     }
 
     /**

@@ -38,7 +38,7 @@ The system is composed of three primary components:
   Each partition is a Lucene index responsible for a categorical or domain‑specific slice of your data.
 
 - **Coordinator Node**  
-  Service discovery and health aggregation across the cluster (optional). It allows dynamic addition/removal of index/query nodes without restarting the cluster.
+  Optional, in-memory service discovery and health aggregation across the cluster. It accepts node registration/update requests and filters unhealthy nodes from discovery responses. Dynamic removal, coordinator-owned shard maps, and failover orchestration are future work.
 
 ### Sharding & Load Balancing
 
@@ -51,6 +51,8 @@ The system is composed of three primary components:
   - Counts are periodically snapshotted to disk so new Gateway instances can restore their view.
 
 There is **no replication layer** yet. If an index node goes down, documents stored on that node’s shards are temporarily unavailable until the node comes back up and reloads its Lucene indices.
+
+The coordinator currently exposes the health-aware node registry only. Heartbeat and shard-map gRPC methods are reserved for future runtime semantics and return `UNIMPLEMENTED`.
 
 This design intentionally keeps the system:
 - **Simple to operate** (few moving parts)
@@ -294,6 +296,8 @@ serviceDiscovery:
 indexNodes:
   routingStrategy: "LEAST_LOADED"
   componentLabel: "dsearch-index-node"
+  # Current runtime has no replication layer; this is documented for future work.
+  replicationFactor: 1
   nodes:
     - id: "0"
       host: "localhost"
@@ -327,6 +331,7 @@ ml:
 
 - `indexNodes.routingStrategy` currently supports **`LEAST_LOADED`**, using per‑shard, per‑node doc counts.
 - `queryNodes.routingStrategy` currently supports **`ROUND_ROBIN`** for fan‑out queries across multiple query node instances.
+- Coordinator service discovery is an in-memory, health-aware registry. It supports registration/update and cluster-info lookup for configured node groups; heartbeat, shard-map, replication, and dynamic removal semantics are deferred.
 
 ---
 
@@ -337,6 +342,9 @@ This project is intentionally minimal and educational. Some trade‑offs and pot
 - **No replication layer (yet)**
   - A shard lives on exactly one node; if that node goes down, its data is unavailable until restart.
   - Future direction: coordinator‑driven replication / Raft‑based shard groups.
+- **Coordinator shard map and dynamic removal are deferred**
+  - The coordinator returns `UNIMPLEMENTED` for heartbeat and shard-map RPCs.
+  - Node removal and shard relocation are not automated; update configuration or restart affected components for planned topology changes.
 
 ---
 

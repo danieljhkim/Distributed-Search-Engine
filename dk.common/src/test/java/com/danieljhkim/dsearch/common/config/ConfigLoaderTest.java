@@ -1,6 +1,7 @@
 package com.danieljhkim.dsearch.common.config;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -45,6 +46,10 @@ class ConfigLoaderTest {
     void testLoad_DefaultConfig() throws IOException {
         AppConfig config = assertDoesNotThrow(() -> ConfigLoader.load());
         assertNotNull(config);
+        assertNotNull(config.getIndexing());
+        assertEquals(100, config.getIndexing().getMaxBufferedOpsPerShard());
+        assertEquals(5, config.getIndexing().getMaxFlushIntervalSeconds());
+        assertEquals(1, config.getMl().getModels().getTextEmbedding().getPredictorPoolSize());
     }
 
     @Test
