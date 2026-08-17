@@ -220,9 +220,12 @@ class GatewayApiControllerTest {
     void clusterHealthReturnsAggregatedSuccessStatus() throws Exception {
         when(appConfig.getIndexNodes()).thenReturn(nodeGroup("index-0", "127.0.0.1", 5000, 5100));
         when(appConfig.getQueryNodes()).thenReturn(nodeGroup("query-0", "127.0.0.1", 6000, 6100));
+        when(appConfig.getCoordinatorNodes()).thenReturn(nodeGroup("coordinator-0", "127.0.0.1", 7000, 7100));
         when(restTemplate.getForEntity("http://127.0.0.1:5100/health", String.class))
                 .thenReturn(ResponseEntity.ok("{\"status\":\"UP\"}"));
         when(restTemplate.getForEntity("http://127.0.0.1:6100/health", String.class))
+                .thenReturn(ResponseEntity.ok("{\"status\":\"UP\"}"));
+        when(restTemplate.getForEntity("http://127.0.0.1:7100/health", String.class))
                 .thenReturn(ResponseEntity.ok("{\"status\":\"UP\"}"));
 
         mockMvc.perform(get("/cluster/health").header(REQUEST_ID_HEADER, "health-request-1"))
@@ -236,7 +239,27 @@ class GatewayApiControllerTest {
                 .andExpect(jsonPath("$.indexNodes[0].status").value("UP"))
                 .andExpect(jsonPath("$.queryNodes[0].id").value("query-0"))
                 .andExpect(jsonPath("$.queryNodes[0].status").value("UP"))
+                .andExpect(jsonPath("$.coordinatorNodes[0].id").value("coordinator-0"))
+                .andExpect(jsonPath("$.coordinatorNodes[0].status").value("UP"))
                 .andExpect(jsonPath("$.timestamp").isString());
+    }
+
+    @Test
+    void clusterHealthReturnsDegradedWhenCoordinatorIsDown() throws Exception {
+        when(appConfig.getIndexNodes()).thenReturn(nodeGroup("index-0", "127.0.0.1", 5000, 5100));
+        when(appConfig.getQueryNodes()).thenReturn(nodeGroup("query-0", "127.0.0.1", 6000, 6100));
+        when(appConfig.getCoordinatorNodes()).thenReturn(nodeGroup("coordinator-0", "127.0.0.1", 7000, 7100));
+        when(restTemplate.getForEntity("http://127.0.0.1:5100/health", String.class))
+                .thenReturn(ResponseEntity.ok("{\"status\":\"UP\"}"));
+        when(restTemplate.getForEntity("http://127.0.0.1:6100/health", String.class))
+                .thenReturn(ResponseEntity.ok("{\"status\":\"UP\"}"));
+        when(restTemplate.getForEntity("http://127.0.0.1:7100/health", String.class))
+                .thenThrow(new RuntimeException("coordinator unavailable"));
+
+        mockMvc.perform(get("/cluster/health"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.status").value("DEGRADED"))
+                .andExpect(jsonPath("$.coordinatorNodes[0].status").value("DOWN"));
     }
 
     @Test
