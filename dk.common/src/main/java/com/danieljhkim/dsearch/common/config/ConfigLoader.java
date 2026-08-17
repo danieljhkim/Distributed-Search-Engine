@@ -2,6 +2,7 @@ package com.danieljhkim.dsearch.common.config;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.List;
 import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.Constructor;
@@ -41,7 +42,42 @@ public class ConfigLoader {
             if (in == null) {
                 throw new RuntimeException("Config file not found on classpath: " + yamlResourcePath);
             }
-            return yaml.load(in);
+            return applyRuntimeNodeCounts(
+                    yaml.load(in), System.getenv("N_INDEX_NODES"), System.getenv("N_QUERY_NODES"));
         }
+    }
+
+    static AppConfig applyRuntimeNodeCounts(AppConfig config, String indexNodeCount, String queryNodeCount) {
+        applyRuntimeNodeCount(config.getIndexNodes(), indexNodeCount, "N_INDEX_NODES");
+        applyRuntimeNodeCount(config.getQueryNodes(), queryNodeCount, "N_QUERY_NODES");
+        return config;
+    }
+
+    private static void applyRuntimeNodeCount(
+            AppConfig.NodeGroupConfig groupConfig, String nodeCountValue, String environmentVariable) {
+        if (nodeCountValue == null || nodeCountValue.isBlank()) {
+            return;
+        }
+        if (groupConfig == null || groupConfig.getNodes() == null) {
+            throw new IllegalArgumentException(
+                    environmentVariable + " is set but its configured node group is missing");
+        }
+
+        int nodeCount;
+        try {
+            nodeCount = Integer.parseInt(nodeCountValue);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(
+                    environmentVariable + " must be a positive integer: " + nodeCountValue, e);
+        }
+        if (nodeCount < 1) {
+            throw new IllegalArgumentException(environmentVariable + " must be a positive integer: " + nodeCountValue);
+        }
+        List<AppConfig.NodeConfig> configuredNodes = groupConfig.getNodes();
+        if (nodeCount > configuredNodes.size()) {
+            throw new IllegalArgumentException(environmentVariable + " requests " + nodeCount + " nodes, but only "
+                    + configuredNodes.size() + " are configured");
+        }
+        groupConfig.setNodes(List.copyOf(configuredNodes.subList(0, nodeCount)));
     }
 }
