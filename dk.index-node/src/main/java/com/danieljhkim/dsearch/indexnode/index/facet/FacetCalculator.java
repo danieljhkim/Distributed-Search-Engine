@@ -70,7 +70,7 @@ public class FacetCalculator {
             responses.addAll(computeFacets(searcher, fc, facetRequests));
         } catch (IOException e) {
             LOGGER.log(Level.WARNING, "Failed to compute facets", e);
-        } catch (IllegalStateException e) {
+        } catch (IllegalStateException | IllegalArgumentException e) {
             // This can happen if there are no facet fields indexed
             LOGGER.log(Level.FINE, "No facet fields found in index", e);
         }
@@ -100,7 +100,7 @@ public class FacetCalculator {
             }
         } catch (IOException e) {
             LOGGER.log(Level.WARNING, "Failed to compute facets", e);
-        } catch (IllegalStateException e) {
+        } catch (IllegalStateException | IllegalArgumentException e) {
             // This can happen if there are no facet fields indexed
             LOGGER.log(Level.FINE, "No facet fields found in index", e);
         }
