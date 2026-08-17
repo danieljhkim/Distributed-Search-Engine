@@ -2,6 +2,7 @@ package com.danieljhkim.dsearch.gateway.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -260,6 +261,23 @@ class GatewayApiControllerTest {
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.status").value("DEGRADED"))
                 .andExpect(jsonPath("$.coordinatorNodes[0].status").value("DOWN"));
+    }
+
+    @Test
+    void clusterHealthOnlyProbesTheEffectiveConfiguredNodeSet() throws Exception {
+        when(appConfig.getIndexNodes()).thenReturn(nodeGroup("index-0", "127.0.0.1", 5000, 5100));
+        when(appConfig.getQueryNodes()).thenReturn(nodeGroup("query-0", "127.0.0.1", 6000, 6100));
+        when(appConfig.getCoordinatorNodes()).thenReturn(nodeGroup("coordinator-0", "127.0.0.1", 7000, 7100));
+        when(restTemplate.getForEntity(any(String.class), org.mockito.ArgumentMatchers.eq(String.class)))
+                .thenReturn(ResponseEntity.ok("{\"status\":\"UP\"}"));
+
+        mockMvc.perform(get("/cluster/health")).andExpect(status().isOk());
+
+        verify(restTemplate).getForEntity("http://127.0.0.1:5100/health", String.class);
+        verify(restTemplate).getForEntity("http://127.0.0.1:6100/health", String.class);
+        verify(restTemplate).getForEntity("http://127.0.0.1:7100/health", String.class);
+        verify(restTemplate, never()).getForEntity("http://127.0.0.1:5101/health", String.class);
+        verify(restTemplate, never()).getForEntity("http://127.0.0.1:6101/health", String.class);
     }
 
     @Test

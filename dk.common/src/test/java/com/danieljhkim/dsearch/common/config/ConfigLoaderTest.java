@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class ConfigLoaderTest {
@@ -61,5 +62,34 @@ class ConfigLoaderTest {
     @Test
     void testLoad_NonExistentConfig() {
         assertThrows(RuntimeException.class, () -> ConfigLoader.load("non-existent-config.yaml"));
+    }
+
+    @Test
+    void runtimeNodeCountsLimitConfiguredIndexAndQueryNodesTogether() throws IOException {
+        AppConfig config = ConfigLoader.load("app-config.yaml");
+
+        ConfigLoader.applyRuntimeNodeCounts(config, "1", "1");
+
+        assertEquals(
+                List.of("0"),
+                config.getIndexNodes().getNodes().stream()
+                        .map(AppConfig.NodeConfig::getId)
+                        .toList());
+        assertEquals(
+                List.of("0"),
+                config.getQueryNodes().getNodes().stream()
+                        .map(AppConfig.NodeConfig::getId)
+                        .toList());
+        assertEquals(1, config.getCoordinatorNodes().getNodes().size());
+    }
+
+    @Test
+    void runtimeNodeCountsRejectNodesThatCannotBeDeployed() throws IOException {
+        AppConfig config = ConfigLoader.load("app-config.yaml");
+
+        IllegalArgumentException exception = assertThrows(
+                IllegalArgumentException.class, () -> ConfigLoader.applyRuntimeNodeCounts(config, "3", "1"));
+
+        assertTrue(exception.getMessage().contains("N_INDEX_NODES requests 3 nodes"));
     }
 }
