@@ -68,11 +68,9 @@ class GatewayApiControllerTest {
     void indexDocumentReturnsSuccessAndMapsRequestBody() throws Exception {
         when(indexService.index(any(IndexRequestDto.class))).thenReturn(new IndexResponseDto("doc-1", true));
 
-        mockMvc.perform(
-                        post("/api/v1/index")
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .content(
-                                        """
+        mockMvc.perform(post("/api/v1/index")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
                                 {
                                   "id": "doc-1",
                                   "partitionId": "tenant-a",
@@ -130,11 +128,9 @@ class GatewayApiControllerTest {
                 "category", List.of(new com.danieljhkim.dsearch.gateway.api.dto.FacetBucketDto("docs", 4L)))));
         when(searchService.search(any(SearchRequestDto.class))).thenReturn(response);
 
-        mockMvc.perform(
-                        post("/api/v1/search")
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .content(
-                                        """
+        mockMvc.perform(post("/api/v1/search")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
                                 {
                                   "query": "lucene vector",
                                   "partitionId": "tenant-a",
@@ -282,11 +278,9 @@ class GatewayApiControllerTest {
 
     @Test
     void searchValidationFailureReturnsExactErrorShape() throws Exception {
-        mockMvc.perform(
-                        post("/api/v1/search")
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .content(
-                                        """
+        mockMvc.perform(post("/api/v1/search")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
                                 {
                                   "query": "",
                                   "page": 0,
@@ -304,11 +298,9 @@ class GatewayApiControllerTest {
 
     @Test
     void searchPageSizeValidationFailureReturnsExactErrorShape() throws Exception {
-        mockMvc.perform(
-                        post("/api/v1/search")
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .content(
-                                        """
+        mockMvc.perform(post("/api/v1/search")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
                                 {
                                   "query": "lucene",
                                   "page": 0,
@@ -328,11 +320,9 @@ class GatewayApiControllerTest {
         when(indexService.index(any(IndexRequestDto.class)))
                 .thenThrow(new StatusRuntimeException(Status.UNAVAILABLE.withDescription("index node unavailable")));
 
-        mockMvc.perform(
-                        post("/api/v1/index")
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .content(
-                                        """
+        mockMvc.perform(post("/api/v1/index")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
                                 {
                                   "id": "doc-1",
                                   "partitionId": "tenant-a",

@@ -226,8 +226,8 @@ public class IndexManager implements Closeable {
             return new SearchResult(new ArrayList<>(), 0);
         }
         return switch (searchType) {
-            case SearchType.SEMANTIC -> shardIndex.semanticSearch(
-                    query, limit, from, filters, highlight, facetRequests);
+            case SearchType.SEMANTIC ->
+                shardIndex.semanticSearch(query, limit, from, filters, highlight, facetRequests);
             case SearchType.BM25 -> shardIndex.search(query, limit, from, filters, highlight, facetRequests);
             default -> shardIndex.search(query, limit, from, filters, highlight, facetRequests);
         };

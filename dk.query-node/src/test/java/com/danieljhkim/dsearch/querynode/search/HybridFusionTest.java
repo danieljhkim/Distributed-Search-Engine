@@ -89,17 +89,13 @@ class HybridFusionTest {
 
     @Test
     void handlesNullAndEmptyResultsAndAZeroLimit() {
-        assertTrue(HybridFusion.fuse(null, null, FusionStrategy.RRF, 10, 0.5, 0.5).isEmpty());
+        assertTrue(
+                HybridFusion.fuse(null, null, FusionStrategy.RRF, 10, 0.5, 0.5).isEmpty());
         assertTrue(HybridFusion.fuse(new SearchResult(List.of(), 0), null, FusionStrategy.RRF, 10, 0.5, 0.5)
                 .isEmpty());
 
-        List<SearchHit> fused = HybridFusion.fuse(
-                result(hit("a", 2), hit("b", 1)),
-                null,
-                FusionStrategy.SCORE_SUM,
-                0,
-                0.5,
-                0.5);
+        List<SearchHit> fused =
+                HybridFusion.fuse(result(hit("a", 2), hit("b", 1)), null, FusionStrategy.SCORE_SUM, 0, 0.5, 0.5);
 
         assertEquals(List.of("a", "b"), docIds(fused));
     }
