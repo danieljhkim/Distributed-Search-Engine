@@ -40,14 +40,17 @@ public class HealthController {
 
         List<NodeHealthStatus> indexNodeHealth = checkGroup("index-node", appConfig.getIndexNodes());
         List<NodeHealthStatus> queryNodeHealth = checkGroup("query-node", appConfig.getQueryNodes());
+        List<NodeHealthStatus> coordinatorNodeHealth = checkGroup("coordinator", appConfig.getCoordinatorNodes());
         boolean allNodesUp = indexNodeHealth.stream()
                         .allMatch(h -> HealthStatus.UP.name().equals(h.getStatus()))
-                && queryNodeHealth.stream().allMatch(h -> HealthStatus.UP.name().equals(h.getStatus()));
+                && queryNodeHealth.stream().allMatch(h -> HealthStatus.UP.name().equals(h.getStatus()))
+                && coordinatorNodeHealth.stream()
+                        .allMatch(h -> HealthStatus.UP.name().equals(h.getStatus()));
 
         String overallStatus = allNodesUp ? HealthStatus.UP.name() : HealthStatus.DEGRADED.name();
         HttpStatus httpStatus = allNodesUp ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE;
         ClusterHealthResponse body = new ClusterHealthResponse(
-                overallStatus, gatewayHealth, indexNodeHealth, queryNodeHealth, Instant.now());
+                overallStatus, gatewayHealth, indexNodeHealth, queryNodeHealth, coordinatorNodeHealth, Instant.now());
 
         return new ResponseEntity<>(body, httpStatus);
     }

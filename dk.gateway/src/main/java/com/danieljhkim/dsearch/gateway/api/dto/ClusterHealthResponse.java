@@ -15,6 +15,7 @@ public class ClusterHealthResponse {
     private ServiceHealth gateway;
     private List<NodeHealthStatus> indexNodes;
     private List<NodeHealthStatus> queryNodes;
+    private List<NodeHealthStatus> coordinatorNodes;
     private Instant timestamp;
 
     @Data
