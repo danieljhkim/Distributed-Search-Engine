@@ -70,4 +70,9 @@ dependency-reduced-pom.xml
 
 .cursor/
 
-.orbit
+.orbit/*
+!.orbit/auto_tasks/
+!.orbit/resources/
+!.orbit/routines/
+!.orbit/config.toml
+.orbit/**/*.lock
