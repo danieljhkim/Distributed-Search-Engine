@@ -3,6 +3,7 @@ package com.danieljhkim.dsearch.indexnode.grpc;
 import com.danieljhkim.dsearch.common.model.SearchDocument;
 import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.common.validation.PartitionIdValidator;
 import com.danieljhkim.dsearch.indexnode.index.IndexManager;
 import com.danieljhkim.dsearch.indexnode.index.ShardIndex;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
@@ -43,6 +44,7 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
     @Override
     public void indexDocument(IndexDocumentRequest request, StreamObserver<IndexDocumentResponse> responseObserver) {
         String partitionId = request.getPartitionId();
+        PartitionIdValidator.validate(partitionId);
         Document protoDoc = request.getDocument();
         String docId = protoDoc.getId().isEmpty() ? UUID.randomUUID().toString() : protoDoc.getId();
 
@@ -66,6 +68,7 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
     public void bulkIndexDocument(
             BulkIndexDocumentRequest request, StreamObserver<BulkIndexDocumentResponse> responseObserver) {
         String partitionId = request.getPartitionId();
+        PartitionIdValidator.validate(partitionId);
         BulkIndexDocumentResponse.Builder respBuilder = BulkIndexDocumentResponse.newBuilder();
         boolean success = true;
         try {
@@ -90,6 +93,7 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
     @Override
     public void deleteDocument(DeleteDocumentRequest request, StreamObserver<DeleteDocumentResponse> responseObserver) {
         String partitionId = request.getPartitionId();
+        PartitionIdValidator.validate(partitionId);
         String docId = request.getId();
         try {
             indexManager.deleteDocument(partitionId, docId);
