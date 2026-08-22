@@ -17,6 +17,7 @@ import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.SearchRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.SearchResponseDto;
+import com.danieljhkim.dsearch.gateway.config.MetricsConfig;
 import com.danieljhkim.dsearch.gateway.service.GatewayIndexService;
 import com.danieljhkim.dsearch.gateway.service.GatewaySearchService;
 import com.danieljhkim.dsearch.gateway.tracing.CorrelationIdFilter;
@@ -51,6 +52,9 @@ class GatewayApiControllerTest {
 
     @jakarta.annotation.Resource
     private MockMvc mockMvc;
+
+    @jakarta.annotation.Resource
+    private MeterRegistry meterRegistry;
 
     @MockBean
     private GatewayIndexService indexService;
@@ -316,6 +320,46 @@ class GatewayApiControllerTest {
     }
 
     @Test
+    void indexPartitionIdValidationRejectsInvalidValuesBeforeServiceCall() throws Exception {
+        mockMvc.perform(post("/api/v1/index")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "partitionId": "tenant!",
+                                  "fields": {"title": "Distributed Search"}
+                                }
+                                """))
+                .andExpect(status().isBadRequest());
+
+        verify(indexService, never()).index(any(IndexRequestDto.class));
+    }
+
+    @Test
+    void searchLatencyMetersStayBoundedForDistinctPartitionIds() throws Exception {
+        when(searchService.search(any(SearchRequestDto.class))).thenReturn(new SearchResponseDto(List.of(), 0, 0, 0));
+
+        for (int i = 0; i < 250; i++) {
+            mockMvc.perform(post("/api/v1/search")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"query\":\"lucene\",\"partitionId\":\"tenant-" + i + "\"}"))
+                    .andExpect(status().isOk());
+        }
+
+        assertThat(meterRegistry.find("dsearch.gateway.search.latency").timers())
+                .hasSizeLessThanOrEqualTo(100);
+        assertThat(meterRegistry
+                        .find("dsearch.gateway.search.latency")
+                        .tag("partitionId", "tenant-0")
+                        .timer())
+                .isNotNull();
+        assertThat(meterRegistry
+                        .find("dsearch.gateway.search.latency")
+                        .tag("partitionId", "__overflow__")
+                        .timer())
+                .isNotNull();
+    }
+
+    @Test
     void downstreamGrpcExceptionReturnsExactErrorShape() throws Exception {
         when(indexService.index(any(IndexRequestDto.class)))
                 .thenThrow(new StatusRuntimeException(Status.UNAVAILABLE.withDescription("index node unavailable")));
@@ -374,7 +418,9 @@ class GatewayApiControllerTest {
     static class TestMetricsConfig {
         @Bean
         MeterRegistry meterRegistry() {
-            return new SimpleMeterRegistry();
+            SimpleMeterRegistry registry = new SimpleMeterRegistry();
+            new MetricsConfig().metricsCardinality().customize(registry);
+            return registry;
         }
     }
 }
