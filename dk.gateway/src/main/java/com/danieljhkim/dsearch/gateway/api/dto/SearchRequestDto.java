@@ -4,6 +4,7 @@ import com.danieljhkim.dsearch.proto.common.FusionStrategy;
 import com.danieljhkim.dsearch.proto.common.SearchType;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.util.List;
 import lombok.Getter;
@@ -15,6 +16,9 @@ public class SearchRequestDto {
 
     @NotBlank(message = "query must not be blank") @Size(max = 512, message = "query must be at most 512 characters") private String query;
 
+    @Size(max = 64, message = "partitionId must be at most 64 characters") @Pattern(
+            regexp = "[A-Za-z0-9_-]+",
+            message = "partitionId may contain only letters, numbers, underscores, and hyphens")
     private String partitionId = "default";
 
     @Min(value = 0, message = "page must be >= 0") private int page = 0;

@@ -6,6 +6,7 @@ import com.danieljhkim.dsearch.gateway.service.GatewayIndexService;
 import io.micrometer.core.annotation.Timed;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -30,7 +31,7 @@ public class IndexController {
             value = "dsearch.index.http",
             extraTags = {"endpoint", "/api/v1/index"})
     @PostMapping(consumes = "application/json", produces = "application/json")
-    public IndexResponseDto indexDocument(@RequestBody IndexRequestDto req) {
+    public IndexResponseDto indexDocument(@Valid @RequestBody IndexRequestDto req) {
         Timer.Sample sample = Timer.start(meterRegistry);
         try {
             return indexService.index(req);
