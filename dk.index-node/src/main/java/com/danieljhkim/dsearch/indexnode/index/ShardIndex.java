@@ -116,7 +116,13 @@ public class ShardIndex implements Closeable {
             boolean ownsEmbeddingService) {
         try {
             this.shardId = shardId;
-            this.indexPath = baseDir.resolve("shard-" + shardId);
+            Path normalizedBaseDir = baseDir.normalize();
+            Path resolved = normalizedBaseDir.resolve("shard-" + shardId).normalize();
+            if (!resolved.startsWith(normalizedBaseDir)) {
+                throw new IllegalArgumentException(
+                        "partitionId '" + shardId + "' resolves outside the index base directory");
+            }
+            this.indexPath = resolved;
             Files.createDirectories(indexPath);
 
             this.directory = FSDirectory.open(indexPath);

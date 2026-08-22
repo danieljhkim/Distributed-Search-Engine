@@ -1,5 +1,6 @@
 package com.danieljhkim.dsearch.gateway.api;
 
+import com.danieljhkim.dsearch.common.validation.PartitionIdValidator;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
 import com.danieljhkim.dsearch.gateway.service.GatewayIndexService;
@@ -49,6 +50,7 @@ public class IndexController {
     public IndexResponseDto deleteDocument(
             @PathVariable("id") String id,
             @RequestParam(name = "partitionId", defaultValue = "default") String partitionId) {
+        PartitionIdValidator.validate(partitionId);
         Timer.Sample sample = Timer.start(meterRegistry);
         try {
             return indexService.delete(id, partitionId);
