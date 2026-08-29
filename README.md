@@ -45,10 +45,19 @@ The system is composed of three primary components:
 - Shards represent **logical partitions** of your data (e.g., by domain or category).
 - Each shard exists **once per cluster** (no replicas yet).
 - Shards are distributed across index nodes.
-- The Gateway maintains **per‑shard, per‑node document counts** and uses a **least‑loaded routing strategy** for indexing operations:
-  - For a given `(partitionId, document)` write/delete, the Gateway picks the index node **with the smallest document count for that partition**.
-  - Over time, this keeps each shard **evenly balanced across index nodes** without a coordinator.
-  - Counts are periodically snapshotted to disk so new Gateway instances can restore their view.
+- Every document has **exactly one owning index node**, derived from the document key:
+  - For a given `(partitionId, documentId)` write/delete, the Gateway routes to
+    `owner = argmax hash(nodeId, partitionId, documentId)` over the configured index nodes
+    (rendezvous hashing). A Lucene upsert is local to one node, so sending an update anywhere
+    else would leave the cluster holding two copies of the same document.
+  - The mapping is a pure function of the key and `app-config.yaml`, so it is identical in
+    every Gateway process and across restarts, and it does not move when nodes go unhealthy.
+  - If the owner is unavailable the mutation fails with `503` instead of being rerouted.
+  - Hashing also spreads documents evenly across nodes without a coordinator.
+  - The Gateway still keeps **per‑shard, per‑node document counts**, updated only after a
+    node confirms a mutation and snapshotted to disk, but they are now an observability
+    signal rather than a routing input.
+  - See [Document Ownership](./docs/DOCUMENT_OWNERSHIP.md) for restart and topology‑change behavior.
 
 There is **no replication layer** yet. If an index node goes down, documents stored on that node’s shards are temporarily unavailable until the node comes back up and reloads its Lucene indices.
 
@@ -345,6 +354,10 @@ This project is intentionally minimal and educational. Some trade‑offs and pot
 - **Coordinator shard map and dynamic removal are deferred**
   - The coordinator returns `UNIMPLEMENTED` for heartbeat and shard-map RPCs.
   - Node removal and shard relocation are not automated; update configuration or restart affected components for planned topology changes.
+- **No rebalancing when the index-node list changes**
+  - Adding or removing an entry under `indexNodes` reassigns part of the document ownership
+    ring, and nothing moves the affected documents, so the change requires a reindex.
+  - Future direction: coordinator-driven handoff of the reassigned key range.
 
 ---
 

@@ -3,6 +3,7 @@ package com.danieljhkim.dsearch.gateway.api;
 import com.danieljhkim.dsearch.common.exception.IndexInitializationException;
 import com.danieljhkim.dsearch.common.exception.IndexOperationException;
 import com.danieljhkim.dsearch.common.exception.InvalidIndexStateException;
+import com.danieljhkim.dsearch.common.exception.NodeUnavailableException;
 import com.danieljhkim.dsearch.common.exception.ParseGoneWrongException;
 import com.danieljhkim.dsearch.common.exception.ServiceException;
 import com.danieljhkim.dsearch.common.exception.ShardNotFoundException;
@@ -76,6 +77,17 @@ public class GlobalExceptionHandler {
                 status.getReasonPhrase(),
                 "Index operation failed: " + ex.getMessage(),
                 request.getRequestURI());
+        return new ResponseEntity<>(body, status);
+    }
+
+    @ExceptionHandler(NodeUnavailableException.class)
+    public ResponseEntity<ErrorResponse> handleNodeUnavailable(
+            NodeUnavailableException ex, HttpServletRequest request) {
+
+        HttpStatus status = HttpStatus.SERVICE_UNAVAILABLE;
+        LOGGER.log(Level.WARNING, "Document owner unavailable: " + ex.getMessage());
+        ErrorResponse body =
+                new ErrorResponse(status.value(), status.getReasonPhrase(), ex.getMessage(), request.getRequestURI());
         return new ResponseEntity<>(body, status);
     }
 

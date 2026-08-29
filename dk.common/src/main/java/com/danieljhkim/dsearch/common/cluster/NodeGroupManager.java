@@ -34,6 +34,20 @@ public class NodeGroupManager {
         this.queryGroup = loadStaticNodeGroup(NodeRole.NODE_ROLE_QUERY);
     }
 
+    /**
+     * Node group exactly as declared in the configuration file, rebuilt on every
+     * call.
+     *
+     * <p>Unlike {@link #getStaticNodeGroupConfig(NodeRole)}, which is overwritten
+     * by the last successful discovery response, this is stable for the lifetime
+     * of the config file. Document ownership is derived from it so that the
+     * {@code (partitionId, documentId) -> node} mapping survives restarts and
+     * health changes.
+     */
+    public NodeGroup getConfiguredNodeGroup(NodeRole role) {
+        return loadStaticNodeGroup(role);
+    }
+
     private NodeGroup loadStaticNodeGroup(NodeRole role) {
         AppConfig.NodeGroupConfig config =
                 switch (role) {

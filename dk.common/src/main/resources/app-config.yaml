@@ -5,10 +5,14 @@ serviceDiscovery:
   refreshIntervalSeconds: 10
 
 indexNodes:
+  # Applies to reads only. Document mutations are routed to the node that owns
+  # (partitionId, documentId); see docs/DOCUMENT_OWNERSHIP.md.
   routingStrategy: "LEAST_LOADED"
   componentLabel: "dsearch-index-node"
   # Current runtime has no replication layer; keep this at 1 until replication is implemented.
   replicationFactor: 1
+  # This node list is the document ownership ring. Adding or removing an entry
+  # reassigns part of the key space and requires a reindex: nothing moves documents.
   nodes:
     - id: "0"
       host: "localhost"
