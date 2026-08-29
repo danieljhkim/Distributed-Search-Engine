@@ -25,6 +25,7 @@
         <module>dk.index-node</module>
         <module>dk.query-node</module>
         <module>dk.ml</module>
+        <module>dk.coverage</module>
     </modules>
 
     <properties>
@@ -39,7 +40,11 @@
         <maven.surefire.version>3.5.5</maven.surefire.version>
         <maven.compiler.plugin.version>3.14.1</maven.compiler.plugin.version>
         <spotless.maven.plugin.version>3.5.1</spotless.maven.plugin.version>
-        <jacoco.version>0.8.13</jacoco.version>
+        <jacoco.maven.plugin.version>0.8.14</jacoco.maven.plugin.version>
+        <!-- Each executable module overrides these with its committed baseline. -->
+        <coverage.minimum.line>0.0000</coverage.minimum.line>
+        <coverage.minimum.branch>0.0000</coverage.minimum.branch>
+        <jacoco.version>0.8.14</jacoco.version>
         <!-- Observability -->
         <micrometer.registry.prometheus.version>1.15.11</micrometer.registry.prometheus.version>
         <prometheus.simpleclient.version>0.16.0</prometheus.simpleclient.version>
@@ -287,6 +292,70 @@
             </plugins>
         </pluginManagement>
         <plugins>
+            <!--
+                Coverage is collected during the normal test lifecycle. XML and CSV make the
+                result consumable by CI/tools; HTML is retained for local inspection. The
+                generated dk.proto module opts out entirely because protoc output is not hand
+                maintained. JaCoCo filters Lombok/compiler synthetic members automatically;
+                the only explicit class exclusion is protobuf's generated outer wrappers.
+            -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.maven.plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>jacoco-report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                        <configuration>
+                            <formats>
+                                <format>HTML</format>
+                                <format>XML</format>
+                                <format>CSV</format>
+                            </formats>
+                            <excludes>
+                                <!-- Protobuf outer wrappers are generated alongside the protoc tree. -->
+                                <exclude>**/*OuterClass.class</exclude>
+                            </excludes>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>coverage-floor</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>${coverage.minimum.line}</minimum>
+                                        </limit>
+                                        <limit>
+                                            <counter>BRANCH</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>${coverage.minimum.branch}</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>com.diffplug.spotless</groupId>
                 <artifactId>spotless-maven-plugin</artifactId>

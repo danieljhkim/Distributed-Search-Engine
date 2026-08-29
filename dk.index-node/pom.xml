@@ -13,6 +13,12 @@
 
     <artifactId>dk.index-node</artifactId>
 
+    <properties>
+        <!-- Fresh JaCoCo baseline: 554/841 lines and 210/380 branches. -->
+        <coverage.minimum.line>0.6580</coverage.minimum.line>
+        <coverage.minimum.branch>0.5520</coverage.minimum.branch>
+    </properties>
+
     <dependencies>
         <!-- gRPC runtime (netty transport + core) -->
         <dependency>

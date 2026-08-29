@@ -13,6 +13,12 @@
 
     <artifactId>dk.query-node</artifactId>
 
+    <properties>
+        <!-- Fresh JaCoCo baseline: 337/474 lines and 134/201 branches. -->
+        <coverage.minimum.line>0.7100</coverage.minimum.line>
+        <coverage.minimum.branch>0.6660</coverage.minimum.branch>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>io.grpc</groupId>

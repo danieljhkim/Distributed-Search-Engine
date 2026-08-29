@@ -13,6 +13,12 @@
 
     <artifactId>dk.common</artifactId>
 
+    <properties>
+        <!-- Fresh JaCoCo baseline: 373/818 lines and 106/248 branches. -->
+        <coverage.minimum.line>0.4550</coverage.minimum.line>
+        <coverage.minimum.branch>0.4270</coverage.minimum.branch>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>com.danieljhkim.dsearch</groupId>
