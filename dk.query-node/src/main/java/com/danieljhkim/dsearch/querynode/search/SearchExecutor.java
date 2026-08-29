@@ -32,6 +32,9 @@ import org.slf4j.MDC;
 public class SearchExecutor implements Closeable {
 
     private static final Logger LOG = LoggerFactory.getLogger(SearchExecutor.class);
+    private static final Comparator<SearchHit> COMPARABLE_SCORE_ORDER = Comparator.comparingDouble(SearchHit::getScore)
+            .reversed()
+            .thenComparing(SearchHit::getDocId, Comparator.nullsLast(Comparator.naturalOrder()));
 
     private final ExecutorService shardExecutor;
     private final NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager;
@@ -171,9 +174,9 @@ public class SearchExecutor implements Closeable {
         // best-effort cancellation of any remaining futures
         cancelOutstanding(futures);
 
-        // Global sort + page
-        acc.allHits.sort(Comparator.comparingDouble(SearchHit::getScore).reversed());
-        List<SearchHit> pageHits = slicePage(acc.allHits, page, size);
+        // Global merge + page
+        List<SearchHit> mergedHits = mergeHits(acc.nodeHits, searchType);
+        List<SearchHit> pageHits = slicePage(mergedHits, page, size);
 
         // Materialize facets in request order
         List<FacetResponse> aggregatedFacets = buildAggregatedFacets(facetRequests, acc.facetAggregation);
@@ -299,7 +302,7 @@ public class SearchExecutor implements Closeable {
                 acc.successfulNodes++;
                 if (shardResult != null) {
                     acc.totalHits += shardResult.getTotalHits();
-                    acc.allHits.addAll(shardResult.getHits());
+                    acc.nodeHits.add(new NodeHits(shardResult.getHits()));
                     aggregateFacets(acc.facetAggregation, shardResult.getFacets());
                 }
             } catch (CancellationException ce) {
@@ -325,6 +328,60 @@ public class SearchExecutor implements Closeable {
         }
 
         return acc;
+    }
+
+    /**
+     * Merges bounded node-local result lists under the score contract for the
+     * requested search type.
+     *
+     * <p>Semantic scores are produced by the same embedding model and remain
+     * directly comparable. BM25 scores are not comparable because Lucene computes
+     * term statistics from each node's local index. Distributed BM25 is therefore
+     * explicitly approximate: each node's strict local BM25 order is preserved and
+     * converted to a reciprocal-rank merge score. Equal local scores share a rank,
+     * and all remaining ties use document id. The returned BM25 score is this
+     * comparable merge score, not a single-index BM25 score.
+     *
+     * <p>This preserves bounded top-K fan-out and deterministic ordering without
+     * claiming the exactness that would require a distributed term-statistics
+     * round trip.
+     */
+    private static List<SearchHit> mergeHits(List<NodeHits> nodeHits, SearchType searchType) {
+        if (searchType != SearchType.BM25) {
+            return nodeHits.stream()
+                    .flatMap(nodeResult -> nodeResult.hits().stream())
+                    .filter(Objects::nonNull)
+                    .sorted(COMPARABLE_SCORE_ORDER)
+                    .toList();
+        }
+
+        List<SearchHit> rankedHits = new ArrayList<>();
+        for (NodeHits nodeResult : nodeHits) {
+            List<SearchHit> localHits = nodeResult.hits().stream()
+                    .filter(Objects::nonNull)
+                    .sorted(COMPARABLE_SCORE_ORDER)
+                    .toList();
+
+            int rank = 0;
+            float previousScore = Float.NaN;
+            for (int position = 0; position < localHits.size(); position++) {
+                SearchHit hit = localHits.get(position);
+                if (position == 0 || Float.compare(hit.getScore(), previousScore) != 0) {
+                    rank = position;
+                    previousScore = hit.getScore();
+                }
+                float mergeScore = 1.0f / (rank + 1.0f);
+                rankedHits.add(new SearchHit(
+                        hit.getDocId(),
+                        hit.getTitle(),
+                        hit.getContent(),
+                        mergeScore,
+                        hit.getHighlightedFields(),
+                        hit.getFields()));
+            }
+        }
+        rankedHits.sort(COMPARABLE_SCORE_ORDER);
+        return rankedHits;
     }
 
     private static long countUnfinished(List<NodeSearchTask> futures) {
@@ -377,7 +434,9 @@ public class SearchExecutor implements Closeable {
 
             if (fieldCounts != null && !fieldCounts.isEmpty()) {
                 fieldCounts.entrySet().stream()
-                        .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                        .sorted(Map.Entry.<String, Long>comparingByValue()
+                                .reversed()
+                                .thenComparing(Map.Entry.comparingByKey()))
                         .limit(topN)
                         .forEach(e -> facetBuilder.addBuckets(FacetBucket.newBuilder()
                                 .setValue(e.getKey())
@@ -412,7 +471,7 @@ public class SearchExecutor implements Closeable {
     }
 
     private static final class MergeAccumulator {
-        final List<SearchHit> allHits = new ArrayList<>();
+        final List<NodeHits> nodeHits = new ArrayList<>();
         long totalHits = 0L;
         final Map<String, Map<String, Long>> facetAggregation = new HashMap<>();
         int successfulNodes = 0;
@@ -455,6 +514,12 @@ public class SearchExecutor implements Closeable {
     }
 
     private record NodeSearchTask(String nodeId, CompletableFuture<SearchResult> future) {}
+
+    private record NodeHits(List<SearchHit> hits) {
+        private NodeHits {
+            hits = hits == null ? List.of() : List.copyOf(hits);
+        }
+    }
 
     @Override
     public void close() throws IOException {

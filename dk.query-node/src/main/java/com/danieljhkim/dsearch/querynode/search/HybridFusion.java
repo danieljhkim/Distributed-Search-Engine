@@ -5,8 +5,8 @@ import com.danieljhkim.dsearch.common.model.SearchResult;
 import com.danieljhkim.dsearch.proto.common.FusionStrategy;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -62,7 +62,7 @@ public final class HybridFusion {
         Map<String, RankedScore> semMap = toRankedMap(semHits);
 
         // Union of docIds across both lists
-        Set<String> allDocIds = new HashSet<>(bm25Map.keySet());
+        Set<String> allDocIds = new LinkedHashSet<>(bm25Map.keySet());
         allDocIds.addAll(semMap.keySet());
 
         // Normalize scores independently per list to [0,1]
@@ -92,7 +92,8 @@ public final class HybridFusion {
             fused.add(new SearchHit(docId, title, content, (float) fusedScore, highlightedFields, fields));
         }
 
-        // Sort by fused score desc and apply limit
+        // Score ties are common for rank-based lexical input and RRF. The stable
+        // input-rank order (lexical first, then semantic-only hits) is retained.
         fused.sort(Comparator.comparingDouble(SearchHit::getScore).reversed());
 
         int safeLimit = Math.max(limit, 0);
@@ -136,7 +137,7 @@ public final class HybridFusion {
     }
 
     private static Map<String, RankedScore> toRankedMap(List<SearchHit> hits) {
-        Map<String, RankedScore> map = new HashMap<>();
+        Map<String, RankedScore> map = new LinkedHashMap<>();
         if (hits == null) return map;
         for (int i = 0; i < hits.size(); i++) {
             SearchHit h = hits.get(i);

@@ -21,9 +21,11 @@ import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
 import com.danieljhkim.dsearch.querynode.grpc.BaseIndexService;
 import io.grpc.ManagedChannel;
+import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +33,22 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import org.apache.lucene.analysis.Analyzer;
+import org.apache.lucene.analysis.standard.StandardAnalyzer;
+import org.apache.lucene.document.Document;
+import org.apache.lucene.document.Field;
+import org.apache.lucene.document.StringField;
+import org.apache.lucene.document.TextField;
+import org.apache.lucene.index.DirectoryReader;
+import org.apache.lucene.index.IndexWriter;
+import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.queryparser.classic.ParseException;
+import org.apache.lucene.queryparser.classic.QueryParser;
+import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.ScoreDoc;
+import org.apache.lucene.search.TopDocs;
+import org.apache.lucene.store.ByteBuffersDirectory;
+import org.apache.lucene.store.Directory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -70,15 +88,15 @@ class SearchExecutorTest {
         SearchResult result = searchExecutor(node("1", true), node("2", true))
                 .search("coffee", "shard-a", 1, 2, SearchType.BM25, indexService);
 
-        assertDocIds(List.of("doc-mid", "doc-low"), result);
+        assertDocIds(List.of("doc-low", "doc-mid"), result);
         assertEquals(12L, result.getTotalHits());
         assertEquals(1, result.getPage());
 
         SearchHit firstHit = result.getHits().getFirst();
-        assertEquals("title-doc-mid", firstHit.getTitle());
-        assertEquals("content-doc-mid", firstHit.getContent());
-        assertEquals(Map.of("source", "node-2", "rank", "3"), firstHit.getFields());
-        assertEquals(Map.of("content", "highlight-doc-mid"), firstHit.getHighlightedFields());
+        assertEquals("title-doc-low", firstHit.getTitle());
+        assertEquals("content-doc-low", firstHit.getContent());
+        assertEquals(Map.of("source", "node-1", "rank", "4"), firstHit.getFields());
+        assertEquals(Map.of("content", "highlight-doc-low"), firstHit.getHighlightedFields());
 
         assertEquals(2, indexService.calls().size());
         assertTrue(indexService.calls().stream().allMatch(call -> call.searchType() == SearchType.BM25));
@@ -272,6 +290,86 @@ class SearchExecutorTest {
         assertEquals(0, metadata.timedOutNodes());
     }
 
+    @Test
+    void rankMergeCorrectsSkewedShardScoresAgainstSingleIndexReference() throws IOException, ParseException {
+        List<CorpusDocument> rareTermNode = new ArrayList<>();
+        rareTermNode.add(new CorpusDocument("z-rare", "coffee"));
+        for (int i = 0; i < 40; i++) {
+            rareTermNode.add(new CorpusDocument("rare-filler-" + i, "tea"));
+        }
+        List<CorpusDocument> frequentTermNode = List.of(
+                new CorpusDocument("a-strong", "coffee coffee coffee coffee coffee coffee coffee coffee"),
+                new CorpusDocument("common-filler", "tea"));
+
+        SearchResult rareNodeResult = luceneBm25(rareTermNode, "coffee", 2);
+        SearchResult frequentNodeResult = luceneBm25(frequentTermNode, "coffee", 2);
+        List<CorpusDocument> completeCorpus = new ArrayList<>(rareTermNode);
+        completeCorpus.addAll(frequentTermNode);
+        SearchResult singleIndexReference = luceneBm25(completeCorpus, "coffee", 2);
+
+        List<SearchHit> rawShardLocalMerge = new ArrayList<>(rareNodeResult.getHits());
+        rawShardLocalMerge.addAll(frequentNodeResult.getHits());
+        rawShardLocalMerge.sort(
+                Comparator.comparingDouble(SearchHit::getScore).reversed().thenComparing(SearchHit::getDocId));
+
+        assertEquals(List.of("a-strong", "z-rare"), hitIds(singleIndexReference));
+        assertEquals(
+                List.of("z-rare", "a-strong"),
+                hitIds(rawShardLocalMerge),
+                "raw shard-local BM25 scores must reproduce the old misranking");
+
+        RecordingIndexService indexService =
+                new RecordingIndexService().success("rare", rareNodeResult).success("frequent", frequentNodeResult);
+        SearchResult distributed = searchExecutor(node("rare", true), node("frequent", true))
+                .search("coffee", "shard-a", 0, 2, SearchType.BM25, indexService);
+
+        // Approximate contract metric for this skew fixture: exact top-2 order and
+        // recall@2 == 1.0 against the single-index BM25 reference.
+        assertDocIds(hitIds(singleIndexReference), distributed);
+        assertEquals(1.0, recallAtK(hitIds(singleIndexReference), hitIds(distributed), 2));
+    }
+
+    @Test
+    void equalBm25ScoresUseDocumentIdRegardlessOfNodeIterationOrder() {
+        RecordingIndexService indexService = new RecordingIndexService()
+                .success("1", result(List.of(hit("doc-b", 5.0f), hit("doc-a", 5.0f)), null))
+                .success("2", result(List.of(hit("doc-d", 7.0f), hit("doc-c", 7.0f)), null));
+
+        shardExecutor = Executors.newCachedThreadPool();
+        SearchExecutor forward =
+                new SearchExecutor(shardExecutor, managerWithActiveOrder(List.of("1", "2")), TEST_TIMEOUT);
+        SearchExecutor reverse =
+                new SearchExecutor(shardExecutor, managerWithActiveOrder(List.of("2", "1")), TEST_TIMEOUT);
+
+        SearchResult forwardResult = forward.search("coffee", "shard-a", 0, 10, SearchType.BM25, indexService);
+        SearchResult reverseResult = reverse.search("coffee", "shard-a", 0, 10, SearchType.BM25, indexService);
+
+        assertDocIds(List.of("doc-a", "doc-b", "doc-c", "doc-d"), forwardResult);
+        assertDocIds(hitIds(forwardResult), reverseResult);
+        assertTrue(forwardResult.getHits().stream().allMatch(hit -> hit.getScore() == 1.0f));
+    }
+
+    @Test
+    void hybridRrfConsumesTheDeterministicRankMergedLexicalOrder() {
+        RecordingIndexService indexService = skewedLexicalHybridIndexService();
+
+        SearchResult result = searchExecutor(node("1", true), node("2", true))
+                .searchHybrid("coffee", "shard-a", 0, 2, indexService, FusionStrategy.RRF);
+
+        assertDocIds(List.of("a-strong", "z-rare"), result);
+    }
+
+    @Test
+    void hybridWeightedConsumesTheComparableRankMergeScores() {
+        RecordingIndexService indexService = skewedLexicalHybridIndexService();
+
+        SearchResult result = searchExecutor(node("1", true), node("2", true))
+                .searchHybrid("coffee", "shard-a", 0, 2, indexService, FusionStrategy.WEIGHTED);
+
+        assertDocIds(List.of("a-strong", "z-rare"), result);
+        assertTrue(result.getHits().stream().allMatch(hit -> hit.getScore() == 0.5f));
+    }
+
     private SearchExecutor searchExecutor(NodeSpec... nodes) {
         shardExecutor = Executors.newCachedThreadPool(r -> {
             Thread thread = new Thread(r, "search-executor-test");
@@ -279,6 +377,14 @@ class SearchExecutorTest {
             return thread;
         });
         return new SearchExecutor(shardExecutor, manager(nodes), TEST_TIMEOUT);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> managerWithActiveOrder(
+            List<String> nodeIds) {
+        NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> manager = mock(NodeClientManager.class);
+        when(manager.getActiveNodeIds()).thenReturn(nodeIds);
+        return manager;
     }
 
     private static NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> manager(NodeSpec... specs) {
@@ -322,6 +428,63 @@ class SearchExecutorTest {
         return new SearchResult(hits, totalHits, 0, facets);
     }
 
+    private static RecordingIndexService hybridIndexService() {
+        return new RecordingIndexService()
+                .success("1", SearchType.BM25, result(List.of(hit("doc-a", 10.0f), hit("doc-c", 1.0f)), 2, null))
+                .success("2", SearchType.BM25, result(List.of(hit("doc-b", 5.0f)), 1, null))
+                .success("1", SearchType.SEMANTIC, result(List.of(hit("doc-b", 9.0f), hit("doc-d", 2.0f)), 2, null))
+                .success("2", SearchType.SEMANTIC, result(List.of(hit("doc-c", 6.0f)), 1, null));
+    }
+
+    private static RecordingIndexService skewedLexicalHybridIndexService() {
+        SearchResult empty = new SearchResult(List.of(), 0, 0);
+        return new RecordingIndexService()
+                .success("1", SearchType.BM25, result(List.of(hit("z-rare", 100.0f)), 1, null))
+                .success("2", SearchType.BM25, result(List.of(hit("a-strong", 1.0f)), 1, null))
+                .success("1", SearchType.SEMANTIC, empty)
+                .success("2", SearchType.SEMANTIC, empty);
+    }
+
+    private static SearchResult luceneBm25(List<CorpusDocument> corpus, String query, int limit)
+            throws IOException, ParseException {
+        try (Directory directory = new ByteBuffersDirectory();
+                Analyzer analyzer = new StandardAnalyzer()) {
+            try (IndexWriter writer = new IndexWriter(directory, new IndexWriterConfig(analyzer))) {
+                for (CorpusDocument corpusDocument : corpus) {
+                    Document document = new Document();
+                    document.add(new StringField("id", corpusDocument.id(), Field.Store.YES));
+                    document.add(new TextField("content", corpusDocument.content(), Field.Store.NO));
+                    writer.addDocument(document);
+                }
+            }
+
+            try (DirectoryReader reader = DirectoryReader.open(directory)) {
+                IndexSearcher searcher = new IndexSearcher(reader);
+                TopDocs topDocs = searcher.search(new QueryParser("content", analyzer).parse(query), limit);
+                List<SearchHit> hits = new ArrayList<>();
+                for (ScoreDoc scoreDoc : topDocs.scoreDocs) {
+                    String id = searcher.storedFields().document(scoreDoc.doc).get("id");
+                    hits.add(hit(id, scoreDoc.score));
+                }
+                return new SearchResult(hits, topDocs.totalHits.value, 0);
+            }
+        }
+    }
+
+    private static double recallAtK(List<String> reference, List<String> actual, int k) {
+        Set<String> expected = Set.copyOf(reference.subList(0, Math.min(k, reference.size())));
+        long matches = actual.stream().limit(k).filter(expected::contains).count();
+        return expected.isEmpty() ? 1.0 : (double) matches / expected.size();
+    }
+
+    private static List<String> hitIds(SearchResult result) {
+        return hitIds(result.getHits());
+    }
+
+    private static List<String> hitIds(List<SearchHit> hits) {
+        return hits.stream().map(SearchHit::getDocId).toList();
+    }
+
     private static void assertDocIds(List<String> expectedDocIds, SearchResult result) {
         assertEquals(
                 expectedDocIds,
@@ -358,6 +521,8 @@ class SearchExecutorTest {
     private record NodeSpec(String nodeId, boolean active) {}
 
     private record Bucket(String value, long count) {}
+
+    private record CorpusDocument(String id, String content) {}
 
     private record RequestKey(String nodeId, SearchType searchType) {}
 
