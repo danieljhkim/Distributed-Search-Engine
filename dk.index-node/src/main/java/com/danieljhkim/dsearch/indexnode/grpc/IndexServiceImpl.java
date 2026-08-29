@@ -25,7 +25,6 @@ import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -46,7 +45,9 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
     @Override
     public void indexDocument(IndexDocumentRequest request, StreamObserver<IndexDocumentResponse> responseObserver) {
         String partitionId = request.getPartitionId();
-        PartitionIdValidator.validate(partitionId);
+        if (!validatePartition(partitionId, responseObserver)) {
+            return;
+        }
         Document protoDoc = request.getDocument();
         String docId = protoDoc.getId().isEmpty() ? UUID.randomUUID().toString() : protoDoc.getId();
 
@@ -73,7 +74,9 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
     public void bulkIndexDocument(
             BulkIndexDocumentRequest request, StreamObserver<BulkIndexDocumentResponse> responseObserver) {
         String partitionId = request.getPartitionId();
-        PartitionIdValidator.validate(partitionId);
+        if (!validatePartition(partitionId, responseObserver)) {
+            return;
+        }
         BulkIndexDocumentResponse.Builder respBuilder = BulkIndexDocumentResponse.newBuilder();
         boolean success = true;
         for (int requestIndex = 0; requestIndex < request.getDocumentsCount(); requestIndex++) {
@@ -103,7 +106,9 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
     @Override
     public void deleteDocument(DeleteDocumentRequest request, StreamObserver<DeleteDocumentResponse> responseObserver) {
         String partitionId = request.getPartitionId();
-        PartitionIdValidator.validate(partitionId);
+        if (!validatePartition(partitionId, responseObserver)) {
+            return;
+        }
         String docId = request.getId();
         try {
             indexManager.deleteDocument(partitionId, docId);
@@ -113,13 +118,19 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
             responseObserver.onCompleted();
         } catch (IOException e) {
             LOGGER.log(Level.SEVERE, "DeleteDocument failed", e);
-            throw new UncheckedIOException(e);
+            responseObserver.onError(Status.INTERNAL
+                    .withDescription("Failed to delete document " + docId)
+                    .withCause(e)
+                    .asRuntimeException());
         }
     }
 
     @Override
     public void searchIndex(IndexSearchRequest request, StreamObserver<IndexSearchResponse> responseObserver) {
         String partitionId = request.getPartitionId();
+        if (!validatePartition(partitionId, responseObserver)) {
+            return;
+        }
         String query = request.getQuery();
         SearchType protoType = request.getSearchType();
         int from = request.getFrom();
@@ -148,7 +159,23 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
             responseObserver.onCompleted();
         } catch (IOException e) {
             LOGGER.log(Level.SEVERE, "searchIndex failed", e);
-            throw new UncheckedIOException(e);
+            responseObserver.onError(Status.INTERNAL
+                    .withDescription("Failed to search shard " + partitionId)
+                    .withCause(e)
+                    .asRuntimeException());
+        }
+    }
+
+    private boolean validatePartition(String partitionId, StreamObserver<?> responseObserver) {
+        try {
+            PartitionIdValidator.validate(partitionId);
+            return true;
+        } catch (IllegalArgumentException e) {
+            responseObserver.onError(Status.INVALID_ARGUMENT
+                    .withDescription(e.getMessage())
+                    .withCause(e)
+                    .asRuntimeException());
+            return false;
         }
     }
 
