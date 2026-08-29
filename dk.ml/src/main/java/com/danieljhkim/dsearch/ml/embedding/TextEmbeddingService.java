@@ -9,7 +9,9 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -22,6 +24,8 @@ public class TextEmbeddingService implements TextEmbedder, Closeable {
     private final BlockingQueue<Predictor<String, float[]>> predictorPool;
     private final List<Predictor<String, float[]>> pooledPredictors;
     private final AtomicInteger embeddingDimension = new AtomicInteger();
+    private final AtomicBoolean closed = new AtomicBoolean();
+    private final ReentrantReadWriteLock lifecycleLock = new ReentrantReadWriteLock();
 
     public TextEmbeddingService() {
         this(EmbeddingModelManager.getInstance());
@@ -51,12 +55,11 @@ public class TextEmbeddingService implements TextEmbedder, Closeable {
     }
 
     private static boolean predictorPerCall(EmbeddingModelManager modelManager) {
-        return booleanConfigValue(
-                textEmbeddingConfig(modelManager), false, "isPredictorPerCall", "getPredictorPerCall");
+        return textEmbeddingConfig(modelManager).isPredictorPerCall();
     }
 
     private static int predictorPoolSize(EmbeddingModelManager modelManager) {
-        return intConfigValue(textEmbeddingConfig(modelManager), 1, "getPredictorPoolSize");
+        return textEmbeddingConfig(modelManager).getPredictorPoolSize();
     }
 
     private static AppConfig.TextEmbeddingConfig textEmbeddingConfig(EmbeddingModelManager modelManager) {
@@ -67,42 +70,33 @@ public class TextEmbeddingService implements TextEmbedder, Closeable {
                 .getTextEmbedding();
     }
 
-    private static boolean booleanConfigValue(
-            AppConfig.TextEmbeddingConfig config, boolean defaultValue, String... methodNames) {
-        for (String methodName : methodNames) {
-            try {
-                Object value = config.getClass().getMethod(methodName).invoke(config);
-                if (value instanceof Boolean booleanValue) {
-                    return booleanValue;
-                }
-            } catch (NoSuchMethodException e) {
-                // Older dk.common snapshots did not expose this optional setting.
-            } catch (ReflectiveOperationException e) {
-                throw new IllegalStateException("Failed to read text embedding config method: " + methodName, e);
-            }
-        }
-        return defaultValue;
-    }
-
-    private static int intConfigValue(AppConfig.TextEmbeddingConfig config, int defaultValue, String methodName) {
-        try {
-            Object value = config.getClass().getMethod(methodName).invoke(config);
-            if (value instanceof Number numberValue) {
-                return numberValue.intValue();
-            }
-        } catch (NoSuchMethodException e) {
-            // Older dk.common snapshots did not expose this optional setting.
-        } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException("Failed to read text embedding config method: " + methodName, e);
-        }
-        return defaultValue;
-    }
-
     /**
      * Compute embedding for a single text
      */
     @Override
     public float[] embed(String text) {
+        lifecycleLock.readLock().lock();
+        try {
+            ensureOpen();
+            return embedOpen(text);
+        } finally {
+            lifecycleLock.readLock().unlock();
+        }
+    }
+
+    /** Computes embeddings in input order, preserving the empty-input policy for each element. */
+    public List<float[]> embedAll(List<String> texts) {
+        if (texts == null || texts.isEmpty()) {
+            return List.of();
+        }
+        List<float[]> embeddings = new ArrayList<>(texts.size());
+        for (String text : texts) {
+            embeddings.add(embed(text));
+        }
+        return embeddings;
+    }
+
+    private float[] embedOpen(String text) {
         if (text == null || text.isBlank()) {
             return new float[0];
         }
@@ -173,10 +167,24 @@ public class TextEmbeddingService implements TextEmbedder, Closeable {
 
     @Override
     public void close() {
-        pooledPredictors.forEach(Predictor::close);
-        pooledPredictors.clear();
-        if (predictorPool != null) {
-            predictorPool.clear();
+        lifecycleLock.writeLock().lock();
+        try {
+            if (!closed.compareAndSet(false, true)) {
+                return;
+            }
+            pooledPredictors.forEach(Predictor::close);
+            pooledPredictors.clear();
+            if (predictorPool != null) {
+                predictorPool.clear();
+            }
+        } finally {
+            lifecycleLock.writeLock().unlock();
+        }
+    }
+
+    private void ensureOpen() {
+        if (closed.get()) {
+            throw new IllegalStateException("Text embedding service is closed");
         }
     }
 }
