@@ -20,6 +20,7 @@ public class IndexNodeServer {
     private static final Logger LOGGER = Logger.getLogger(IndexNodeServer.class.getName());
 
     private final Server server;
+    private volatile boolean grpcServerStarted;
     private HTTPServer metricsServer;
 
     public IndexNodeServer(int port, IndexManager indexManager) {
@@ -43,6 +44,7 @@ public class IndexNodeServer {
     public void start() throws IOException, InterruptedException {
         try {
             server.start();
+            grpcServerStarted = true;
             server.awaitTermination();
         } catch (IOException | RuntimeException e) {
             rollbackStartup();
@@ -77,7 +79,7 @@ public class IndexNodeServer {
     }
 
     int grpcPort() {
-        return server.getPort();
+        return grpcServerStarted ? server.getPort() : -1;
     }
 
     int metricsPort() {
@@ -85,6 +87,7 @@ public class IndexNodeServer {
     }
 
     private void rollbackStartup() {
+        grpcServerStarted = false;
         if (metricsServer != null) {
             metricsServer.close();
             metricsServer = null;
