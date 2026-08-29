@@ -11,6 +11,7 @@ import com.danieljhkim.dsearch.proto.common.Filter;
 import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResponse;
+import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResult;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.Document;
@@ -21,6 +22,7 @@ import com.danieljhkim.dsearch.proto.index.IndexHit;
 import com.danieljhkim.dsearch.proto.index.IndexSearchRequest;
 import com.danieljhkim.dsearch.proto.index.IndexSearchResponse;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
+import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -50,7 +52,7 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
 
         try {
             SearchDocument searchDoc = toSearchDocument(docId, protoDoc);
-            indexManager.indexDocument(partitionId, searchDoc);
+            indexManager.indexDocumentDurably(partitionId, searchDoc);
 
             IndexDocumentResponse response = IndexDocumentResponse.newBuilder()
                     .setId(docId)
@@ -58,9 +60,12 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
                     .build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
             LOGGER.log(Level.SEVERE, "IndexDocument failed", e);
-            throw new UncheckedIOException(e);
+            responseObserver.onError(Status.INTERNAL
+                    .withDescription("Failed to durably index document " + docId)
+                    .withCause(e)
+                    .asRuntimeException());
         }
     }
 
@@ -71,18 +76,23 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
         PartitionIdValidator.validate(partitionId);
         BulkIndexDocumentResponse.Builder respBuilder = BulkIndexDocumentResponse.newBuilder();
         boolean success = true;
-        try {
-            for (Document protoDoc : request.getDocumentsList()) {
-                String docId = protoDoc.getId().isEmpty() ? UUID.randomUUID().toString() : protoDoc.getId();
+        for (int requestIndex = 0; requestIndex < request.getDocumentsCount(); requestIndex++) {
+            Document protoDoc = request.getDocuments(requestIndex);
+            String docId = protoDoc.getId().isEmpty() ? UUID.randomUUID().toString() : protoDoc.getId();
+            BulkIndexDocumentResult.Builder result = BulkIndexDocumentResult.newBuilder()
+                    .setRequestIndex(requestIndex)
+                    .setId(docId);
+            try {
                 SearchDocument searchDoc = toSearchDocument(docId, protoDoc);
-                indexManager.indexDocument(partitionId, searchDoc);
+                indexManager.indexDocumentDurably(partitionId, searchDoc);
                 respBuilder.addIds(docId);
+                result.setSuccess(true);
+            } catch (IOException | RuntimeException e) {
+                LOGGER.log(Level.SEVERE, "BulkIndexDocument failed for request index " + requestIndex, e);
+                success = false;
+                result.setSuccess(false).setError("durable index failed; retry with the returned id");
             }
-            // optional: commit per bulk call
-            indexManager.commitAll();
-        } catch (IOException e) {
-            LOGGER.log(Level.SEVERE, "BulkIndexDocument failed", e);
-            success = false;
+            respBuilder.addResults(result);
         }
 
         respBuilder.setSuccess(success);

@@ -182,6 +182,27 @@ public class IndexManager implements Closeable {
     }
 
     /**
+     * Indexes a document and does not return until Lucene has committed it.
+     *
+     * <p>The per-shard lock keeps this operation ordered with buffered writes. Any older
+     * buffered operations are committed in the same durability boundary before this method
+     * returns. If the commit fails, the exception is propagated and no durable acknowledgement
+     * may be issued by the caller.
+     */
+    public void indexDocumentDurably(String partitionId, SearchDocument doc) throws IOException {
+        ShardIndex shardIndex = getOrCreateShard(partitionId);
+        ShardBuffer buffer = getBuffer(partitionId);
+
+        buffer.lock.lock();
+        try {
+            buffer.add(BufferedOperation.index(doc));
+            flushShardBufferLocked(partitionId, shardIndex, buffer);
+        } finally {
+            buffer.lock.unlock();
+        }
+    }
+
+    /**
      * Buffered delete: same semantics as indexDocument — delete ops are buffered
      * and only flushed/committed when thresholds/timeouts are reached.
      */
@@ -249,7 +270,7 @@ public class IndexManager implements Closeable {
             try {
                 flushShardBufferLocked(partitionId, shardIndex, buffer);
                 // Also ensure a final commit even if there were no buffered ops.
-                shardIndex.commit();
+                commitShard(shardIndex);
             } finally {
                 buffer.lock.unlock();
             }
@@ -303,13 +324,17 @@ public class IndexManager implements Closeable {
             operation.apply(shardIndex);
         }
 
-        shardIndex.commit();
+        commitShard(shardIndex);
         // Clear the buffer and reset counters
         buffer.pendingOperations.clear();
         buffer.firstPendingNanos = 0L;
         long flushNanos = System.nanoTime();
 
         LOGGER.fine(() -> "Flushed shard buffer for partitionId=" + partitionId + " at " + flushNanos);
+    }
+
+    void commitShard(ShardIndex shardIndex) throws IOException {
+        shardIndex.commit();
     }
 
     @Override
