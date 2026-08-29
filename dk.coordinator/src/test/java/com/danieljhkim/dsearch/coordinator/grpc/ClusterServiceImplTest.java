@@ -194,29 +194,69 @@ class ClusterServiceImplTest {
     }
 
     @Test
-    void heartbeatIsExplicitlyDeferred() {
-        ClusterServiceImpl service = new ClusterServiceImpl(new ClusterMembershipService(appConfig()));
+    void heartbeatRenewsRegisteredNodeLeaseAndReturnsVersionedContract() {
+        ClusterMembershipService membershipService = new ClusterMembershipService(appConfig());
+        ClusterServiceImpl service = new ClusterServiceImpl(membershipService);
         CapturingObserver<HeartbeatResponse> observer = new CapturingObserver<>();
+        registerNode(service, validRegisterRequest().build());
+        long registeredVersion = membershipService.getTopologyVersion();
 
-        service.heartbeat(HeartbeatRequest.newBuilder().setNodeId("node-a").build(), observer);
+        service.heartbeat(
+                HeartbeatRequest.newBuilder()
+                        .setNodeId("node-a")
+                        .setRole(NodeRole.NODE_ROLE_INDEX)
+                        .setObservedTopologyVersion(membershipService.getTopologyVersion())
+                        .build(),
+                observer);
 
-        assertStatus(
-                observer.error,
-                Status.Code.UNIMPLEMENTED,
-                "Heartbeat RPC is deferred; coordinator health is tracked by HTTP health checks");
+        assertNull(observer.error);
+        assertTrue(observer.completed);
+        assertTrue(observer.value.getSuccess());
+        assertEquals(ClusterMembershipService.CONTRACT_VERSION, observer.value.getContractVersion());
+        assertEquals(membershipService.getTopologyEpoch(), observer.value.getTopologyEpoch());
+        assertEquals(registeredVersion, observer.value.getTopologyVersion());
+        assertTrue(observer.value.getLeaseDurationMillis() > 0);
     }
 
     @Test
-    void shardMapIsExplicitlyDeferred() {
-        ClusterServiceImpl service = new ClusterServiceImpl(new ClusterMembershipService(appConfig()));
+    void shardMapReturnsDeterministicVersionedIndexPlacement() {
+        ClusterMembershipService membershipService = new ClusterMembershipService(appConfig());
+        ClusterServiceImpl service = new ClusterServiceImpl(membershipService);
         CapturingObserver<GetShardMapResponse> observer = new CapturingObserver<>();
+        registerNode(service, registerRequest("z-node", "z.local", 5002, 5102, NodeRole.NODE_ROLE_INDEX));
+        registerNode(service, registerRequest("a-node", "a.local", 5001, 5101, NodeRole.NODE_ROLE_INDEX));
 
         service.getShardMap(GetShardMapRequest.getDefaultInstance(), observer);
 
+        assertNull(observer.error);
+        assertTrue(observer.completed);
+        assertEquals(ClusterMembershipService.CONTRACT_VERSION, observer.value.getContractVersion());
+        assertEquals(membershipService.getTopologyEpoch(), observer.value.getTopologyEpoch());
+        assertEquals(membershipService.getTopologyVersion(), observer.value.getTopologyVersion());
+        assertEquals(
+                List.of("index/a-node", "index/z-node"),
+                observer.value.getShardLocationsList().stream()
+                        .map(location -> location.getShardId())
+                        .toList());
+    }
+
+    @Test
+    void shardMapRejectsVersionNewerThanDurableCoordinatorState() {
+        ClusterMembershipService membershipService = new ClusterMembershipService(appConfig());
+        ClusterServiceImpl service = new ClusterServiceImpl(membershipService);
+        CapturingObserver<GetShardMapResponse> observer = new CapturingObserver<>();
+
+        service.getShardMap(
+                GetShardMapRequest.newBuilder()
+                        .setMinTopologyVersion(membershipService.getTopologyVersion() + 1)
+                        .build(),
+                observer);
+
         assertStatus(
                 observer.error,
-                Status.Code.UNIMPLEMENTED,
-                "Shard map RPC is deferred; shard placement is owned by gateway/index-node state");
+                Status.Code.FAILED_PRECONDITION,
+                "Requested topology version " + (membershipService.getTopologyVersion() + 1) + " but coordinator has "
+                        + membershipService.getTopologyVersion());
     }
 
     private static RegisterNodeResponse registerNode(ClusterServiceImpl service, RegisterNodeRequest request) {
@@ -295,6 +335,9 @@ class ClusterServiceImplTest {
 
     private static AppConfig appConfig() {
         AppConfig config = new AppConfig();
+        AppConfig.ServiceDiscoveryConfig discovery = new AppConfig.ServiceDiscoveryConfig();
+        discovery.setNodeExpirySeconds(30);
+        config.setServiceDiscovery(discovery);
         config.setIndexNodes(nodeGroupConfig("index-nodes", RoutingStrategy.ROUND_ROBIN));
         config.setQueryNodes(nodeGroupConfig("query-nodes", RoutingStrategy.LEAST_LOADED));
         config.setCoordinatorNodes(nodeGroupConfig("coordinator-nodes", RoutingStrategy.ROUND_ROBIN));

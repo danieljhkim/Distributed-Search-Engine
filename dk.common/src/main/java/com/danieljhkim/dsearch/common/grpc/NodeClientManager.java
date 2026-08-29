@@ -374,10 +374,18 @@ public class NodeClientManager<T> {
                 return t;
             });
             this.scheduler.scheduleAtFixedRate(
-                    NodeClientManager.this::refreshClientsFromCluster,
-                    refreshIntervalSeconds,
-                    refreshIntervalSeconds,
-                    TimeUnit.SECONDS);
+                    this::refreshSafely, refreshIntervalSeconds, refreshIntervalSeconds, TimeUnit.SECONDS);
+        }
+
+        private void refreshSafely() {
+            try {
+                NodeClientManager.this.refreshClientsFromCluster();
+            } catch (RuntimeException e) {
+                // ScheduledExecutorService suppresses every later execution when a periodic
+                // task throws. Keep retrying so a temporary coordinator outage is recoverable.
+                LOGGER.warning(() -> "Failed to refresh authoritative topology for " + nodeRole
+                        + "; will retry at the next interval. Cause: " + e);
+            }
         }
 
         void shutdown() {

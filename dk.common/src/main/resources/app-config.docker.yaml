@@ -1,6 +1,9 @@
 serviceDiscovery:
   enabled: true
   refreshIntervalSeconds: 10
+  nodeExpirySeconds: 30
+  maxStalenessSeconds: 30
+  coordinatorStateFile: "/data/coordinator-topology.properties"
 
 indexNodes:
   # Applies to reads only. Document mutations are routed to the node that owns

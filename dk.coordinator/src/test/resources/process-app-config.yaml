@@ -1,0 +1,20 @@
+serviceDiscovery:
+  enabled: true
+  refreshIntervalSeconds: 1
+  nodeExpirySeconds: 1
+  maxStalenessSeconds: 1
+
+indexNodes:
+  routingStrategy: "ROUND_ROBIN"
+  componentLabel: "process-index"
+  nodes: []
+
+queryNodes:
+  routingStrategy: "ROUND_ROBIN"
+  componentLabel: "process-query"
+  nodes: []
+
+coordinatorNodes:
+  routingStrategy: "ROUND_ROBIN"
+  componentLabel: "process-coordinator"
+  nodes: []

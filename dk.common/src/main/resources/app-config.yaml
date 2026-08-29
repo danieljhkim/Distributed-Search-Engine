@@ -1,8 +1,11 @@
 serviceDiscovery:
-  # Coordinator discovery is an in-memory health-aware registry.
-  # Heartbeat, shard-map, replication, and dynamic removal semantics are deferred.
+  # Clients fail closed until the first authoritative response, then may use the
+  # last accepted topology only for this bounded interval during an outage.
   enabled: true
   refreshIntervalSeconds: 10
+  nodeExpirySeconds: 30
+  maxStalenessSeconds: 30
+  coordinatorStateFile: "data/coordinator-topology.properties"
 
 indexNodes:
   # Applies to reads only. Document mutations are routed to the node that owns
