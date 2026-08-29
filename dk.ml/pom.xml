@@ -11,6 +11,12 @@
 
     <artifactId>dk.ml</artifactId>
 
+    <properties>
+        <!-- Fresh JaCoCo baseline: 68/139 lines and 24/40 branches. -->
+        <coverage.minimum.line>0.4890</coverage.minimum.line>
+        <coverage.minimum.branch>0.6000</coverage.minimum.branch>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>com.danieljhkim.dsearch</groupId>

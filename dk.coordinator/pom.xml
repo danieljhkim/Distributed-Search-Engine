@@ -13,6 +13,12 @@
 
     <artifactId>dk.coordinator</artifactId>
 
+    <properties>
+        <!-- Fresh JaCoCo baseline: 289/452 lines and 76/138 branches. -->
+        <coverage.minimum.line>0.6390</coverage.minimum.line>
+        <coverage.minimum.branch>0.5500</coverage.minimum.branch>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>io.grpc</groupId>

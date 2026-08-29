@@ -33,5 +33,23 @@ jobs:
         run: mvn -B -ntp spotless:check
 
       - name: Unit tests
-        run: mvn -B -ntp test
+        run: mvn -B -ntp verify
 
+      - name: Coverage guard fixture
+        run: |
+          # A deliberately impossible line floor simulates a coverage regression. The
+          # build must fail and name the JaCoCo line counter for dk.common.
+          if mvn -B -ntp -pl dk.common -am verify -Dcoverage.minimum.line=1.0000; then
+            echo "Coverage guard accepted a synthetic regression"
+            exit 1
+          fi
+
+      - name: Upload JaCoCo reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: jacoco-reports
+          path: |
+            dk.*/target/site/jacoco/**
+            dk.coverage/target/site/jacoco-aggregate/**
+          if-no-files-found: error
