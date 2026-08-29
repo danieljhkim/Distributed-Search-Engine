@@ -29,6 +29,9 @@ public class AppConfig {
     public static class ServiceDiscoveryConfig {
         private boolean enabled = false;
         private int refreshIntervalSeconds = 30;
+        private int nodeExpirySeconds = 30;
+        private int maxStalenessSeconds = 30;
+        private String coordinatorStateFile;
     }
 
     @Setter

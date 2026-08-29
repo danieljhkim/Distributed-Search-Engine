@@ -57,15 +57,14 @@ public class HealthCheckScheduler {
     private void checkClusterHealth() {
         for (NodeGroup.NodeInfo nodeInfo : membershipService.getIndexGroup().getAllNodes()) {
             boolean isHealthy = checkNodeHealth(nodeInfo);
-            if (isHealthy != nodeInfo.isHealthy()) {
-                membershipService.updateNodeHealth(nodeInfo.getNodeId(), NodeRole.NODE_ROLE_INDEX, isHealthy);
-            }
+            membershipService.recordHealthCheck(nodeInfo.getNodeId(), NodeRole.NODE_ROLE_INDEX, isHealthy);
         }
         for (NodeGroup.NodeInfo nodeInfo : membershipService.getQueryGroup().getAllNodes()) {
             boolean isHealthy = checkNodeHealth(nodeInfo);
-            if (isHealthy != nodeInfo.isHealthy()) {
-                membershipService.updateNodeHealth(nodeInfo.getNodeId(), NodeRole.NODE_ROLE_QUERY, isHealthy);
-            }
+            membershipService.recordHealthCheck(nodeInfo.getNodeId(), NodeRole.NODE_ROLE_QUERY, isHealthy);
+        }
+        for (String expiredNode : membershipService.expireNodes()) {
+            LOGGER.warning(() -> "Expired coordinator membership lease: " + expiredNode);
         }
     }
 

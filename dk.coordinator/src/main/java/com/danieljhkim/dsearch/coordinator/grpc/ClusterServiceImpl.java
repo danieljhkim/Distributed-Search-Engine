@@ -13,8 +13,10 @@ import com.danieljhkim.dsearch.proto.cluster.NodeInfo;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import com.danieljhkim.dsearch.proto.cluster.RegisterNodeRequest;
 import com.danieljhkim.dsearch.proto.cluster.RegisterNodeResponse;
+import com.danieljhkim.dsearch.proto.cluster.ShardLocation;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
+import java.util.NoSuchElementException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
@@ -51,8 +53,12 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
                             role.name(),
                             true),
                     role);
-            RegisterNodeResponse resp =
-                    RegisterNodeResponse.newBuilder().setSuccess(true).build();
+            RegisterNodeResponse resp = RegisterNodeResponse.newBuilder()
+                    .setSuccess(true)
+                    .setContractVersion(ClusterMembershipService.CONTRACT_VERSION)
+                    .setTopologyEpoch(membershipService.getTopologyEpoch())
+                    .setTopologyVersion(membershipService.getTopologyVersion())
+                    .build();
             responseObserver.onNext(resp);
             responseObserver.onCompleted();
         } catch (IllegalArgumentException e) {
@@ -69,46 +75,106 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
 
     @Override
     public void heartbeat(HeartbeatRequest request, StreamObserver<HeartbeatResponse> responseObserver) {
-        responseObserver.onError(Status.UNIMPLEMENTED
-                .withDescription("Heartbeat RPC is deferred; coordinator health is tracked by HTTP health checks")
-                .asRuntimeException());
+        try {
+            NodeRole role = validateRole(request.getRole());
+            if (request.getNodeId().isBlank()) {
+                throw new IllegalArgumentException("node_id must not be empty");
+            }
+            long version = membershipService.heartbeat(request.getNodeId(), role, request.getObservedTopologyVersion());
+            responseObserver.onNext(HeartbeatResponse.newBuilder()
+                    .setSuccess(true)
+                    .setContractVersion(ClusterMembershipService.CONTRACT_VERSION)
+                    .setTopologyEpoch(membershipService.getTopologyEpoch())
+                    .setTopologyVersion(version)
+                    .setLeaseDurationMillis(membershipService.getLeaseDurationMillis())
+                    .build());
+            responseObserver.onCompleted();
+        } catch (ClusterMembershipService.StaleTopologyException e) {
+            responseObserver.onError(staleTopologyStatus(e).asRuntimeException());
+        } catch (NoSuchElementException e) {
+            responseObserver.onError(
+                    Status.NOT_FOUND.withDescription(e.getMessage()).asRuntimeException());
+        } catch (IllegalArgumentException e) {
+            responseObserver.onError(
+                    Status.INVALID_ARGUMENT.withDescription(e.getMessage()).asRuntimeException());
+        } catch (Exception e) {
+            LOGGER.log(Level.SEVERE, "Failed to renew node heartbeat: " + request.getNodeId(), e);
+            responseObserver.onError(Status.INTERNAL
+                    .withDescription("Failed to renew node heartbeat: " + request.getNodeId())
+                    .withCause(e)
+                    .asRuntimeException());
+        }
     }
 
     @Override
     public void getShardMap(GetShardMapRequest request, StreamObserver<GetShardMapResponse> responseObserver) {
-        responseObserver.onError(Status.UNIMPLEMENTED
-                .withDescription("Shard map RPC is deferred; shard placement is owned by gateway/index-node state")
-                .asRuntimeException());
+        try {
+            GetShardMapResponse response;
+            synchronized (membershipService) {
+                membershipService.assertVersionAvailable(request.getMinTopologyVersion());
+                GetShardMapResponse.Builder builder = GetShardMapResponse.newBuilder()
+                        .setContractVersion(ClusterMembershipService.CONTRACT_VERSION)
+                        .setTopologyEpoch(membershipService.getTopologyEpoch())
+                        .setTopologyVersion(membershipService.getTopologyVersion());
+                for (NodeGroup.NodeInfo node : membershipService.healthyNodes(NodeRole.NODE_ROLE_INDEX)) {
+                    builder.addShardLocations(ShardLocation.newBuilder()
+                            .setShardId("index/" + node.getNodeId())
+                            .setNodeId(node.getNodeId())
+                            .setHost(node.getHost())
+                            .setPort(node.getPort())
+                            .setRole(NodeRole.NODE_ROLE_INDEX)
+                            .build());
+                }
+                response = builder.build();
+            }
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        } catch (ClusterMembershipService.StaleTopologyException e) {
+            responseObserver.onError(staleTopologyStatus(e).asRuntimeException());
+        } catch (Exception e) {
+            LOGGER.log(Level.SEVERE, "Failed to read authoritative shard map", e);
+            responseObserver.onError(Status.INTERNAL
+                    .withDescription("Failed to read authoritative shard map")
+                    .withCause(e)
+                    .asRuntimeException());
+        }
     }
 
     @Override
     public void getClusterInfo(GetClusterInfoRequest request, StreamObserver<GetClusterInfoResponse> responseObserver) {
         try {
             NodeRole role = validateRole(request.getRole());
-            NodeGroup group = membershipService.resolveGroup(role);
-            if (group == null) {
-                responseObserver.onError(noGroupStatus(role).asRuntimeException());
-                return;
-            }
-            GetClusterInfoResponse.Builder resp = GetClusterInfoResponse.newBuilder()
-                    .setComponentLabel(group.getComponentLabel())
-                    .setRoutingStrategy(group.getRoutingStrategy().name())
-                    .setReplicationFactor(1);
-
-            for (NodeGroup.NodeInfo ni : group.getAllNodes()) {
-                if (!ni.isHealthy()) {
-                    continue;
+            GetClusterInfoResponse response;
+            synchronized (membershipService) {
+                membershipService.assertVersionAvailable(request.getMinTopologyVersion());
+                NodeGroup group = membershipService.resolveGroup(role);
+                if (group == null) {
+                    responseObserver.onError(noGroupStatus(role).asRuntimeException());
+                    return;
                 }
-                resp.addNodes(NodeInfo.newBuilder()
-                        .setNodeId(ni.getNodeId())
-                        .setHost(ni.getHost())
-                        .setPort(ni.getPort())
-                        .setHealthPort(ni.getHealthPort())
-                        .setRole(role)
-                        .build());
+                GetClusterInfoResponse.Builder builder = GetClusterInfoResponse.newBuilder()
+                        .setComponentLabel(group.getComponentLabel())
+                        .setRoutingStrategy(group.getRoutingStrategy().name())
+                        .setReplicationFactor(1)
+                        .setContractVersion(ClusterMembershipService.CONTRACT_VERSION)
+                        .setTopologyEpoch(membershipService.getTopologyEpoch())
+                        .setTopologyVersion(membershipService.getTopologyVersion());
+
+                for (NodeGroup.NodeInfo ni : membershipService.healthyNodes(role)) {
+                    builder.addNodes(NodeInfo.newBuilder()
+                            .setNodeId(ni.getNodeId())
+                            .setHost(ni.getHost())
+                            .setPort(ni.getPort())
+                            .setHealthPort(ni.getHealthPort())
+                            .setRole(role)
+                            .build());
+                }
+                response = builder.build();
             }
-            responseObserver.onNext(resp.build());
+            responseObserver.onNext(response);
             responseObserver.onCompleted();
+        } catch (ClusterMembershipService.StaleTopologyException e) {
+            responseObserver.onError(staleTopologyStatus(e).asRuntimeException());
         } catch (IllegalArgumentException e) {
             responseObserver.onError(
                     Status.INVALID_ARGUMENT.withDescription(e.getMessage()).asRuntimeException());
@@ -156,5 +222,9 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
 
     private Status noGroupStatus(NodeRole role) {
         return Status.NOT_FOUND.withDescription("No node group registered for role: " + role);
+    }
+
+    private Status staleTopologyStatus(ClusterMembershipService.StaleTopologyException error) {
+        return Status.FAILED_PRECONDITION.withDescription(error.getMessage());
     }
 }

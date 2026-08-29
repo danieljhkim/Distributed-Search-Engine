@@ -22,12 +22,19 @@ message RegisterNodeRequest {
 
 message RegisterNodeResponse {
   bool success = 1;
+  // Contract version understood by the coordinator. Version 1 is the first
+  // authoritative topology contract.
+  uint32 contract_version = 2;
+  string topology_epoch = 3;
+  uint64 topology_version = 4;
 }
 
 message GetClusterInfoRequest {
   NodeRole role = 1;
   // Reserved for future partition-aware discovery. Current coordinator ignores this field.
   string partition_id = 2;
+  // Fail closed if the coordinator cannot serve at least this version.
+  uint64 min_topology_version = 3;
 }
 
 message GetClusterInfoResponse {
@@ -36,21 +43,35 @@ message GetClusterInfoResponse {
     string componentLabel = 3;
     // Current runtime has no replication layer; coordinator returns 1.
     int32 replicationFactor = 4;
+    uint32 contract_version = 5;
+    string topology_epoch = 6;
+    uint64 topology_version = 7;
 }
 
-// Deferred. The current coordinator uses HTTP health checks instead of client heartbeats
-// and returns UNIMPLEMENTED for this RPC.
+// Renews a registered node's lease. A heartbeat never creates membership;
+// callers must RegisterNode first. observed_topology_version protects a client
+// from accidentally accepting a coordinator whose durable state is older than
+// topology it has already observed.
 message HeartbeatRequest {
   string node_id = 1;
+  NodeRole role = 2;
+  uint64 observed_topology_version = 3;
 }
 
 message HeartbeatResponse {
   bool success = 1;
+  uint32 contract_version = 2;
+  string topology_epoch = 3;
+  uint64 topology_version = 4;
+  uint64 lease_duration_millis = 5;
 }
 
-// Deferred. The gateway/index-node runtime owns shard placement today and the
-// coordinator returns UNIMPLEMENTED for this RPC.
-message GetShardMapRequest {}
+// Returns the authoritative logical index-shard placement. Each active index
+// node owns one logical shard slot named "index/<node_id>". This contract does
+// not claim replication or automatic movement of existing Lucene data.
+message GetShardMapRequest {
+  uint64 min_topology_version = 1;
+}
 
 message ShardLocation {
   string shard_id = 1;
@@ -70,6 +91,9 @@ message NodeInfo {
 
 message GetShardMapResponse {
   repeated ShardLocation shard_locations = 1;
+  uint32 contract_version = 2;
+  string topology_epoch = 3;
+  uint64 topology_version = 4;
 }
 
 service ClusterService {

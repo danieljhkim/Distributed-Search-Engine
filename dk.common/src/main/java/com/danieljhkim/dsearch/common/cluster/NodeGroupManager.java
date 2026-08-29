@@ -8,41 +8,52 @@ import com.danieljhkim.dsearch.proto.cluster.GetClusterInfoRequest;
 import com.danieljhkim.dsearch.proto.cluster.GetClusterInfoResponse;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import java.io.IOException;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 import lombok.Setter;
 
+/** Resolves node groups from either explicit static mode or authoritative coordinator topology. */
 public class NodeGroupManager {
     private static final Logger LOGGER = Logger.getLogger(NodeGroupManager.class.getName());
+    private static final int SUPPORTED_CONTRACT_VERSION = 1;
+
     private final AppConfig defaultConfig;
+    private final Clock clock;
+    private final Map<NodeRole, AcceptedTopology> acceptedTopologies = new ConcurrentHashMap<>();
+    private String acceptedEpoch;
+    private long acceptedVersion;
 
     @Setter
     private NodeClientManager<ClusterServiceGrpc.ClusterServiceBlockingStub> coordinatorManager;
 
-    private NodeGroup indexGroup;
-    private NodeGroup queryGroup;
-    private NodeGroup coordinatorGroup;
+    private final NodeGroup indexGroup;
+    private final NodeGroup queryGroup;
+    private final NodeGroup coordinatorGroup;
 
     public NodeGroupManager() throws RuntimeException, IOException {
         this(ConfigLoader.load());
     }
 
     public NodeGroupManager(AppConfig defaultConfig) {
+        this(defaultConfig, Clock.systemUTC());
+    }
+
+    NodeGroupManager(AppConfig defaultConfig, Clock clock) {
         this.defaultConfig = Objects.requireNonNull(defaultConfig, "defaultConfig must not be null");
+        this.clock = Objects.requireNonNull(clock, "clock must not be null");
         this.coordinatorGroup = loadStaticNodeGroup(NodeRole.NODE_ROLE_COORDINATOR);
         this.indexGroup = loadStaticNodeGroup(NodeRole.NODE_ROLE_INDEX);
         this.queryGroup = loadStaticNodeGroup(NodeRole.NODE_ROLE_QUERY);
     }
 
     /**
-     * Node group exactly as declared in the configuration file, rebuilt on every
-     * call.
-     *
-     * <p>Unlike {@link #getStaticNodeGroupConfig(NodeRole)}, which is overwritten
-     * by the last successful discovery response, this is stable for the lifetime
-     * of the config file. Document ownership is derived from it so that the
-     * {@code (partitionId, documentId) -> node} mapping survives restarts and
-     * health changes.
+     * Node group exactly as declared in the configuration file, rebuilt on every call. This is
+     * intentionally distinct from a coordinator topology accepted for bounded-staleness use.
      */
     public NodeGroup getConfiguredNodeGroup(NodeRole role) {
         return loadStaticNodeGroup(role);
@@ -59,30 +70,39 @@ public class NodeGroupManager {
         return NodeGroup.fromConfig(role, config);
     }
 
+    /**
+     * Resolve topology under an explicit availability policy.
+     *
+     * <p>Static configuration is used only when discovery is disabled. With discovery enabled, a
+     * client fails closed until it has accepted a versioned coordinator response. During a later
+     * coordinator outage it may reuse that response only for {@code maxStalenessSeconds}; it never
+     * silently revives the operator's static node list.
+     */
     public NodeGroup getNodeGroup(NodeRole role) {
-        if (role == NodeRole.NODE_ROLE_COORDINATOR) {
-            // hack: for coordinator role, use static config.
-            return coordinatorGroup;
-        }
-        // If service discovery is disabled just use the static config from
-        // app-config.yaml
-        if (!isServiceDiscoveryEnabled()
-                || coordinatorManager == null
-                || defaultConfig == null
-                || defaultConfig.getCoordinatorNodes() == null) {
+        if (role == NodeRole.NODE_ROLE_COORDINATOR || !isServiceDiscoveryEnabled()) {
             return getStaticNodeGroupConfig(role);
         }
-        GetClusterInfoRequest request =
-                GetClusterInfoRequest.newBuilder().setRole(role).build();
+        AcceptedTopology previous = acceptedTopologies.get(role);
+        if (coordinatorManager == null) {
+            return acceptedOrFail(role, previous, "coordinator client is not configured", null);
+        }
+
+        long minimumVersion = acceptedVersion();
+        GetClusterInfoRequest request = GetClusterInfoRequest.newBuilder()
+                .setRole(role)
+                .setMinTopologyVersion(minimumVersion)
+                .build();
         try {
             GetClusterInfoResponse response = coordinatorManager.nextClient().getClusterInfo(request);
             NodeGroup group = NodeGroup.fromResponse(response, role);
-            updateNodeGroup(group, role);
+            acceptResponse(role, response);
+            acceptedTopologies.put(
+                    role,
+                    new AcceptedTopology(
+                            group, response.getTopologyEpoch(), response.getTopologyVersion(), clock.instant()));
             return group;
         } catch (Exception e) {
-            LOGGER.warning(() -> "Failed to fetch cluster info from coordinator for role " + role
-                    + ". Falling back to static configuration. Cause: " + e.toString());
-            return getStaticNodeGroupConfig(role);
+            return acceptedOrFail(role, previous, "coordinator request failed", e);
         }
     }
 
@@ -95,21 +115,9 @@ public class NodeGroupManager {
         };
     }
 
-    private void updateNodeGroup(NodeGroup group, NodeRole role) {
-        if (role == NodeRole.NODE_ROLE_COORDINATOR) {
-            this.coordinatorGroup = group;
-        } else if (role == NodeRole.NODE_ROLE_INDEX) {
-            this.indexGroup = group;
-        } else if (role == NodeRole.NODE_ROLE_QUERY) {
-            this.queryGroup = group;
-        }
-    }
-
     public boolean isServiceDiscoveryEnabled() {
-        if (defaultConfig == null || defaultConfig.getServiceDiscovery() == null) {
-            return false;
-        }
-        return defaultConfig.getServiceDiscovery().isEnabled();
+        return defaultConfig.getServiceDiscovery() != null
+                && defaultConfig.getServiceDiscovery().isEnabled();
     }
 
     public AppConfig.ServiceDiscoveryConfig getServiceDiscoveryConfig() {
@@ -119,4 +127,54 @@ public class NodeGroupManager {
     public boolean hasCoordinatorManager() {
         return coordinatorManager != null;
     }
+
+    private synchronized void acceptResponse(NodeRole role, GetClusterInfoResponse response) {
+        if (response.getContractVersion() != SUPPORTED_CONTRACT_VERSION) {
+            throw new IllegalStateException("Unsupported coordinator topology contract version "
+                    + response.getContractVersion() + " for role " + role);
+        }
+        if (response.getTopologyEpoch().isBlank() || response.getTopologyVersion() < 1) {
+            throw new IllegalStateException("Coordinator returned an invalid topology epoch or version for " + role);
+        }
+        if (acceptedEpoch != null && !acceptedEpoch.equals(response.getTopologyEpoch())) {
+            throw new IllegalStateException("Coordinator topology epoch changed from " + acceptedEpoch + " to "
+                    + response.getTopologyEpoch() + " for " + role);
+        }
+        if (response.getTopologyVersion() < acceptedVersion) {
+            throw new IllegalStateException("Coordinator topology version regressed from " + acceptedVersion + " to "
+                    + response.getTopologyVersion() + " for " + role);
+        }
+        acceptedEpoch = response.getTopologyEpoch();
+        acceptedVersion = response.getTopologyVersion();
+    }
+
+    private synchronized long acceptedVersion() {
+        return acceptedVersion;
+    }
+
+    private NodeGroup acceptedOrFail(NodeRole role, AcceptedTopology previous, String reason, Exception cause) {
+        if (previous != null) {
+            Duration age = Duration.between(previous.acceptedAt(), clock.instant());
+            Duration limit = Duration.ofSeconds(Math.max(0, maxStalenessSeconds()));
+            if (!age.isNegative() && age.compareTo(limit) <= 0) {
+                LOGGER.warning(() -> "Authoritative coordinator unavailable for " + role + "; using topology "
+                        + previous.version() + " for bounded-staleness window (age=" + age.toSeconds()
+                        + "s, limit=" + limit.toSeconds() + "s). Cause: " + describe(reason, cause));
+                return previous.group();
+            }
+        }
+        throw new IllegalStateException(
+                "Authoritative coordinator topology unavailable for " + role + ": " + describe(reason, cause), cause);
+    }
+
+    private int maxStalenessSeconds() {
+        AppConfig.ServiceDiscoveryConfig config = defaultConfig.getServiceDiscovery();
+        return config == null ? 0 : config.getMaxStalenessSeconds();
+    }
+
+    private static String describe(String reason, Exception cause) {
+        return cause == null ? reason : reason + " (" + cause + ")";
+    }
+
+    private record AcceptedTopology(NodeGroup group, String epoch, long version, Instant acceptedAt) {}
 }
