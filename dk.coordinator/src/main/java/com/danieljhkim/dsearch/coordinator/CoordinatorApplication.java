@@ -8,6 +8,7 @@ import com.danieljhkim.dsearch.coordinator.scheduler.HealthCheckScheduler;
 import com.danieljhkim.dsearch.coordinator.server.CoordinatorServer;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
+import java.util.Objects;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -16,29 +17,89 @@ public class CoordinatorApplication {
     private static final Logger LOGGER = Logger.getLogger(CoordinatorApplication.class.getName());
 
     public static void main(String[] args) throws IOException, InterruptedException {
-
-        int port = Integer.parseInt(System.getenv("COORDINATOR_PORT"));
-        int healthPort = Integer.parseInt(System.getenv("COORDINATOR_HEALTH_PORT"));
+        int port = requiredPort("COORDINATOR_PORT", System.getenv("COORDINATOR_PORT"));
+        int healthPort = requiredPort("COORDINATOR_HEALTH_PORT", System.getenv("COORDINATOR_HEALTH_PORT"));
         AppConfig appConfig = ConfigLoader.load();
-        ClusterMembershipService membershipService = new ClusterMembershipService(appConfig);
-        CoordinatorServer server = new CoordinatorServer(port, membershipService);
-        HealthCheckScheduler healthCheckScheduler = new HealthCheckScheduler(membershipService, appConfig);
-        HttpServer healthServer = HealthHttpServer.start(healthPort, "coordinator-node");
+        CoordinatorRuntime runtime = start(appConfig, port, healthPort);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             LOGGER.info("Shutting down Coordinator gRPC server...");
             try {
-                server.shutdown();
-                healthCheckScheduler.shutdown();
-                healthServer.stop(0);
+                runtime.shutdown();
             } catch (InterruptedException e) {
                 LOGGER.log(Level.SEVERE, "Interrupted during coordinator shutdown", e);
                 Thread.currentThread().interrupt();
             }
         }));
 
-        LOGGER.info(() -> "Coordinator gRPC server started on port " + port);
-        healthCheckScheduler.start();
-        server.start();
+        runtime.awaitTermination();
+    }
+
+    static CoordinatorRuntime start(AppConfig appConfig, int port, int healthPort) throws IOException {
+        Objects.requireNonNull(appConfig, "appConfig must not be null");
+        ClusterMembershipService membershipService = new ClusterMembershipService(appConfig);
+        CoordinatorServer server = new CoordinatorServer(port, membershipService);
+        HealthCheckScheduler healthCheckScheduler = new HealthCheckScheduler(membershipService, appConfig);
+        HttpServer healthServer = HealthHttpServer.start(healthPort, "coordinator-node");
+        try {
+            server.startAsync();
+            healthCheckScheduler.start();
+            LOGGER.info(() -> "Coordinator gRPC server started on port " + server.getPort());
+            return new CoordinatorRuntime(server, healthCheckScheduler, healthServer);
+        } catch (IOException | RuntimeException e) {
+            healthServer.stop(0);
+            try {
+                healthCheckScheduler.shutdown();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+            throw e;
+        }
+    }
+
+    static int requiredPort(String variable, String value) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(variable + " must be set to a port number");
+        }
+        try {
+            int port = Integer.parseInt(value);
+            if (port < 0 || port > 65535) {
+                throw new IllegalArgumentException(variable + " must be between 0 and 65535");
+            }
+            return port;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(variable + " must be a port number: " + value, e);
+        }
+    }
+
+    static final class CoordinatorRuntime {
+        private final CoordinatorServer server;
+        private final HealthCheckScheduler healthCheckScheduler;
+        private final HttpServer healthServer;
+
+        private CoordinatorRuntime(
+                CoordinatorServer server, HealthCheckScheduler healthCheckScheduler, HttpServer healthServer) {
+            this.server = server;
+            this.healthCheckScheduler = healthCheckScheduler;
+            this.healthServer = healthServer;
+        }
+
+        void awaitTermination() throws InterruptedException {
+            server.awaitTermination();
+        }
+
+        int grpcPort() {
+            return server.getPort();
+        }
+
+        int healthPort() {
+            return healthServer.getAddress().getPort();
+        }
+
+        void shutdown() throws InterruptedException {
+            server.shutdown();
+            healthCheckScheduler.shutdown();
+            healthServer.stop(0);
+        }
     }
 }
