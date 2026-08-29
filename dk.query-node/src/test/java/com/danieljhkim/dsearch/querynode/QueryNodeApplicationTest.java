@@ -148,6 +148,9 @@ class QueryNodeApplicationTest {
     private static int freePortWithFreeMetricsPort() throws IOException {
         while (true) {
             int port = freePort();
+            if (port > 65535 - 2000) {
+                continue;
+            }
             try (ServerSocket ignored = new ServerSocket(port + 2000)) {
                 return port;
             } catch (IOException e) {
