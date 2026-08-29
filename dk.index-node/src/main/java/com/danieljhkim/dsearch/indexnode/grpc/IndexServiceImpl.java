@@ -111,7 +111,7 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
         }
         String docId = request.getId();
         try {
-            indexManager.deleteDocument(partitionId, docId);
+            indexManager.deleteDocumentDurably(partitionId, docId);
             DeleteDocumentResponse response =
                     DeleteDocumentResponse.newBuilder().setSuccess(true).build();
             responseObserver.onNext(response);
