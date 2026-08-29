@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd" xmlns="http://maven.apache.org/POM/4.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.carrotsearch</groupId>
+  <artifactId>hppc</artifactId>
+  <version>0.9.1</version>
+  <name>High Performance Primitive Collections</name>
+  <description>High Performance Primitive Collections: data structures (maps, sets, lists, stacks, queues) generated for combinations of object and primitive types to conserve JVM memory and speed up execution.</description>
+  <url>https://github.com/carrotsearch/hppc</url>
+  <organization>
+    <name>Carrot Search s.c.</name>
+    <url>https://www.carrotsearch.com</url>
+  </organization>
+  <licenses>
+    <license>
+      <name>Apache 2</name>
+      <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+    </license>
+  </licenses>
+  <developers>
+    <developer>
+      <id>stanislaw.osinski</id>
+      <name>Stanisław Osiński</name>
+      <email>stanislaw.osinski@carrotsearch.com</email>
+    </developer>
+    <developer>
+      <id>dawid.weiss</id>
+      <name>Dawid Weiss</name>
+      <email>dawid.weiss@carrotsearch.com</email>
+    </developer>
+    <developer>
+      <id>bruno.roustant</id>
+      <name>Bruno Roustant</name>
+      <email>bruno.roustant@gmail.com</email>
+    </developer>
+  </developers>
+  <scm>
+    <connection>scm:git:git@github.com:carrotsearch/hppc.git</connection>
+    <developerConnection>scm:git:git@github.com:carrotsearch/hppc.git</developerConnection>
+    <url>https://github.com/carrotsearch/hppc</url>
+  </scm>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.carrotsearch.console</groupId>
+        <artifactId>launcher</artifactId>
+        <version>1.0.6</version>
+      </dependency>
+      <dependency>
+        <groupId>com.carrotsearch.progresso</groupId>
+        <artifactId>progresso</artifactId>
+        <version>1.7.4</version>
+      </dependency>
+      <dependency>
+        <groupId>com.carrotsearch.progresso</groupId>
+        <artifactId>progresso-consolewidth-unixish</artifactId>
+        <version>1.7.4</version>
+      </dependency>
+      <dependency>
+        <groupId>com.carrotsearch.progresso</groupId>
+        <artifactId>progresso-log4j2</artifactId>
+        <version>1.7.4</version>
+      </dependency>
+      <dependency>
+        <groupId>org.antlr</groupId>
+        <artifactId>antlr4-runtime</artifactId>
+        <version>4.8</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.commons</groupId>
+        <artifactId>commons-lang3</artifactId>
+        <version>3.9</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.logging.log4j</groupId>
+        <artifactId>log4j-api</artifactId>
+        <version>2.15.0</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.logging.log4j</groupId>
+        <artifactId>log4j-core</artifactId>
+        <version>2.15.0</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.logging.log4j</groupId>
+        <artifactId>log4j-slf4j18-impl</artifactId>
+        <version>2.15.0</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.velocity</groupId>
+        <artifactId>velocity-engine-core</artifactId>
+        <version>2.2</version>
+      </dependency>
+      <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-api</artifactId>
+        <version>1.8.0-beta4</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>

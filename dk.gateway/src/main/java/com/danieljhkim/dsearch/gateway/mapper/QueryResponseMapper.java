@@ -20,7 +20,7 @@ public class QueryResponseMapper {
         List<SearchResponseDto.SearchHitDto> hits =
                 grpcResp.getHitsList().stream().map(this::toHitDto).toList();
 
-        SearchResponseDto response = new SearchResponseDto(hits, grpcResp.getTotalHits(), grpcResp.getPage());
+        SearchResponseDto response = new SearchResponseDto(hits, grpcResp.getTotalHits(), 0, grpcResp.getPage());
 
         // Map facets if present
         if (grpcResp.getFacetsCount() > 0) {

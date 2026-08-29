@@ -1,0 +1,595 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (c) 2022, 2026 Contributors to the Eclipse Foundation. All rights reserved.
+    Copyright (c) 2018 Oracle and/or its affiliates. All rights reserved.
+
+    This program and the accompanying materials are made available under the
+    terms of the Eclipse Public License v. 2.0, which is available at
+    http://www.eclipse.org/legal/epl-2.0.
+
+    This Source Code may also be made available under the following Secondary
+    Licenses when the conditions for such availability set forth in the
+    Eclipse Public License v. 2.0 are satisfied: GNU General Public License,
+    version 2 with the GNU Classpath Exception, which is available at
+    https://www.gnu.org/software/classpath/license.html.
+
+    SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
+
+-->
+
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>org.eclipse.ee4j</groupId>
+    <artifactId>project</artifactId>
+    <version>2.0.4</version>
+    <packaging>pom</packaging>
+
+    <name>EE4J Project</name>
+    <url>https://projects.eclipse.org/projects/ee4j</url>
+    <description>
+        Eclipse Enterprise for Java (EE4J) is an open source initiative to create standard APIs,
+        implementations of those APIs, and technology compatibility kits for Java runtimes
+        that enable development, deployment, and management of server-side and cloud-native applications.
+    </description>
+
+    <organization>
+        <name>Eclipse Foundation</name>
+        <url>https://www.eclipse.org</url>
+    </organization>
+    <inceptionYear>2017</inceptionYear>
+
+    <developers>
+        <developer>
+            <id>eclipseee4j</id>
+            <name>Eclipse EE4J Developers</name>
+            <organization>Eclipse Foundation</organization>
+            <email>ee4j-pmc@eclipse.org</email>
+        </developer>
+    </developers>
+
+    <licenses>
+        <license>
+            <name>Eclipse Public License v. 2.0</name>
+            <url>https://www.eclipse.org/org/documents/epl-2.0/EPL-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+        <license>
+            <name>GNU General Public License, version 2 with the GNU Classpath Exception</name>
+            <url>https://www.gnu.org/software/classpath/license.html</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <issueManagement>
+        <system>GitHub Issues</system>
+        <url>https://github.com/eclipse-ee4j/ee4j/issues</url>
+    </issueManagement>
+
+    <scm>
+        <connection>scm:git:git@github.com:eclipse-ee4j/ee4j.git</connection>
+        <developerConnection>scm:git:git@github.com:eclipse-ee4j/ee4j.git</developerConnection>
+        <url>https://github.com/eclipse-ee4j/ee4j</url>
+    </scm>
+
+    <mailingLists>
+        <mailingList>
+            <name>Community discussions</name>
+            <post>jakarta.ee-community@eclipse.org</post>
+            <subscribe>https://accounts.eclipse.org/mailing-list/jakarta.ee-community</subscribe>
+            <unsubscribe>https://accounts.eclipse.org/mailing-list/jakarta.ee-community</unsubscribe>
+            <archive>https://dev.eclipse.org/mhonarc/lists/jakarta.ee-community/</archive>
+            <otherArchives>
+                <otherArchive>http://dev.eclipse.org/mhonarc/lists/jakarta.ee-community/maillist.rss</otherArchive>
+            </otherArchives>
+        </mailingList>
+        <mailingList>
+            <name>PMC discussions</name>
+            <post>ee4j-pmc@eclipse.org</post>
+            <subscribe>https://accounts.eclipse.org/mailing-list/ee4j-pmc</subscribe>
+            <unsubscribe>https://accounts.eclipse.org/mailing-list/ee4j-pmc</unsubscribe>
+            <archive>https://dev.eclipse.org/mhonarc/lists/ee4j-pmc/</archive>
+            <otherArchives>
+                <otherArchive>http://dev.eclipse.org/mhonarc/lists/ee4j-pmc/maillist.rss</otherArchive>
+            </otherArchives>
+        </mailingList>
+    </mailingLists>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.build.outputTimestamp>2020-12-19T17:24:00Z</project.build.outputTimestamp>
+    </properties>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-deploy-plugin</artifactId>
+                    <version>3.1.4</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.sonatype.central</groupId>
+                    <artifactId>central-publishing-maven-plugin</artifactId>
+                    <version>0.10.0</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.eclipse.cbi.central</groupId>
+                    <artifactId>central-staging-plugins</artifactId>
+                    <version>1.4.7</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-enforcer-plugin</artifactId>
+                    <version>3.6.3</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-jar-plugin</artifactId>
+                    <version>3.5.0</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-source-plugin</artifactId>
+                    <version>3.4.0</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-javadoc-plugin</artifactId>
+                    <version>3.12.0</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-gpg-plugin</artifactId>
+                    <version>3.2.8</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.cyclonedx</groupId>
+                    <artifactId>cyclonedx-maven-plugin</artifactId>
+                    <version>2.9.1</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.asciidoctor</groupId>
+                    <artifactId>asciidoctor-maven-plugin</artifactId>
+                    <version>3.2.0</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-install-plugin</artifactId>
+                    <version>3.1.4</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+
+    </build>
+
+    <profiles>
+
+        <profile>
+        <!-- Generates SBOM. Skip with '-DskipSBOM'.-->
+            <id>sbom</id>
+            <activation>
+              <property>
+                <name>!skipSBOM</name>
+              </property>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.cyclonedx</groupId>
+                        <artifactId>cyclonedx-maven-plugin</artifactId>
+                        <configuration>
+                            <schemaVersion>1.4</schemaVersion>
+                            <projectType>library</projectType>
+                            <!-- Without this it doesn't generate cyclonedx files at all. -->
+                            <!-- Watch https://github.com/CycloneDX/cyclonedx-maven-plugin/issues/597 -->
+                            <skipNotDeployed>false</skipNotDeployed>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>makeAggregateBom</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!--
+            This profile provides configuration for the plugins that are required in
+            order to deploy both release and snapshot artifacts.
+
+            Maven Central publishing plugin is taking care of the deployment goal
+            and generation of checksums (see https://central.sonatype.org/publish/publish-portal-maven/#checksums).
+
+            Generating the sources and javadoc jars, as well as GPG signing
+            are also enabled by this profile and are required
+            to pass the validation rules of Maven Central publishing.
+        -->
+        <profile>
+            <id>oss-release</id>
+            <properties>
+                <!-- It is recommended to hardcode the name as the plugin usually takes
+                     the last project proccessed in the reactor - that can be confusing
+                     when you list deployments on Maven Central website. -->
+                <release.projectName>${project.name}</release.projectName>
+                <release.autoPublish>true</release.autoPublish>
+                <release.waitUntil>validated</release.waitUntil>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-enforcer-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>enforce-maven</id>
+                                <goals>
+                                    <goal>enforce</goal>
+                                </goals>
+                                <configuration>
+                                    <rules>
+                                        <requireMavenVersion>
+                                            <version>[3.2.5,)</version>
+                                            <message>Maven 3.0 through 3.0.3 inclusive does not pass
+                                                correct settings.xml to Maven Release Plugin.</message>
+                                        </requireMavenVersion>
+                                    </rules>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <configuration>
+                            <gpgArguments>
+                                <arg>--pinentry-mode</arg>
+                                <arg>loopback</arg>
+                            </gpgArguments>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <autoPublish>${release.autoPublish}</autoPublish>
+                            <deploymentName>${release.projectName} ${project.version}</deploymentName>
+                            <publishingServerId>central</publishingServerId>
+                            <waitUntil>${release.waitUntil}</waitUntil>
+                            <centralBaseUrl>https://central.sonatype.com</centralBaseUrl>
+                            <centralSnapshotsUrl>https://central.sonatype.com/repository/maven-snapshots/</centralSnapshotsUrl>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!--
+            This profile provides configuration for the plugins that are required in
+            order to deploy artifacts to an eclipse managed staging repository.
+        -->
+        <profile>
+            <id>stage-release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-enforcer-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>enforce-maven</id>
+                                <goals>
+                                    <goal>enforce</goal>
+                                </goals>
+                                <configuration>
+                                    <rules>
+                                        <requireMavenVersion>
+                                            <version>[3.2.5,)</version>
+                                            <message>Maven 3.0 through 3.0.3 inclusive does not pass
+                                                correct settings.xml to Maven Release Plugin.</message>
+                                        </requireMavenVersion>
+                                    </rules>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>enforce-property</id>
+                                <goals>
+                                    <goal>enforce</goal>
+                                </goals>
+                                <configuration>
+                                    <rules>
+                                        <requireProperty>
+                                            <property>nexus.staging.repository</property>
+                                            <message>
+                                                You must set the 'nexus.staging.repository' system property
+                                                For example, -Dnexus.staging.repository=data-maven2-staging on the command line
+                                                in order to use this profile.
+                                            </message>
+                                        </requireProperty>
+                                    </rules>
+                                    <fail>true</fail>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <configuration>
+                            <gpgArguments>
+                                <arg>--pinentry-mode</arg>
+                                <arg>loopback</arg>
+                            </gpgArguments>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-deploy-plugin</artifactId>
+                        <configuration>
+                            <altReleaseDeploymentRepository>
+                                repo.eclipse.org::default::https://repo.eclipse.org/repository/${nexus.staging.repository}/
+                            </altReleaseDeploymentRepository>
+                            <deployAtEnd>true</deployAtEnd> <!-- Do not deploy if build failure -->
+                            <skip>snapshots</skip>          <!-- Skip if SNAPSHOT version - Disallow staging SNAPSHOT-->
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!--
+            Promotes an artifact from the an eclipse managed staging repository
+            to maven central, which will maintain the artifact's hash values for certification requests.
+        -->
+        <profile>
+            <id>promote-stage</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-enforcer-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>enforce-java</id>
+                                <goals>
+                                    <goal>enforce</goal>
+                                </goals>
+                                <configuration>
+                                    <rules>
+                                        <requireJavaVersion>
+                                            <version>[17,)</version> <!-- central-staging-plugins requires JDK 17 or newer -->
+                                        </requireJavaVersion>
+                                    </rules>
+                                    <fail>true</fail>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>enforce-property</id>
+                                <goals>
+                                    <goal>enforce</goal>
+                                </goals>
+                                <configuration>
+                                    <rules>
+                                        <requireProperty>
+                                            <property>nexus.staging.repository</property>
+                                            <message>
+                                                You must set the 'nexus.staging.repository' system property
+                                                For example, -Dnexus.staging.repository=data-maven2-staging on the command line
+                                                in order to use this profile.
+                                            </message>
+                                        </requireProperty>
+                                    </rules>
+                                    <fail>true</fail>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin> <!-- Skip the default deploy plugin -->
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-deploy-plugin</artifactId>
+                        <configuration>
+                            <skip>true</skip>
+                        </configuration>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.eclipse.cbi.central</groupId>
+                        <artifactId>central-staging-plugins</artifactId>
+                        <executions>
+                            <execution>
+                                <id>sync-to-central</id>
+                                <phase>deploy</phase>
+                                <goals>
+                                    <goal>rc-sync</goal>
+                                </goals>
+                                <configuration>
+                                    <bearerCreate>true</bearerCreate>
+                                    <generateChecksums256>true</generateChecksums256>
+                                    <generateChecksums512>true</generateChecksums512>
+                                    <repositoryUrl>https://repo.eclipse.org/repository/${nexus.staging.repository}/</repositoryUrl>
+                                    <signArtifacts>true</signArtifacts>
+                                    <syncAutoPublish>true</syncAutoPublish>
+                                    <syncDropAfterPublish>true</syncDropAfterPublish>
+                                    <nexusArtifactsResolution>true</nexusArtifactsResolution> <!-- Ensure all artifacts are resolved; not just the base, pom, sources, and javadoc -->
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!--
+            This profile enables consuming snapshot artifacts from the snapshots repository.
+        -->
+        <profile>
+            <id>snapshots</id>
+            <activation>
+                <activeByDefault>false</activeByDefault>
+            </activation>
+            <repositories>
+                <repository>
+                    <name>Central Portal Snapshots</name>
+                    <id>central-portal-snapshots</id>
+                    <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+                    <releases>
+                        <enabled>false</enabled>
+                    </releases>
+                    <snapshots>
+                        <enabled>true</enabled>
+                    </snapshots>
+                </repository>
+            </repositories>
+            <pluginRepositories>
+                <pluginRepository>
+                    <name>Central Portal Snapshots</name>
+                    <id>central-portal-snapshots</id>
+                    <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+                    <releases>
+                        <enabled>false</enabled>
+                    </releases>
+                    <snapshots>
+                        <enabled>true</enabled>
+                    </snapshots>
+                </pluginRepository>
+            </pluginRepositories>
+        </profile>
+
+        <!--
+            This profile enables consuming staged artifacts from the nexus repository.
+        -->
+        <profile>
+            <id>staged</id>
+            <activation>
+                <activeByDefault>false</activeByDefault>
+            </activation>
+            <repositories>
+                <repository>
+                    <name>Nexus staging</name>
+                    <id>repo.eclipse.org</id>
+                    <url>https://repo.eclipse.org/repository/ee4j-staging/</url>
+                    <releases>
+                        <enabled>true</enabled>
+                    </releases>
+                    <snapshots>
+                        <enabled>false</enabled>
+                    </snapshots>
+                </repository>
+            </repositories>
+            <pluginRepositories>
+                <pluginRepository>
+                    <name>Nexus staging</name>
+                    <id>repo.eclipse.org</id>
+                    <url>https://repo.eclipse.org/repository/ee4j-staging/</url>
+                    <releases>
+                        <enabled>true</enabled>
+                    </releases>
+                    <snapshots>
+                        <enabled>false</enabled>
+                    </snapshots>
+                </pluginRepository>
+            </pluginRepositories>
+        </profile>
+
+        <profile>
+            <id>dash-licenses</id>
+            <pluginRepositories>
+                <pluginRepository>
+                    <id>dash-licenses</id>
+                    <url>https://repo.eclipse.org/content/repositories/dash-licenses-releases/</url>
+                    <snapshots>
+                        <enabled>false</enabled>
+                    </snapshots>
+                </pluginRepository>
+            </pluginRepositories>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.eclipse.dash</groupId>
+                        <artifactId>license-tool-plugin</artifactId>
+                        <version>1.1.0</version>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>license-check</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

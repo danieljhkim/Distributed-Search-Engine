@@ -1,6 +1,7 @@
 package com.danieljhkim.dsearch.common.shard;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -58,6 +59,23 @@ class ShardStateStoreTest {
         assertEquals(
                 Map.of("shard-0", 12L, "shard-1", 3L), nodesById.get("node-a").getShards());
         assertEquals(Map.of("shard-2", 8L), nodesById.get("node-b").getShards());
+    }
+
+    @Test
+    void atomicSaveReplacesThePreviousSnapshotWithoutLeavingTemporaryState() throws IOException {
+        Path stateFile = tempDir.resolve("atomic").resolve("shards.json");
+        ShardStateStore store = new ShardStateStore(stateFile);
+        ShardStateStore.ShardDocSnapshot first = new ShardStateStore.ShardDocSnapshot();
+        first.getNodes().add(nodeEntry("node-a", Map.of("shard-0", 1L)));
+        ShardStateStore.ShardDocSnapshot replacement = new ShardStateStore.ShardDocSnapshot();
+        replacement.getNodes().add(nodeEntry("node-b", Map.of("shard-1", 9L)));
+
+        store.save(first);
+        store.save(replacement);
+
+        ShardStateStore.ShardDocSnapshot loaded = store.load();
+        assertEquals("node-b", loaded.getNodes().getFirst().getNodeId());
+        assertFalse(Files.exists(stateFile.resolveSibling("shards.json.tmp")));
     }
 
     private static ShardStateStore.NodeEntry nodeEntry(String nodeId, Map<String, Long> shards) {
