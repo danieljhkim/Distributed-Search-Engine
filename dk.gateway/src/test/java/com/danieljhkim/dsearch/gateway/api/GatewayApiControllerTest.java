@@ -130,6 +130,7 @@ class GatewayApiControllerTest {
         response.setPageSize(3);
         response.setFacets(List.of(new com.danieljhkim.dsearch.gateway.api.dto.FacetResponseDto(
                 "category", List.of(new com.danieljhkim.dsearch.gateway.api.dto.FacetBucketDto("docs", 4L)))));
+        response.setFanout(new SearchResponseDto.FanoutMetadataDto("PARTIAL_FAILURE", 2, 1, 1, 0));
         when(searchService.search(any(SearchRequestDto.class))).thenReturn(response);
 
         mockMvc.perform(post("/api/v1/search")
@@ -182,7 +183,12 @@ class GatewayApiControllerTest {
                 .andExpect(jsonPath("$.hits[0].fields.category").value("docs"))
                 .andExpect(jsonPath("$.facets[0].field").value("category"))
                 .andExpect(jsonPath("$.facets[0].buckets[0].value").value("docs"))
-                .andExpect(jsonPath("$.facets[0].buckets[0].count").value(4));
+                .andExpect(jsonPath("$.facets[0].buckets[0].count").value(4))
+                .andExpect(jsonPath("$.fanout.status").value("PARTIAL_FAILURE"))
+                .andExpect(jsonPath("$.fanout.attemptedNodes").value(2))
+                .andExpect(jsonPath("$.fanout.succeededNodes").value(1))
+                .andExpect(jsonPath("$.fanout.failedNodes").value(1))
+                .andExpect(jsonPath("$.fanout.timedOutNodes").value(0));
 
         ArgumentCaptor<SearchRequestDto> requestCaptor = ArgumentCaptor.forClass(SearchRequestDto.class);
         verify(searchService).search(requestCaptor.capture());
@@ -357,6 +363,58 @@ class GatewayApiControllerTest {
                         .tag("partitionId", "__overflow__")
                         .timer())
                 .isNotNull();
+    }
+
+    @Test
+    void searchUnavailableFanoutFailureReturnsServiceUnavailable() throws Exception {
+        when(searchService.search(any(SearchRequestDto.class)))
+                .thenThrow(new StatusRuntimeException(Status.UNAVAILABLE.withDescription(
+                        "Search fanout failed: attemptedNodes=2 succeededNodes=0 failedNodes=2 timedOutNodes=0")));
+
+        mockMvc.perform(post("/api/v1/search")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "query": "lucene",
+                                  "partitionId": "tenant-a",
+                                  "page": 0,
+                                  "pageSize": 10,
+                                  "searchType": "HYBRID",
+                                  "fusionStrategy": "WEIGHTED"
+                                }
+                                """))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.status").value(503))
+                .andExpect(jsonPath("$.error").value("Service Unavailable"))
+                .andExpect(jsonPath("$.message")
+                        .value("Search fanout failed: attemptedNodes=2 succeededNodes=0 failedNodes=2 timedOutNodes=0"))
+                .andExpect(jsonPath("$.path").value("/api/v1/search"));
+    }
+
+    @Test
+    void searchDeadlineExceededFanoutFailureReturnsGatewayTimeout() throws Exception {
+        when(searchService.search(any(SearchRequestDto.class)))
+                .thenThrow(new StatusRuntimeException(Status.DEADLINE_EXCEEDED.withDescription(
+                        "Search fanout failed: attemptedNodes=2 succeededNodes=0 failedNodes=0 timedOutNodes=2")));
+
+        mockMvc.perform(post("/api/v1/search")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "query": "lucene",
+                                  "partitionId": "tenant-a",
+                                  "page": 0,
+                                  "pageSize": 10,
+                                  "searchType": "HYBRID",
+                                  "fusionStrategy": "WEIGHTED"
+                                }
+                                """))
+                .andExpect(status().isGatewayTimeout())
+                .andExpect(jsonPath("$.status").value(504))
+                .andExpect(jsonPath("$.error").value("Gateway Timeout"))
+                .andExpect(jsonPath("$.message")
+                        .value("Search fanout failed: attemptedNodes=2 succeededNodes=0 failedNodes=0 timedOutNodes=2"))
+                .andExpect(jsonPath("$.path").value("/api/v1/search"));
     }
 
     @Test

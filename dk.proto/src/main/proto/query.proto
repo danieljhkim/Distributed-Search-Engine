@@ -31,12 +31,28 @@ message SearchHit {
   map<string, string> fields = 6;
 }
 
+enum FanoutStatus {
+  FANOUT_STATUS_UNSPECIFIED = 0;
+  FANOUT_STATUS_SUCCESS = 1;
+  FANOUT_STATUS_PARTIAL_FAILURE = 2;
+  FANOUT_STATUS_FAILED = 3;
+}
+
+message FanoutMetadata {
+  int32 attempted_nodes = 1;
+  int32 succeeded_nodes = 2;
+  int32 failed_nodes = 3;
+  int32 timed_out_nodes = 4;
+  FanoutStatus status = 5;
+}
+
 message QueryResponse {
   repeated SearchHit hits = 1;
   int64 total_hits = 2;
   int32 page = 3;
   int32 size = 4;
   repeated dsearch.common.FacetResponse facets = 5;
+  FanoutMetadata fanout = 6;
 }
 
 service QueryService {
