@@ -55,4 +55,10 @@ class RequestLimitsValidatorTest {
                 IllegalArgumentException.class, () -> RequestLimitsValidator.validateQueryLength(longQuery, 1024));
         assert exception.getMessage().contains("Query length (2048) exceeds maximum allowed (1024)");
     }
+
+    @Test
+    void combinedValidationAcceptsNullAndBoundaryValues() {
+        assertDoesNotThrow(() -> RequestLimitsValidator.validateRequestLimits(null, 100));
+        assertDoesNotThrow(() -> RequestLimitsValidator.validateRequestLimits("ok", 100));
+    }
 }

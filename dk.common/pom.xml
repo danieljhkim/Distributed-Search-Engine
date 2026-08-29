@@ -15,8 +15,8 @@
 
     <properties>
         <!-- Fresh JaCoCo baseline: 373/818 lines and 106/248 branches. -->
-        <coverage.minimum.line>0.4550</coverage.minimum.line>
-        <coverage.minimum.branch>0.4270</coverage.minimum.branch>
+        <coverage.minimum.line>0.6500</coverage.minimum.line>
+        <coverage.minimum.branch>0.6000</coverage.minimum.branch>
     </properties>
 
     <dependencies>
@@ -24,6 +24,11 @@
             <groupId>com.danieljhkim.dsearch</groupId>
             <artifactId>dk.proto</artifactId>
             <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-netty-shaded</artifactId>
         </dependency>
 
         <dependency>

@@ -21,10 +21,29 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class NodeClientManagerTest {
+
+    @Test
+    void constructorRejectsEmptyInputs() {
+        assertThrows(
+                NullPointerException.class,
+                () -> new NodeClientManager<String>(
+                        null, RoutingStrategy.ROUND_ROBIN, NodeRole.NODE_ROLE_INDEX, ch -> ""));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new NodeClientManager<>(
+                        Map.of(), RoutingStrategy.ROUND_ROBIN, NodeRole.NODE_ROLE_INDEX, ch -> ""));
+        assertThrows(
+                NullPointerException.class,
+                () -> new NodeClientManager<>(clients("0"), null, NodeRole.NODE_ROLE_INDEX, ch -> ""));
+    }
 
     @Test
     void staticConfigModeUsesInitialActiveClients() {
@@ -205,6 +224,69 @@ class NodeClientManagerTest {
         manager.shutdown();
 
         verify(channel, times(1)).shutdown();
+    }
+
+    @Test
+    void snapshotAndApplyPreserveShardCountsForKnownClients() {
+        NodeClientManager<String> manager = new NodeClientManager<>(
+                clients("0", "1"), RoutingStrategy.ROUND_ROBIN, NodeRole.NODE_ROLE_INDEX, ch -> "");
+        manager.getClientMap().get("0").incrementDocToShard("p0");
+        manager.getClientMap().get("0").incrementDocToShard("p0");
+        manager.getClientMap().get("1").incrementDocToShard("p1");
+
+        var snapshot = manager.snapshotShardDocCounts();
+        manager.getClientMap()
+                .get("0")
+                .getOrCreateShardState("p0")
+                .getDocCount()
+                .set(0);
+        manager.applySnapshot(snapshot);
+
+        assertEquals(2, manager.getClientMap().get("0").getShardDocCount("p0"));
+        assertEquals(1, manager.getClientMap().get("1").getShardDocCount("p1"));
+    }
+
+    @Test
+    void missingDiscoveredGroupLeavesTheLastActiveSnapshotUntouched() {
+        AtomicReference<NodeGroup> discovered = new AtomicReference<>(nodeGroup(RoutingStrategy.ROUND_ROBIN, "0"));
+        NodeClientManager<String> manager = discoveryBackedManager(RoutingStrategy.ROUND_ROBIN, discovered, "0");
+
+        discovered.set(null);
+        manager.refreshClientsFromCluster();
+
+        assertEquals(List.of("0"), manager.getActiveNodeIds());
+    }
+
+    @Test
+    void concurrentRefreshAndReadRacesExposeOnlySortedConsistentSnapshots() throws Exception {
+        AtomicReference<NodeGroup> discovered = new AtomicReference<>(nodeGroup(RoutingStrategy.ROUND_ROBIN, "0", "1"));
+        NodeClientManager<String> manager = discoveryBackedManager(RoutingStrategy.ROUND_ROBIN, discovered, "0", "1");
+        ExecutorService executor = Executors.newFixedThreadPool(4);
+        try {
+            var refreshes = java.util.stream.IntStream.range(0, 100)
+                    .mapToObj(i -> executor.submit(() -> {
+                        discovered.set(
+                                i % 2 == 0
+                                        ? nodeGroup(RoutingStrategy.ROUND_ROBIN, "0", "1")
+                                        : nodeGroup(RoutingStrategy.ROUND_ROBIN, "1"));
+                        manager.refreshClientsFromCluster();
+                    }))
+                    .toList();
+            List<Future<List<String>>> reads = java.util.stream.IntStream.range(0, 100)
+                    .mapToObj(i -> executor.submit(manager::getActiveNodeIds))
+                    .toList();
+            for (Future<?> refresh : refreshes) {
+                refresh.get(5, TimeUnit.SECONDS);
+            }
+            for (Future<List<String>> read : reads) {
+                List<String> ids = read.get(5, TimeUnit.SECONDS);
+                assertEquals(ids.stream().sorted().toList(), ids);
+                assertTrue(ids.equals(List.of("0", "1")) || ids.equals(List.of("1")));
+            }
+        } finally {
+            executor.shutdownNow();
+            manager.shutdown();
+        }
     }
 
     private static NodeClientManager<String> discoveryBackedManager(

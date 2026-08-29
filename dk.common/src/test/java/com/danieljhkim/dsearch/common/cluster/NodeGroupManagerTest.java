@@ -63,6 +63,37 @@ class NodeGroupManagerTest {
         assertThrows(IllegalStateException.class, () -> manager.getNodeGroup(NodeRole.NODE_ROLE_INDEX));
     }
 
+    @Test
+    void staticModeUsesConfiguredGroupsAndCoordinatorDoesNotNeedDiscovery() {
+        AppConfig config = appConfig(0);
+        config.getServiceDiscovery().setEnabled(false);
+        NodeGroupManager manager = new NodeGroupManager(config);
+
+        assertEquals(List.of("static-0"), nodeIds(manager.getNodeGroup(NodeRole.NODE_ROLE_INDEX)));
+        assertEquals(List.of("coordinator-0"), nodeIds(manager.getNodeGroup(NodeRole.NODE_ROLE_COORDINATOR)));
+        assertEquals(List.of("static-q0"), nodeIds(manager.getConfiguredNodeGroup(NodeRole.NODE_ROLE_QUERY)));
+        assertEquals(false, manager.hasCoordinatorManager());
+    }
+
+    @Test
+    void discoveryWithoutCoordinatorFailsClosedAndInvalidResponsesAreRejected() {
+        AppConfig config = appConfig(5);
+        NodeGroupManager withoutCoordinator = new NodeGroupManager(config);
+        assertThrows(IllegalStateException.class, () -> withoutCoordinator.getNodeGroup(NodeRole.NODE_ROLE_INDEX));
+
+        NodeGroupManager badContract = managerWithResponses(new MutableClock(), 5, topologyWithContract(2));
+        assertThrows(IllegalStateException.class, () -> badContract.getNodeGroup(NodeRole.NODE_ROLE_INDEX));
+        NodeGroupManager blankEpoch = managerWithResponses(new MutableClock(), 5, topology("", 1, "dynamic-0"));
+        assertThrows(IllegalStateException.class, () -> blankEpoch.getNodeGroup(NodeRole.NODE_ROLE_INDEX));
+        MutableClock epochClock = new MutableClock();
+        NodeGroupManager epochChanged = managerWithResponses(
+                epochClock, 5, topology("epoch-a", 1, "dynamic-0"), topology("epoch-b", 2, "dynamic-1"));
+        epochChanged.getNodeGroup(NodeRole.NODE_ROLE_INDEX);
+        assertEquals(List.of("dynamic-0"), nodeIds(epochChanged.getNodeGroup(NodeRole.NODE_ROLE_INDEX)));
+        epochClock.advanceSeconds(6);
+        assertThrows(IllegalStateException.class, () -> epochChanged.getNodeGroup(NodeRole.NODE_ROLE_INDEX));
+    }
+
     @SafeVarargs
     private static NodeGroupManager managerWithResponses(
             MutableClock clock, int maxStalenessSeconds, Object... responses) {
@@ -102,6 +133,12 @@ class NodeGroupManagerTest {
                         .setHealthPort(5100)
                         .setRole(NodeRole.NODE_ROLE_INDEX)
                         .build())
+                .build();
+    }
+
+    private static GetClusterInfoResponse topologyWithContract(int contractVersion) {
+        return topology("epoch-a", 1, "dynamic-0").toBuilder()
+                .setContractVersion(contractVersion)
                 .build();
     }
 

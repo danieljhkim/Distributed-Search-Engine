@@ -92,4 +92,17 @@ class ConfigLoaderTest {
 
         assertTrue(exception.getMessage().contains("N_INDEX_NODES requests 3 nodes"));
     }
+
+    @Test
+    void runtimeNodeCountsRejectMalformedZeroAndMissingGroups() throws IOException {
+        AppConfig config = ConfigLoader.load("app-config.yaml");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> ConfigLoader.applyRuntimeNodeCounts(config, "not-a-number", null));
+        assertThrows(IllegalArgumentException.class, () -> ConfigLoader.applyRuntimeNodeCounts(config, "0", null));
+        AppConfig missingGroups = new AppConfig();
+        assertThrows(
+                IllegalArgumentException.class, () -> ConfigLoader.applyRuntimeNodeCounts(missingGroups, "1", null));
+        assertDoesNotThrow(() -> ConfigLoader.applyRuntimeNodeCounts(config, " ", ""));
+    }
 }
