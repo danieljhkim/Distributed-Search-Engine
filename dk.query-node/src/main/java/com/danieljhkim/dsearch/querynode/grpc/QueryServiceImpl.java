@@ -7,11 +7,14 @@ import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.Filter;
 import com.danieljhkim.dsearch.proto.common.FusionStrategy;
 import com.danieljhkim.dsearch.proto.common.SearchType;
+import com.danieljhkim.dsearch.proto.query.FanoutMetadata;
+import com.danieljhkim.dsearch.proto.query.FanoutStatus;
 import com.danieljhkim.dsearch.proto.query.QueryRequest;
 import com.danieljhkim.dsearch.proto.query.QueryResponse;
 import com.danieljhkim.dsearch.proto.query.QueryServiceGrpc;
 import com.danieljhkim.dsearch.proto.query.SearchHit;
 import com.danieljhkim.dsearch.querynode.search.SearchExecutor;
+import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import java.util.List;
 import java.util.logging.Level;
@@ -68,6 +71,11 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
                         highlight,
                         facetRequests);
             }
+            SearchResult.FanoutMetadata fanoutMetadata = result.getFanoutMetadata();
+            if (isTotalFanoutFailure(fanoutMetadata)) {
+                responseObserver.onError(toFanoutFailureStatus(fanoutMetadata).asRuntimeException());
+                return;
+            }
             QueryResponse response = buildQueryResponse(result, page, size);
             responseObserver.onNext(response);
             responseObserver.onCompleted();
@@ -82,6 +90,10 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
                 .setTotalHits(result.getTotalHits())
                 .setPage(page)
                 .setSize(size);
+        SearchResult.FanoutMetadata fanoutMetadata = result.getFanoutMetadata();
+        if (fanoutMetadata != null) {
+            respBuilder.setFanout(toProtoFanout(fanoutMetadata));
+        }
         for (com.danieljhkim.dsearch.common.model.SearchHit hit : result.getHits()) {
             SearchHit.Builder hitBuilder =
                     SearchHit.newBuilder().setDocId(hit.getDocId()).setScore(hit.getScore());
@@ -109,5 +121,44 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
         }
 
         return respBuilder.build();
+    }
+
+    private static boolean isTotalFanoutFailure(SearchResult.FanoutMetadata fanoutMetadata) {
+        return fanoutMetadata != null && fanoutMetadata.status() == SearchResult.FanoutStatus.FAILED;
+    }
+
+    private static Status toFanoutFailureStatus(SearchResult.FanoutMetadata fanoutMetadata) {
+        String description = fanoutFailureDescription(fanoutMetadata);
+        if (fanoutMetadata.attemptedNodes() > 0 && fanoutMetadata.timedOutNodes() == fanoutMetadata.attemptedNodes()) {
+            return Status.DEADLINE_EXCEEDED.withDescription(description);
+        }
+        return Status.UNAVAILABLE.withDescription(description);
+    }
+
+    private static String fanoutFailureDescription(SearchResult.FanoutMetadata fanoutMetadata) {
+        return "Search fanout failed: attemptedNodes=%d succeededNodes=%d failedNodes=%d timedOutNodes=%d"
+                .formatted(
+                        fanoutMetadata.attemptedNodes(),
+                        fanoutMetadata.succeededNodes(),
+                        fanoutMetadata.failedNodes(),
+                        fanoutMetadata.timedOutNodes());
+    }
+
+    private static FanoutMetadata toProtoFanout(SearchResult.FanoutMetadata fanoutMetadata) {
+        return FanoutMetadata.newBuilder()
+                .setAttemptedNodes(fanoutMetadata.attemptedNodes())
+                .setSucceededNodes(fanoutMetadata.succeededNodes())
+                .setFailedNodes(fanoutMetadata.failedNodes())
+                .setTimedOutNodes(fanoutMetadata.timedOutNodes())
+                .setStatus(toProtoFanoutStatus(fanoutMetadata.status()))
+                .build();
+    }
+
+    private static FanoutStatus toProtoFanoutStatus(SearchResult.FanoutStatus status) {
+        return switch (status) {
+            case SUCCESS -> FanoutStatus.FANOUT_STATUS_SUCCESS;
+            case PARTIAL_FAILURE -> FanoutStatus.FANOUT_STATUS_PARTIAL_FAILURE;
+            case FAILED -> FanoutStatus.FANOUT_STATUS_FAILED;
+        };
     }
 }

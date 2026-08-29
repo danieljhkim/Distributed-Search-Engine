@@ -17,6 +17,8 @@ import com.danieljhkim.dsearch.proto.common.FacetResponse;
 import com.danieljhkim.dsearch.proto.common.FilterOperator;
 import com.danieljhkim.dsearch.proto.common.FusionStrategy;
 import com.danieljhkim.dsearch.proto.common.SearchType;
+import com.danieljhkim.dsearch.proto.query.FanoutMetadata;
+import com.danieljhkim.dsearch.proto.query.FanoutStatus;
 import com.danieljhkim.dsearch.proto.query.QueryRequest;
 import com.danieljhkim.dsearch.proto.query.QueryResponse;
 import com.danieljhkim.dsearch.proto.query.QueryServiceGrpc;
@@ -76,6 +78,11 @@ class GatewaySearchServiceTest {
         assertThat(response.getFacets().getFirst().getField()).isEqualTo("category");
         assertThat(response.getFacets().getFirst().getBuckets().getFirst().getValue())
                 .isEqualTo("docs");
+        assertThat(response.getFanout().getStatus()).isEqualTo("PARTIAL_FAILURE");
+        assertThat(response.getFanout().getAttemptedNodes()).isEqualTo(2);
+        assertThat(response.getFanout().getSucceededNodes()).isEqualTo(1);
+        assertThat(response.getFanout().getFailedNodes()).isEqualTo(1);
+        assertThat(response.getFanout().getTimedOutNodes()).isEqualTo(0);
 
         ArgumentCaptor<QueryRequest> requestCaptor = ArgumentCaptor.forClass(QueryRequest.class);
         verify(queryStub).search(requestCaptor.capture());
@@ -119,6 +126,13 @@ class GatewaySearchServiceTest {
                                 .setValue("docs")
                                 .setCount(4)
                                 .build())
+                        .build())
+                .setFanout(FanoutMetadata.newBuilder()
+                        .setAttemptedNodes(2)
+                        .setSucceededNodes(1)
+                        .setFailedNodes(1)
+                        .setTimedOutNodes(0)
+                        .setStatus(FanoutStatus.FANOUT_STATUS_PARTIAL_FAILURE)
                         .build())
                 .build();
     }

@@ -102,7 +102,9 @@ public class SearchExecutor implements Closeable {
                 pageHits,
                 Math.max(semanticResult.getTotalHits(), bm25Result.getTotalHits()), // approx
                 normalizePage(page),
-                facets);
+                facets,
+                SearchResult.FanoutMetadata.combine(
+                        bm25Result.getFanoutMetadata(), semanticResult.getFanoutMetadata()));
     }
 
     /**

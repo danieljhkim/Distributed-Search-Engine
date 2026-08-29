@@ -61,5 +61,19 @@ public class SearchResult {
             }
             return FanoutStatus.SUCCESS;
         }
+
+        public static FanoutMetadata combine(FanoutMetadata left, FanoutMetadata right) {
+            if (left == null) {
+                return right;
+            }
+            if (right == null) {
+                return left;
+            }
+            return new FanoutMetadata(
+                    left.attemptedNodes + right.attemptedNodes,
+                    left.succeededNodes + right.succeededNodes,
+                    left.failedNodes + right.failedNodes,
+                    left.timedOutNodes + right.timedOutNodes);
+        }
     }
 }

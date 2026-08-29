@@ -15,6 +15,7 @@ public class SearchResponseDto {
     private int page;
     private int pageSize;
     private List<FacetResponseDto> facets;
+    private FanoutMetadataDto fanout;
 
     public SearchResponseDto() {}
 
@@ -75,6 +76,27 @@ public class SearchResponseDto {
             this.content = content;
             this.highlightedFields = highlightedFields;
             this.fields = fields;
+        }
+    }
+
+    @Setter
+    @Getter
+    public static class FanoutMetadataDto {
+        private String status;
+        private int attemptedNodes;
+        private int succeededNodes;
+        private int failedNodes;
+        private int timedOutNodes;
+
+        public FanoutMetadataDto() {}
+
+        public FanoutMetadataDto(
+                String status, int attemptedNodes, int succeededNodes, int failedNodes, int timedOutNodes) {
+            this.status = status;
+            this.attemptedNodes = attemptedNodes;
+            this.succeededNodes = succeededNodes;
+            this.failedNodes = failedNodes;
+            this.timedOutNodes = timedOutNodes;
         }
     }
 }

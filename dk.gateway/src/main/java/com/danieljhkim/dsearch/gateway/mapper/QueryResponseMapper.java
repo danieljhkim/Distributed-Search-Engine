@@ -5,6 +5,8 @@ import com.danieljhkim.dsearch.gateway.api.dto.FacetResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.SearchResponseDto;
 import com.danieljhkim.dsearch.proto.common.FacetBucket;
 import com.danieljhkim.dsearch.proto.common.FacetResponse;
+import com.danieljhkim.dsearch.proto.query.FanoutMetadata;
+import com.danieljhkim.dsearch.proto.query.FanoutStatus;
 import com.danieljhkim.dsearch.proto.query.QueryResponse;
 import com.danieljhkim.dsearch.proto.query.SearchHit;
 import java.util.List;
@@ -27,7 +29,29 @@ public class QueryResponseMapper {
             response.setFacets(facets);
         }
 
+        if (grpcResp.hasFanout()) {
+            response.setFanout(toFanoutDto(grpcResp.getFanout()));
+        }
+
         return response;
+    }
+
+    private SearchResponseDto.FanoutMetadataDto toFanoutDto(FanoutMetadata fanout) {
+        return new SearchResponseDto.FanoutMetadataDto(
+                toFanoutStatusName(fanout.getStatus()),
+                fanout.getAttemptedNodes(),
+                fanout.getSucceededNodes(),
+                fanout.getFailedNodes(),
+                fanout.getTimedOutNodes());
+    }
+
+    private static String toFanoutStatusName(FanoutStatus status) {
+        return switch (status) {
+            case FANOUT_STATUS_SUCCESS -> "SUCCESS";
+            case FANOUT_STATUS_PARTIAL_FAILURE -> "PARTIAL_FAILURE";
+            case FANOUT_STATUS_FAILED -> "FAILED";
+            case FANOUT_STATUS_UNSPECIFIED, UNRECOGNIZED -> "UNKNOWN";
+        };
     }
 
     private SearchResponseDto.SearchHitDto toHitDto(SearchHit hit) {

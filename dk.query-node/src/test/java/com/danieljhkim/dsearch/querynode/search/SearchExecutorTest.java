@@ -83,6 +83,13 @@ class SearchExecutorTest {
         assertEquals(2, indexService.calls().size());
         assertTrue(indexService.calls().stream().allMatch(call -> call.searchType() == SearchType.BM25));
         assertTrue(indexService.calls().stream().allMatch(call -> call.topK() == 4));
+
+        SearchResult.FanoutMetadata metadata = result.getFanoutMetadata();
+        assertEquals(SearchResult.FanoutStatus.SUCCESS, metadata.status());
+        assertEquals(2, metadata.attemptedNodes());
+        assertEquals(2, metadata.succeededNodes());
+        assertEquals(0, metadata.failedNodes());
+        assertEquals(0, metadata.timedOutNodes());
     }
 
     @Test
@@ -151,6 +158,27 @@ class SearchExecutorTest {
         assertEquals(0, metadata.attemptedNodes());
         assertEquals(0, metadata.succeededNodes());
         assertEquals(0, metadata.failedNodes());
+        assertEquals(0, metadata.timedOutNodes());
+    }
+
+    @Test
+    void allAttemptedNodesFailReturnsFailedMetadata() {
+        RecordingIndexService indexService = new RecordingIndexService()
+                .failure("1", new IllegalStateException("node down"))
+                .failure("2", new IllegalStateException("node down"));
+
+        SearchResult result = searchExecutor(node("1", true), node("2", true))
+                .search("coffee", "shard-a", 0, 10, SearchType.BM25, indexService);
+
+        assertEquals(List.of(), result.getHits());
+        assertEquals(0L, result.getTotalHits());
+        assertEquals(Set.of("1", "2"), Set.copyOf(indexService.calledNodes()));
+
+        SearchResult.FanoutMetadata metadata = result.getFanoutMetadata();
+        assertEquals(SearchResult.FanoutStatus.FAILED, metadata.status());
+        assertEquals(2, metadata.attemptedNodes());
+        assertEquals(0, metadata.succeededNodes());
+        assertEquals(2, metadata.failedNodes());
         assertEquals(0, metadata.timedOutNodes());
     }
 
@@ -235,6 +263,13 @@ class SearchExecutorTest {
                         .filter(call -> call.searchType() == SearchType.SEMANTIC)
                         .count());
         assertTrue(indexService.calls().stream().allMatch(call -> call.topK() == 3));
+
+        SearchResult.FanoutMetadata metadata = result.getFanoutMetadata();
+        assertEquals(SearchResult.FanoutStatus.SUCCESS, metadata.status());
+        assertEquals(4, metadata.attemptedNodes());
+        assertEquals(4, metadata.succeededNodes());
+        assertEquals(0, metadata.failedNodes());
+        assertEquals(0, metadata.timedOutNodes());
     }
 
     private SearchExecutor searchExecutor(NodeSpec... nodes) {
