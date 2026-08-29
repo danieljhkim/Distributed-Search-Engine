@@ -21,7 +21,19 @@ public class CoordinatorServer {
     }
 
     public void start() throws IOException, InterruptedException {
+        startAsync();
+        awaitTermination();
+    }
+
+    public void startAsync() throws IOException {
         server.start();
+    }
+
+    public int getPort() {
+        return server.getPort();
+    }
+
+    public void awaitTermination() throws InterruptedException {
         server.awaitTermination();
     }
 

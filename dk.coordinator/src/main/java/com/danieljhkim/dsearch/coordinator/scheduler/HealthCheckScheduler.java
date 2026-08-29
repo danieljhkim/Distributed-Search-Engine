@@ -26,16 +26,27 @@ public class HealthCheckScheduler {
     private final boolean enabled;
 
     public HealthCheckScheduler(ClusterMembershipService membershipService, AppConfig appConfig) {
+        this(
+                membershipService,
+                appConfig,
+                HttpClient.newBuilder().connectTimeout(Duration.ofMillis(500)).build(),
+                Executors.newSingleThreadScheduledExecutor(r -> {
+                    Thread t = new Thread(r, "node-health-checker");
+                    t.setDaemon(true);
+                    return t;
+                }));
+    }
+
+    HealthCheckScheduler(
+            ClusterMembershipService membershipService,
+            AppConfig appConfig,
+            HttpClient httpClient,
+            ScheduledExecutorService clusterHealthScheduler) {
         this.refreshIntervalSeconds = appConfig.getServiceDiscovery().getRefreshIntervalSeconds();
         this.enabled = appConfig.getServiceDiscovery().isEnabled();
         this.membershipService = membershipService;
-        this.httpClient =
-                HttpClient.newBuilder().connectTimeout(Duration.ofMillis(500)).build();
-        this.clusterHealthScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "node-health-checker");
-            t.setDaemon(true);
-            return t;
-        });
+        this.httpClient = httpClient;
+        this.clusterHealthScheduler = clusterHealthScheduler;
     }
 
     public void start() {
@@ -54,7 +65,7 @@ public class HealthCheckScheduler {
         }
     }
 
-    private void checkClusterHealth() {
+    void checkClusterHealth() {
         for (NodeGroup.NodeInfo nodeInfo : membershipService.getIndexGroup().getAllNodes()) {
             boolean isHealthy = checkNodeHealth(nodeInfo);
             membershipService.recordHealthCheck(nodeInfo.getNodeId(), NodeRole.NODE_ROLE_INDEX, isHealthy);

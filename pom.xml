@@ -44,6 +44,7 @@
         <!-- Each executable module overrides these with its committed baseline. -->
         <coverage.minimum.line>0.0000</coverage.minimum.line>
         <coverage.minimum.branch>0.0000</coverage.minimum.branch>
+        <jacoco.version>0.8.14</jacoco.version>
         <!-- Observability -->
         <micrometer.registry.prometheus.version>1.15.11</micrometer.registry.prometheus.version>
         <prometheus.simpleclient.version>0.16.0</prometheus.simpleclient.version>

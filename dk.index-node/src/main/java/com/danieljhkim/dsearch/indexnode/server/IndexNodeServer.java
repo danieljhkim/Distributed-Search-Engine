@@ -23,6 +23,10 @@ public class IndexNodeServer {
     private HTTPServer metricsServer;
 
     public IndexNodeServer(int port, IndexManager indexManager) {
+        this(port, port + 4000, indexManager);
+    }
+
+    IndexNodeServer(int port, int metricsPort, IndexManager indexManager) {
         IndexServiceImpl indexService = new IndexServiceImpl(indexManager);
         ServerServiceDefinition interceptedService =
                 ServerInterceptors.intercept(indexService, new GlobalExceptionInterceptor());
@@ -33,12 +37,21 @@ public class IndexNodeServer {
                 .intercept(new PrometheusGrpcServerInterceptor())
                 .build();
 
-        startPrometheusMetricsServer(port + 4000);
+        startPrometheusMetricsServer(metricsPort);
     }
 
     public void start() throws IOException, InterruptedException {
-        server.start();
-        server.awaitTermination();
+        try {
+            server.start();
+            server.awaitTermination();
+        } catch (IOException | RuntimeException e) {
+            rollbackStartup();
+            throw e;
+        } catch (InterruptedException e) {
+            rollbackStartup();
+            Thread.currentThread().interrupt();
+            throw e;
+        }
     }
 
     private void startPrometheusMetricsServer(int metricsPort) {
@@ -54,11 +67,30 @@ public class IndexNodeServer {
     public void shutdown() throws InterruptedException {
         if (metricsServer != null) {
             metricsServer.close();
+            metricsServer = null;
             LOGGER.info("Prometheus metrics server stopped");
         }
         if (server != null) {
             server.shutdown().awaitTermination(3, java.util.concurrent.TimeUnit.SECONDS);
             LOGGER.info("IndexNodeServer stopped");
+        }
+    }
+
+    int grpcPort() {
+        return server.getPort();
+    }
+
+    int metricsPort() {
+        return metricsServer == null ? -1 : metricsServer.getPort();
+    }
+
+    private void rollbackStartup() {
+        if (metricsServer != null) {
+            metricsServer.close();
+            metricsServer = null;
+        }
+        if (!server.isShutdown()) {
+            server.shutdownNow();
         }
     }
 }

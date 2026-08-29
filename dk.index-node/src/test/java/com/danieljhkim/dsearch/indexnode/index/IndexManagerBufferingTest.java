@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.danieljhkim.dsearch.common.model.SearchDocument;
@@ -25,6 +26,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
@@ -198,6 +202,81 @@ class IndexManagerBufferingTest {
             String retryId = response.getResults(1).getId();
             manager.indexDocumentDurably(SHARD_ID, document(retryId, "Retry", "failed content"));
             assertTotalHits(manager, "failed", 1);
+        }
+    }
+
+    @Test
+    void constructorRejectsInvalidBufferAndFlushBounds() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new IndexManager(tempDir.resolve("zero-buffer"), 0, LONG_FLUSH_INTERVAL, null, FAKE_EMBEDDER));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new IndexManager(tempDir.resolve("zero-interval"), 1, Duration.ZERO, null, FAKE_EMBEDDER));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new IndexManager(
+                        tempDir.resolve("negative-interval"), 1, Duration.ofSeconds(-1), null, FAKE_EMBEDDER));
+        assertThrows(
+                NullPointerException.class,
+                () -> new IndexManager(tempDir.resolve("null-embedder"), 1, LONG_FLUSH_INTERVAL, null, null));
+    }
+
+    @Test
+    void backgroundSchedulerFlushesPendingOperationsAfterInterval() throws Exception {
+        try (IndexManager manager =
+                new IndexManager(tempDir.resolve("scheduled"), 100, Duration.ofMillis(25), null, FAKE_EMBEDDER)) {
+            manager.indexDocument(SHARD_ID, document("doc-1", "Scheduled", "scheduled content"));
+
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            long hits = 0;
+            while (hits == 0 && System.nanoTime() < deadline) {
+                hits = manager.searchDocument(SHARD_ID, "scheduled", 10, 0, SearchType.BM25)
+                        .getTotalHits();
+                if (hits == 0) {
+                    Thread.sleep(20);
+                }
+            }
+            assertEquals(1, hits);
+        }
+    }
+
+    @Test
+    void concurrentDurableWritesRemainVisibleExactlyOnce() throws Exception {
+        try (IndexManager manager =
+                        new IndexManager(tempDir.resolve("concurrent"), 100, LONG_FLUSH_INTERVAL, null, FAKE_EMBEDDER);
+                ExecutorService executor = Executors.newFixedThreadPool(4)) {
+            java.util.List<Future<?>> writes = new java.util.ArrayList<>();
+            for (int i = 0; i < 12; i++) {
+                int id = i;
+                writes.add(executor.submit(() -> {
+                    try {
+                        manager.indexDocumentDurably(
+                                SHARD_ID, document("doc-" + id, "Concurrent", "concurrent content"));
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                }));
+            }
+            for (Future<?> write : writes) {
+                write.get(5, TimeUnit.SECONDS);
+            }
+            assertEquals(
+                    12,
+                    manager.searchDocument(SHARD_ID, "concurrent", 20, 0, SearchType.BM25)
+                            .getTotalHits());
+        }
+    }
+
+    @Test
+    void emptyEmbeddingDoesNotCreateSemanticHits() throws IOException {
+        TextEmbedder emptyEmbedder = ignored -> new float[0];
+        try (IndexManager manager =
+                new IndexManager(tempDir.resolve("empty-embedding"), 1, LONG_FLUSH_INTERVAL, null, emptyEmbedder)) {
+            manager.indexDocumentDurably(SHARD_ID, document("doc-1", "No vector", "content without a vector"));
+            SearchResult result = manager.searchDocument(SHARD_ID, "content", 10, 0, SearchType.SEMANTIC);
+            assertEquals(0, result.getTotalHits());
+            assertTrue(result.getHits().isEmpty());
         }
     }
 

@@ -82,6 +82,7 @@ message ShardLocation {
 }
 
 message NodeInfo {
+  reserved 1;
   string node_id = 2;
   string host = 3;
   int32 port = 4;
