@@ -5,7 +5,9 @@ import com.danieljhkim.dsearch.common.cluster.NodeGroupManager;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.config.ConfigLoader;
 import com.danieljhkim.dsearch.common.enums.RoutingStrategy;
+import com.danieljhkim.dsearch.common.exception.NodeUnavailableException;
 import com.danieljhkim.dsearch.common.loadbalancer.RoundRobin;
+import com.danieljhkim.dsearch.common.routing.DocumentOwnership;
 import com.danieljhkim.dsearch.common.shard.ShardState;
 import com.danieljhkim.dsearch.common.shard.ShardStateStore;
 import com.danieljhkim.dsearch.common.tracing.CorrelationIdClientInterceptor;
@@ -16,6 +18,7 @@ import io.grpc.ClientInterceptors;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import java.io.IOException;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -47,6 +50,13 @@ public class NodeClientManager<T> {
     private final Function<NodeRole, NodeGroup> nodeGroupResolver;
     private final Function<NodeGroup.NodeInfo, NodeClient<T>> nodeClientFactory;
 
+    /**
+     * Ownership ring for document mutations. Fixed for the lifetime of this
+     * manager and deliberately independent of liveness and service discovery:
+     * see {@link #ownerClient(String, String)}.
+     */
+    private final List<String> ownershipNodeIds;
+
     public NodeClientManager(
             Map<String, NodeClient<T>> clientMap,
             RoutingStrategy routingStrategy,
@@ -64,10 +74,33 @@ public class NodeClientManager<T> {
             Function<NodeRole, NodeGroup> nodeGroupResolver,
             AppConfig.ServiceDiscoveryConfig serviceDiscoveryConfig,
             Function<NodeGroup.NodeInfo, NodeClient<T>> nodeClientFactory) {
+        this(
+                clientMap,
+                routingStrategy,
+                nodeRole,
+                nodeGroupResolver,
+                serviceDiscoveryConfig,
+                nodeClientFactory,
+                clientMap != null ? clientMap.keySet() : null);
+    }
+
+    NodeClientManager(
+            Map<String, NodeClient<T>> clientMap,
+            RoutingStrategy routingStrategy,
+            NodeRole nodeRole,
+            Function<NodeRole, NodeGroup> nodeGroupResolver,
+            AppConfig.ServiceDiscoveryConfig serviceDiscoveryConfig,
+            Function<NodeGroup.NodeInfo, NodeClient<T>> nodeClientFactory,
+            Collection<String> ownershipNodeIds) {
         Objects.requireNonNull(clientMap, "clientMap must not be null");
         if (clientMap.isEmpty()) {
             throw new IllegalArgumentException("clientMap must not be empty");
         }
+        Objects.requireNonNull(ownershipNodeIds, "ownershipNodeIds must not be null");
+        if (ownershipNodeIds.isEmpty()) {
+            throw new IllegalArgumentException("ownershipNodeIds must not be empty");
+        }
+        this.ownershipNodeIds = ownershipNodeIds.stream().sorted().toList();
         this.nodeRole = Objects.requireNonNull(nodeRole, "nodeRole must not be null");
         this.clientMap = new ConcurrentHashMap<>(clientMap);
         this.routingStrategy = Objects.requireNonNull(routingStrategy, "routingStrategy must not be null");
@@ -85,6 +118,8 @@ public class NodeClientManager<T> {
             this.healthRefresher = null;
             LOGGER.info(() -> "Service discovery disabled for role " + nodeRole + "; using static node configuration");
         }
+        LOGGER.info(() -> "Role " + nodeRole + " reads use routing strategy " + this.routingStrategy
+                + "; document mutations use ownership hashing over nodes " + this.ownershipNodeIds);
     }
 
     public static <T> NodeClientManager<T> loadClientManager(NodeRole role, Function<Channel, T> clientFactory) {
@@ -124,9 +159,11 @@ public class NodeClientManager<T> {
         Objects.requireNonNull(clientFactory, "clientFactory must not be null");
         Objects.requireNonNull(nodeGroupManager, "nodeGroupManager must not be null");
 
-        NodeGroup nodeGroup = useServiceDiscovery
-                ? nodeGroupManager.getNodeGroup(role)
-                : nodeGroupManager.getStaticNodeGroupConfig(role);
+        // The ownership ring comes from the operator-managed configuration file rather than
+        // from discovery, so it is identical in every process and across restarts. Discovery
+        // only decides which of those nodes is currently reachable.
+        NodeGroup configuredNodeGroup = nodeGroupManager.getConfiguredNodeGroup(role);
+        NodeGroup nodeGroup = useServiceDiscovery ? nodeGroupManager.getNodeGroup(role) : configuredNodeGroup;
         if (nodeGroup == null) {
             throw new IllegalStateException("No node group configured for role: " + role);
         }
@@ -137,6 +174,22 @@ public class NodeClientManager<T> {
         for (NodeGroup.NodeInfo node : nodeGroup.getAllNodes()) {
             clientMap.put(node.getNodeId(), createNodeClient(node, clientFactory, metricsInterceptor));
         }
+        // A configured node that is down when this process starts still owns its documents,
+        // so keep a client for it; it stays inactive until discovery reports it healthy.
+        for (NodeGroup.NodeInfo node : configuredNodeGroup.getAllNodes()) {
+            clientMap.computeIfAbsent(node.getNodeId(), id -> {
+                NodeClient<T> client = createNodeClient(node, clientFactory, metricsInterceptor);
+                client.setActive(false);
+                return client;
+            });
+        }
+
+        List<String> ownershipNodeIds = configuredNodeGroup.getAllNodes().stream()
+                .map(NodeGroup.NodeInfo::getNodeId)
+                .toList();
+        if (ownershipNodeIds.isEmpty()) {
+            throw new IllegalStateException("No nodes configured for role: " + role);
+        }
 
         AppConfig.ServiceDiscoveryConfig serviceDiscoveryConfig =
                 useServiceDiscovery ? nodeGroupManager.getServiceDiscoveryConfig() : null;
@@ -146,7 +199,8 @@ public class NodeClientManager<T> {
                 role,
                 nodeGroupManager::getNodeGroup,
                 serviceDiscoveryConfig,
-                node -> createNodeClient(node, clientFactory, metricsInterceptor));
+                node -> createNodeClient(node, clientFactory, metricsInterceptor),
+                ownershipNodeIds);
     }
 
     private static String componentLabel(NodeGroup nodeGroup) {
@@ -166,46 +220,55 @@ public class NodeClientManager<T> {
     }
 
     /**
-     * Get a client/stub for the next node in round-robin order or least loaded for
-     * WRITE/DEL ops.
-     */
-    public T nextClient(String partitionId, boolean isWriteOperation) {
-        LOGGER.info(() -> "Routing strategy: " + this.routingStrategy);
-        if (this.routingStrategy == RoutingStrategy.LEAST_LOADED) {
-            return nextLeastLoadedClient(partitionId, isWriteOperation);
-        }
-        return this.rr.next().getStub();
-    }
-
-    /**
      * Get a client/stub for the next node in round-robin for READ operations.
      */
     public T nextClient() {
         return this.rr.next().getStub();
     }
 
-    public T nextLeastLoadedClient(String partitionId, boolean isWriteOperation) { // TODO: handle update
-        NodeClient<T> leastLoadedClient = null;
-        long minDocCount = Long.MAX_VALUE;
-        for (NodeClient<T> client : activeClientsSnapshot()) {
-            long shardDocCount = client.getShardDocCount(partitionId);
-            LOGGER.info(() ->
-                    "Client " + client.getNodeId() + " has partition " + partitionId + " doc count: " + shardDocCount);
-            if (shardDocCount < minDocCount) {
-                minDocCount = shardDocCount;
-                leastLoadedClient = client;
-            }
+    /**
+     * Ownership ring used for document mutations, in a stable order.
+     */
+    public List<String> getOwnershipNodeIds() {
+        return ownershipNodeIds;
+    }
+
+    /**
+     * Node that authoritatively owns {@code (partitionId, documentId)}.
+     *
+     * <p>The ring is the configured node set, not the currently healthy subset,
+     * so an unhealthy node keeps ownership of its documents rather than handing
+     * them to a peer that would then hold a second copy of the same document.
+     */
+    public String ownerNodeId(String partitionId, String documentId) {
+        return DocumentOwnership.ownerNodeId(partitionId, documentId, ownershipNodeIds);
+    }
+
+    /**
+     * Client for the node that owns {@code (partitionId, documentId)}.
+     *
+     * <p>Callers mutate the returned client's shard doc counts themselves, and
+     * only once the node has confirmed the mutation.
+     *
+     * @throws NodeUnavailableException if the owner has no client or is not currently active
+     */
+    public NodeClient<T> ownerClient(String partitionId, String documentId) {
+        String ownerNodeId = ownerNodeId(partitionId, documentId);
+        NodeClient<T> owner = clientMap.get(ownerNodeId);
+        if (owner == null) {
+            throw new NodeUnavailableException(
+                    ownerNodeId,
+                    "No client for owner node " + ownerNodeId + " of document " + documentId + " in partition "
+                            + partitionId);
         }
-        if (leastLoadedClient != null) {
-            if (isWriteOperation) {
-                leastLoadedClient.incrementDocToShard(partitionId);
-            } else {
-                leastLoadedClient.decrementDocFromShard(partitionId);
-            }
-            return leastLoadedClient.getStub();
-        } else {
-            throw new IllegalStateException("No available clients for shard: " + partitionId);
+        if (!owner.isActive()) {
+            throw new NodeUnavailableException(
+                    ownerNodeId,
+                    "Owner node " + ownerNodeId + " of document " + documentId + " in partition " + partitionId
+                            + " is not available; the mutation is not rerouted because another node would hold a"
+                            + " competing copy of the document");
         }
+        return owner;
     }
 
     public ShardStateStore.ShardDocSnapshot snapshotShardDocCounts() {

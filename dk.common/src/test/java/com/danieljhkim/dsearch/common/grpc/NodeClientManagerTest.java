@@ -2,6 +2,8 @@ package com.danieljhkim.dsearch.common.grpc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -12,6 +14,7 @@ import static org.mockito.Mockito.when;
 import com.danieljhkim.dsearch.common.cluster.NodeGroup;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.enums.RoutingStrategy;
+import com.danieljhkim.dsearch.common.exception.NodeUnavailableException;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import io.grpc.ManagedChannel;
 import java.util.HashMap;
@@ -58,15 +61,81 @@ class NodeClientManagerTest {
     }
 
     @Test
-    void leastLoadedRoutingNeverSelectsInitiallyInactiveClients() {
+    void ownerRoutingIgnoresShardLoad() {
         Map<String, NodeClient<String>> clients = clients("0", "1");
-        clients.get("0").setActive(false);
-        clients.get("1").getOrCreateShardState("p0").getDocCount().set(7);
+        NodeClientManager<String> manager =
+                new NodeClientManager<>(clients, RoutingStrategy.LEAST_LOADED, NodeRole.NODE_ROLE_INDEX, ch -> "");
+        String owner = manager.ownerNodeId("p0", "doc-1");
+
+        // Pile load onto the owner: least-loaded routing would move the document to its peer,
+        // leaving two Lucene copies of the same id.
+        clients.get(owner).getOrCreateShardState("p0").getDocCount().set(1_000);
+
+        assertEquals(owner, manager.ownerNodeId("p0", "doc-1"));
+        assertSame(clients.get(owner), manager.ownerClient("p0", "doc-1"));
+    }
+
+    @Test
+    void ownerRoutingDoesNotTouchDocCounts() {
+        Map<String, NodeClient<String>> clients = clients("0", "1");
         NodeClientManager<String> manager =
                 new NodeClientManager<>(clients, RoutingStrategy.LEAST_LOADED, NodeRole.NODE_ROLE_INDEX, ch -> "");
 
-        assertEquals("stub-1", manager.nextClient("p0", true));
-        assertEquals(8, clients.get("1").getShardDocCount("p0"));
+        manager.ownerClient("p0", "doc-1");
+        manager.ownerClient("p0", "doc-1");
+
+        assertEquals(0, clients.get("0").getShardDocCount("p0"));
+        assertEquals(0, clients.get("1").getShardDocCount("p0"));
+    }
+
+    @Test
+    void ownerClientRejectsMutationsWhenTheOwnerIsInactive() {
+        Map<String, NodeClient<String>> clients = clients("0", "1");
+        NodeClientManager<String> manager =
+                new NodeClientManager<>(clients, RoutingStrategy.LEAST_LOADED, NodeRole.NODE_ROLE_INDEX, ch -> "");
+        String owner = manager.ownerNodeId("p0", "doc-1");
+        clients.get(owner).setActive(false);
+
+        NodeUnavailableException ex =
+                assertThrows(NodeUnavailableException.class, () -> manager.ownerClient("p0", "doc-1"));
+
+        assertEquals(owner, ex.getNodeId());
+    }
+
+    @Test
+    void ownershipRingIsFixedAtConstructionSoDiscoveryChurnCannotMoveDocuments() {
+        AtomicReference<NodeGroup> discovered =
+                new AtomicReference<>(nodeGroup(RoutingStrategy.LEAST_LOADED, "0", "1"));
+        NodeClientManager<String> manager = discoveryBackedManager(RoutingStrategy.LEAST_LOADED, discovered, "0", "1");
+        String owner = manager.ownerNodeId("p0", "doc-1");
+        String other = owner.equals("0") ? "1" : "0";
+
+        // The owner drops out of discovery and a brand new node joins.
+        discovered.set(nodeGroup(RoutingStrategy.LEAST_LOADED, other, "2"));
+        manager.refreshClientsFromCluster();
+
+        assertEquals(List.of("0", "1"), manager.getOwnershipNodeIds());
+        assertEquals(owner, manager.ownerNodeId("p0", "doc-1"));
+        assertThrows(NodeUnavailableException.class, () -> manager.ownerClient("p0", "doc-1"));
+
+        // ... and ownership is restored, not reassigned, once the node is healthy again.
+        discovered.set(nodeGroup(RoutingStrategy.LEAST_LOADED, "0", "1", "2"));
+        manager.refreshClientsFromCluster();
+
+        assertEquals(owner, manager.ownerClient("p0", "doc-1").getNodeId());
+    }
+
+    @Test
+    void ownershipSurvivesRebuildingTheManagerAsAfterAGatewayRestart() {
+        NodeClientManager<String> before = new NodeClientManager<>(
+                clients("0", "1", "2"), RoutingStrategy.LEAST_LOADED, NodeRole.NODE_ROLE_INDEX, ch -> "");
+        NodeClientManager<String> after = new NodeClientManager<>(
+                clients("0", "1", "2"), RoutingStrategy.LEAST_LOADED, NodeRole.NODE_ROLE_INDEX, ch -> "");
+
+        for (int i = 0; i < 100; i++) {
+            String documentId = "doc-" + i;
+            assertEquals(before.ownerNodeId("p0", documentId), after.ownerNodeId("p0", documentId));
+        }
     }
 
     @Test
@@ -85,7 +154,7 @@ class NodeClientManagerTest {
     }
 
     @Test
-    void discoveryRefreshDeactivatingNodeRemovesItFromLeastLoadedRouting() {
+    void discoveryRefreshDeactivatingNodeRemovesItFromReadRouting() {
         AtomicReference<NodeGroup> discovered =
                 new AtomicReference<>(nodeGroup(RoutingStrategy.LEAST_LOADED, "0", "1"));
         NodeClientManager<String> manager = discoveryBackedManager(RoutingStrategy.LEAST_LOADED, discovered, "0", "1");
@@ -97,7 +166,7 @@ class NodeClientManagerTest {
         assertFalse(manager.getClientMap().get("0").isActive());
         assertTrue(manager.getClientMap().get("1").isActive());
         assertEquals(List.of("1"), activeNodeIds(manager));
-        assertEquals("stub-1", manager.nextClient("p0", true));
+        assertEquals("stub-1", manager.nextClient());
     }
 
     @Test
