@@ -14,7 +14,6 @@ import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.prometheus.client.exporter.HTTPServer;
 import io.prometheus.client.hotspot.DefaultExports;
 import java.io.IOException;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class QueryNodeServer {
@@ -27,6 +26,15 @@ public class QueryNodeServer {
 
     public QueryNodeServer(
             int port, SearchExecutor searchExecutor, BaseIndexService indexService, AppConfig appConfig) {
+        this(port, port + 2000, searchExecutor, indexService, appConfig);
+    }
+
+    QueryNodeServer(
+            int port,
+            int prometheusPort,
+            SearchExecutor searchExecutor,
+            BaseIndexService indexService,
+            AppConfig appConfig) {
         QueryServiceImpl queryService = new QueryServiceImpl(searchExecutor, indexService);
         ServerServiceDefinition interceptedService =
                 ServerInterceptors.intercept(queryService, new GlobalExceptionInterceptor());
@@ -36,28 +44,34 @@ public class QueryNodeServer {
                 .intercept(new CorrelationIdServerInterceptor())
                 .intercept(new PrometheusGrpcServerInterceptor())
                 .build();
-        this.prometheusPort = port + 2000;
+        this.prometheusPort = prometheusPort;
     }
 
     public void start() throws IOException, InterruptedException {
-        server.start();
-        startPrometheusMetricsServer(this.prometheusPort);
-        server.awaitTermination();
-    }
-
-    private void startPrometheusMetricsServer(int metricsPort) {
-        DefaultExports.initialize();
         try {
-            this.metricsServer = new HTTPServer(metricsPort);
-            LOGGER.info(() -> "Prometheus metrics server started on port " + metricsPort);
-        } catch (IOException e) {
-            LOGGER.log(Level.WARNING, "Failed to start Prometheus metrics server on port " + metricsPort, e);
+            server.start();
+            startPrometheusMetricsServer(this.prometheusPort);
+            server.awaitTermination();
+        } catch (IOException | RuntimeException e) {
+            shutdownResources();
+            throw e;
         }
     }
 
+    private void startPrometheusMetricsServer(int metricsPort) throws IOException {
+        DefaultExports.initialize();
+        this.metricsServer = new HTTPServer(metricsPort);
+        LOGGER.info(() -> "Prometheus metrics server started on port " + metricsPort);
+    }
+
     public void shutdown() throws InterruptedException {
+        shutdownResources();
+    }
+
+    private void shutdownResources() throws InterruptedException {
         if (metricsServer != null) {
             metricsServer.close();
+            metricsServer = null;
             LOGGER.info("Prometheus metrics server stopped");
         }
         if (server != null) {

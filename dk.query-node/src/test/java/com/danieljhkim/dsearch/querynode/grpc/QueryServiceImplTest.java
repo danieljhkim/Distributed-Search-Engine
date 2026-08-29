@@ -4,16 +4,19 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.proto.common.FacetResponse;
 import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.proto.query.FanoutStatus;
 import com.danieljhkim.dsearch.proto.query.QueryRequest;
@@ -23,6 +26,7 @@ import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.grpc.stub.StreamObserver;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -169,6 +173,68 @@ class QueryServiceImplTest {
         assertEquals(
                 "Search fanout failed: attemptedNodes=2 succeededNodes=0 failedNodes=0 timedOutNodes=2",
                 error.getStatus().getDescription());
+    }
+
+    @Test
+    void requestLimitValidationRejectsOversizedRequestsBeforeFanout() {
+        QueryRequest oversized =
+                request(SearchType.BM25).toBuilder().setSize(1001).build();
+        RecordingObserver observer = new RecordingObserver();
+
+        assertThrows(IllegalArgumentException.class, () -> queryService.search(oversized, observer));
+        assertNull(observer.response);
+        assertNull(observer.error);
+        assertFalse(observer.completed);
+        verifyNoInteractions(searchExecutor, indexService);
+    }
+
+    @Test
+    void hybridSearchForwardsStrategyAndTranslatesOptionalHitFieldsAndFacets() {
+        FacetResponse facet = FacetResponse.newBuilder().setField("category").build();
+        when(searchExecutor.searchHybrid(
+                        eq("coffee"),
+                        eq("shard-a"),
+                        eq(0),
+                        eq(10),
+                        eq(indexService),
+                        eq(com.danieljhkim.dsearch.proto.common.FusionStrategy.RRF),
+                        anyList(),
+                        anyBoolean(),
+                        anyList()))
+                .thenReturn(new SearchResult(
+                        List.of(new SearchHit(
+                                "doc-1", null, null, 2.0f, Map.of("content", "highlight"), Map.of("tag", "book"))),
+                        1,
+                        0,
+                        List.of(facet),
+                        new SearchResult.FanoutMetadata(1, 1, 0, 0)));
+
+        RecordingObserver observer = new RecordingObserver();
+        queryService.search(
+                request(SearchType.HYBRID).toBuilder()
+                        .setFusionStrategy(com.danieljhkim.dsearch.proto.common.FusionStrategy.RRF)
+                        .build(),
+                observer);
+
+        assertTrue(observer.completed);
+        assertNull(observer.error);
+        assertEquals(1, observer.response.getHitsCount());
+        assertEquals("highlight", observer.response.getHits(0).getHighlightedFieldsOrThrow("content"));
+        assertEquals("book", observer.response.getHits(0).getFieldsOrThrow("tag"));
+        assertEquals(List.of(facet), observer.response.getFacetsList());
+    }
+
+    @Test
+    void executorFailureIsReturnedAsParseError() {
+        when(searchExecutor.search(any(), any(), anyInt(), anyInt(), any(), any(), anyList(), anyBoolean(), anyList()))
+                .thenThrow(new IllegalStateException("executor failed"));
+        RecordingObserver observer = new RecordingObserver();
+
+        queryService.search(request(SearchType.BM25), observer);
+
+        assertFalse(observer.completed);
+        assertTrue(observer.error instanceof com.danieljhkim.dsearch.common.exception.ParseGoneWrongException);
+        assertTrue(observer.error.getMessage().contains("Failed to parse query: coffee"));
     }
 
     private static QueryRequest request(SearchType searchType) {

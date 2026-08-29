@@ -2,6 +2,7 @@ package com.danieljhkim.dsearch.querynode.search;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -198,6 +199,59 @@ class SearchExecutorTest {
         assertEquals(0, metadata.succeededNodes());
         assertEquals(2, metadata.failedNodes());
         assertEquals(0, metadata.timedOutNodes());
+    }
+
+    @Test
+    void nullShardResultIsCountedAsSuccessfulWithoutAddingHits() {
+        RecordingIndexService indexService = new RecordingIndexService().success("1", null);
+
+        SearchResult result =
+                searchExecutor(node("1", true)).search("coffee", "shard-a", 0, 10, SearchType.BM25, indexService);
+
+        assertTrue(result.getHits().isEmpty());
+        assertEquals(0L, result.getTotalHits());
+        assertEquals(
+                SearchResult.FanoutStatus.SUCCESS, result.getFanoutMetadata().status());
+        assertEquals(1, result.getFanoutMetadata().succeededNodes());
+    }
+
+    @Test
+    void interruptedAwaitPreservesInterruptAndReturnsCompletedNodeResults() {
+        RecordingIndexService indexService = new RecordingIndexService().success("1", result(hit("doc-1", 1.0f)));
+        SearchExecutor executor = searchExecutor(node("1", true));
+
+        Thread.currentThread().interrupt();
+        try {
+            SearchResult result = executor.search("coffee", "shard-a", 0, 10, SearchType.BM25, indexService);
+
+            assertTrue(result.getHits().isEmpty() || hitIds(result).equals(List.of("doc-1")));
+            assertEquals(
+                    1,
+                    result.getFanoutMetadata().succeededNodes()
+                            + result.getFanoutMetadata().timedOutNodes());
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
+    void closeShutsDownTheOwnedExecutorAndRejectsNullDependencies() throws IOException {
+        ExecutorService ownedExecutor = Executors.newSingleThreadExecutor();
+        SearchExecutor executor = new SearchExecutor(ownedExecutor, mock(NodeClientManager.class), TEST_TIMEOUT);
+
+        executor.close();
+
+        assertTrue(ownedExecutor.isShutdown());
+        assertThrows(
+                NullPointerException.class,
+                () -> new SearchExecutor(null, mock(NodeClientManager.class), TEST_TIMEOUT));
+        assertThrows(
+                NullPointerException.class,
+                () -> new SearchExecutor(Executors.newSingleThreadExecutor(), null, TEST_TIMEOUT));
+        assertThrows(
+                NullPointerException.class,
+                () -> new SearchExecutor(Executors.newSingleThreadExecutor(), mock(NodeClientManager.class), null));
     }
 
     @Test
