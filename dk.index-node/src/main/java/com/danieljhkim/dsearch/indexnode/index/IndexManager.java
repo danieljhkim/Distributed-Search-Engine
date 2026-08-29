@@ -221,6 +221,27 @@ public class IndexManager implements Closeable {
     }
 
     /**
+     * Deletes a document and does not return until Lucene has committed the deletion.
+     *
+     * <p>The per-shard lock keeps this operation ordered with buffered writes and deletes. Any older
+     * buffered operations are committed in the same durability boundary before this method returns.
+     * If the commit fails, the exception is propagated and no durable acknowledgement may be issued
+     * by the caller.
+     */
+    public void deleteDocumentDurably(String partitionId, String docId) throws IOException {
+        ShardIndex shardIndex = getOrCreateShard(partitionId);
+        ShardBuffer buffer = getBuffer(partitionId);
+
+        buffer.lock.lock();
+        try {
+            buffer.add(BufferedOperation.delete(docId));
+            flushShardBufferLocked(partitionId, shardIndex, buffer);
+        } finally {
+            buffer.lock.unlock();
+        }
+    }
+
+    /**
      * Search reads from the current committed state (backward compatible).
      */
     public SearchResult searchDocument(String partitionId, String query, int limit, int from, SearchType searchType)

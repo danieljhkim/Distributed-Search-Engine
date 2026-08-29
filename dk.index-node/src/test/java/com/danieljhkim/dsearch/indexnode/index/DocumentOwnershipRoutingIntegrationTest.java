@@ -112,8 +112,7 @@ class DocumentOwnershipRoutingIntegrationTest {
 
         NodeClient<IndexManager> deleteTarget = clientManager.ownerClient(PARTITION_ID, DOCUMENT_ID);
         assertEquals(owner.getNodeId(), deleteTarget.getNodeId());
-        deleteTarget.getStub().deleteDocument(PARTITION_ID, DOCUMENT_ID);
-        deleteTarget.getStub().commitAll();
+        deleteTarget.getStub().deleteDocumentDurably(PARTITION_ID, DOCUMENT_ID);
         deleteTarget.decrementDocFromShard(PARTITION_ID);
 
         assertEquals(0, totalHitsAcrossCluster("shared"));

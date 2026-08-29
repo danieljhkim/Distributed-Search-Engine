@@ -154,6 +154,19 @@ class IndexServiceImplTest {
             assertNull(deleteObserver.error);
             assertTrue(deleteObserver.completed);
             assertTrue(deleteObserver.value.getSuccess());
+
+            RecordingObserver<IndexSearchResponse> postDeleteSearchObserver = new RecordingObserver<>();
+            service.searchIndex(
+                    IndexSearchRequest.newBuilder()
+                            .setPartitionId("0")
+                            .setQuery("searchable")
+                            .setSize(10)
+                            .setSearchType(SearchType.BM25)
+                            .build(),
+                    postDeleteSearchObserver);
+            assertNull(postDeleteSearchObserver.error);
+            assertTrue(postDeleteSearchObserver.completed);
+            assertEquals(0, postDeleteSearchObserver.value.getTotalHits());
         }
     }
 
@@ -275,7 +288,7 @@ class IndexServiceImplTest {
         }
 
         @Override
-        public void deleteDocument(String partitionId, String docId) throws IOException {
+        public void deleteDocumentDurably(String partitionId, String docId) throws IOException {
             throw new IOException("delete failure");
         }
 

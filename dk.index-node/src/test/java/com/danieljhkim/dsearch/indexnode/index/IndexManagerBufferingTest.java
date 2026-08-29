@@ -74,6 +74,18 @@ class IndexManagerBufferingTest {
     }
 
     @Test
+    void durableDeleteIsVisibleBeforeReturning() throws IOException {
+        try (IndexManager manager = new IndexManager(tempDir, 10, LONG_FLUSH_INTERVAL, null, FAKE_EMBEDDER)) {
+            manager.indexDocument(SHARD_ID, document("doc-1", "Alpha", "alpha durable delete content"));
+            manager.commitAll();
+
+            manager.deleteDocumentDurably(SHARD_ID, "doc-1");
+
+            assertTotalHits(manager, "alpha", 0);
+        }
+    }
+
+    @Test
     void bufferedDeleteAndReindexPreserveOperationOrder() throws IOException {
         try (IndexManager manager = new IndexManager(tempDir, 10, LONG_FLUSH_INTERVAL, null, FAKE_EMBEDDER)) {
             manager.indexDocument(SHARD_ID, document("doc-1", "Alpha", "alpha content"));
