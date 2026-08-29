@@ -26,6 +26,7 @@ public class EmbeddingModelManager {
     private final ModelLoader modelLoader;
     private final Map<String, ZooModel<String, float[]>> modelCache = new ConcurrentHashMap<>();
     private ZooModel<String, float[]> defaultModel;
+    private boolean closed;
 
     private EmbeddingModelManager() throws IOException {
         this(ConfigLoader.load(), EmbeddingModelManager::loadModel);
@@ -56,10 +57,10 @@ public class EmbeddingModelManager {
         return INSTANCE;
     }
 
-    private void init() {
+    private synchronized void init() {
+        ensureOpen();
         LOGGER.info(() -> "Loading default embedding model: " + DEFAULT_MODEL_URL);
-        this.defaultModel = modelLoader.load(DEFAULT_MODEL_URL, DEFAULT_ENGINE);
-        modelCache.put(DEFAULT_MODEL_URL, this.defaultModel);
+        this.defaultModel = loadAndCache(DEFAULT_MODEL_URL, DEFAULT_ENGINE);
         LOGGER.info(() -> "Default embedding model loaded successfully: " + DEFAULT_MODEL_URL);
     }
 
@@ -79,26 +80,37 @@ public class EmbeddingModelManager {
         }
     }
 
-    public ZooModel<String, float[]> getOrLoadModel(String modelUrl, String engine) {
+    public synchronized ZooModel<String, float[]> getOrLoadModel(String modelUrl, String engine) {
+        ensureOpen();
+        Objects.requireNonNull(modelUrl, "modelUrl");
+        Objects.requireNonNull(engine, "engine");
         ZooModel<String, float[]> cached = modelCache.get(modelUrl);
         if (cached != null) {
             return cached;
         }
-        synchronized (this) {
-            cached = modelCache.get(modelUrl);
-            if (cached != null) {
-                return cached;
-            }
-            ZooModel<String, float[]> loaded = modelLoader.load(modelUrl, engine);
-            modelCache.put(modelUrl, loaded);
-            return loaded;
-        }
+        return loadAndCache(modelUrl, engine);
     }
 
-    public void close() {
-        modelCache.values().forEach(ZooModel::close);
+    public synchronized void close() {
+        if (closed) {
+            return;
+        }
+        closed = true;
+        modelCache.values().stream().distinct().forEach(ZooModel::close);
         modelCache.clear();
         defaultModel = null;
+    }
+
+    private ZooModel<String, float[]> loadAndCache(String modelUrl, String engine) {
+        ZooModel<String, float[]> loaded = Objects.requireNonNull(modelLoader.load(modelUrl, engine), "loaded model");
+        modelCache.put(modelUrl, loaded);
+        return loaded;
+    }
+
+    private void ensureOpen() {
+        if (closed) {
+            throw new IllegalStateException("Embedding model manager is closed");
+        }
     }
 
     @FunctionalInterface
