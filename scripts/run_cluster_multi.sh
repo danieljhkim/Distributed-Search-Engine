@@ -15,14 +15,12 @@ GATEWAY_JAR="$BASE_DIR/dk.gateway/target/dk-gateway.jar"
 
 LOG_DIR="$BASE_DIR/logs"
 DATA_DIR="$BASE_DIR/data"
+LOCAL_CONFIG_FILE="$BASE_DIR/dk.common/src/main/resources/app-config.yaml"
 
 JAVA_OPTS="--add-modules jdk.incubator.vector"
 
 # Local launchers opt in to plaintext explicitly. Packaged/default configuration remains mTLS.
 export DSEARCH_GRPC_PROFILE=local
-
-mkdir -p "$LOG_DIR"
-mkdir -p "$DATA_DIR"
 
 # Number of nodes
 N_INDEX_NODES=${N_INDEX_NODES:-2}
@@ -38,6 +36,58 @@ GATEWAY_PORT=${GATEWAY_PORT:-8080}
 ############################################
 # FUNCTIONS
 ############################################
+
+configured_node_ids() {
+  local section="$1"
+
+  awk -v section="$section" '
+    $0 ~ "^" section ":" { in_section = 1; next }
+    in_section && /^[[:alnum:]_-]+:/ { exit }
+    in_section && /^[[:space:]]*-[[:space:]]+id:/ {
+      id = $0
+      sub(/^[^:]*:[[:space:]]*/, "", id)
+      gsub(/"/, "", id)
+      sub(/[[:space:]#].*$/, "", id)
+      gsub(/[[:space:]]+$/, "", id)
+      print id
+    }
+  ' "$LOCAL_CONFIG_FILE"
+}
+
+read_local_topology() {
+  local configured_index_node_count
+  local configured_query_node_count
+  local node_id
+
+  if [[ ! -f "$LOCAL_CONFIG_FILE" ]]; then
+    echo "Local topology config not found: $LOCAL_CONFIG_FILE" >&2
+    exit 1
+  fi
+
+  configured_index_node_count=$(configured_node_ids "indexNodes" | wc -l | tr -d ' ')
+  configured_query_node_count=$(configured_node_ids "queryNodes" | wc -l | tr -d ' ')
+
+  if (( N_INDEX_NODES > configured_index_node_count )); then
+    echo "Cannot launch $N_INDEX_NODES index nodes: $LOCAL_CONFIG_FILE defines only $configured_index_node_count logical IDs." >&2
+    exit 1
+  fi
+
+  if (( N_QUERY_NODES > configured_query_node_count )); then
+    echo "Cannot launch $N_QUERY_NODES query nodes: $LOCAL_CONFIG_FILE defines only $configured_query_node_count logical IDs." >&2
+    exit 1
+  fi
+
+  INDEX_NODE_IDS=()
+  QUERY_NODE_IDS=()
+
+  while IFS= read -r node_id; do
+    INDEX_NODE_IDS+=("$node_id")
+  done < <(configured_node_ids "indexNodes" | head -n "$N_INDEX_NODES")
+
+  while IFS= read -r node_id; do
+    QUERY_NODE_IDS+=("$node_id")
+  done < <(configured_node_ids "queryNodes" | head -n "$N_QUERY_NODES")
+}
 
 start_coordinator() {
   echo "Starting Coordinator..."
@@ -56,7 +106,7 @@ start_index_nodes() {
 
   for ((i=0; i< N_INDEX_NODES; i++)); do
     local port=$((INDEX_BASE_PORT + i))
-    local node_id="index-$i"
+    local node_id="${INDEX_NODE_IDS[$i]}"
     local node_data_dir="$DATA_DIR/index-node-$i"
     mkdir -p "$node_data_dir"
 
@@ -80,7 +130,7 @@ start_query_nodes() {
 
   for ((i=0; i< N_QUERY_NODES; i++)); do
     local port=$((QUERY_BASE_PORT + i))
-    local node_id="query-$i"
+    local node_id="${QUERY_NODE_IDS[$i]}"
 
     export QUERY_NODE_PORT="$port"
     export NODE_ID="$node_id"
@@ -168,6 +218,11 @@ echo "Query Nodes : ${N_QUERY_NODES} (ports ${QUERY_BASE_PORT}..$((QUERY_BASE_PO
 echo "Gateway     : http://localhost:${GATEWAY_PORT}"
 echo "Shards      : ${NUM_SHARDS}"
 echo "================================================="
+
+read_local_topology
+
+mkdir -p "$LOG_DIR"
+mkdir -p "$DATA_DIR"
 
 start_coordinator
 sleep 5
