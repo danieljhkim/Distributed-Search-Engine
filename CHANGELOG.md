@@ -11,6 +11,8 @@ This project follows a **Keep a Changelog–inspired** format and adheres loosel
 
 ## [Unreleased]
 
+## [1.0.0] — Production Baseline
+
 ### Added
 - Docker support: Multi-stage Dockerfiles for all runnable modules (coordinator, gateway, index-node, query-node)
 - `docker-compose.yml` for full cluster orchestration
@@ -19,12 +21,25 @@ This project follows a **Keep a Changelog–inspired** format and adheres loosel
 - `APP_CONFIG_PATH` environment variable support for flexible configuration file selection
 - `finalName` configuration in all module POMs for consistent JAR naming (dk-*.jar)
 - Per-request limits validation (`maxSize`, `maxQueryLength`) enforced at Gateway and QueryNode layers via `RequestLimitsValidator`
+- Production gRPC TLS/mTLS for control and data planes, including certificate-volume configuration
+- Authoritative coordinator topology, persisted shard-map recovery, node self-registration and rejoin support
+- Dependency-aware node liveness and readiness checks
+- Replication-factor and node-group configuration
+- Client-visible partial and total shard-search failure status in query responses
 
 ### Changed
 - Refactored `ConfigLoader` to use `APP_CONFIG_PATH` with default fallback to `app-config.yaml`
 - Updated all modules to use simplified `ConfigLoader.load()` API
 - Updated cluster scripts to use new JAR names (removed version suffixes)
 - `Makefile`: Moved log cleanup from `stop` to `build` target
+- Secure deployments require `DSEARCH_TLS_DIR`; Docker Compose no longer publishes service ports by default
+- Coordinator registration, heartbeat, and shard ownership now use epoch-aware topology contracts
+- Index, update, and delete requests route to the owning index node
+
+### Fixed
+- Propagated request deadlines and admission rejections end-to-end
+- Made successful indexing acknowledgements durable and cross-node BM25 ranking deterministic
+- Prevented partition-path traversal and unbounded metric-tag cardinality
 
 ---
 
@@ -95,9 +110,6 @@ When updating this file:
 
 ## Versioning Notes
 
-This project is currently **pre-1.0**:
-- APIs may change
-- Architecture may evolve
-- Backward compatibility is not guaranteed
-
-Breaking changes should still be clearly documented.
+Version 1.0.0 establishes the stable production baseline. Subsequent releases
+follow semantic versioning; breaking API, wire-contract, configuration, or
+operational changes are documented in their release notes.
