@@ -22,6 +22,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -38,15 +40,48 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract tag name
-        id: meta
-        run: echo "TAG=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+      - name: Verify main release identity
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+
+          if [[ "$TAG" == "$VERSION" || -z "$VERSION" || "$VERSION" == *"/"* ]]; then
+            echo "Release tags must use the v<version> form; got $TAG" >&2
+            exit 1
+          fi
+
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Release tag $TAG must point to a commit reachable from main" >&2
+            exit 1
+          fi
+
+          MAVEN_VERSION="$(mvn -B -ntp help:evaluate -Dexpression=project.version -DforceStdout -q | tail -n 1)"
+          if [[ "$MAVEN_VERSION" == *-SNAPSHOT ]]; then
+            echo "Release tag $TAG cannot publish Maven snapshot version $MAVEN_VERSION" >&2
+            exit 1
+          fi
+          if [[ "$VERSION" != "$MAVEN_VERSION" ]]; then
+            echo "Release tag $TAG does not match Maven version $MAVEN_VERSION" >&2
+            exit 1
+          fi
+
+          IMAGE_TAG="$MAVEN_VERSION"
+          if [[ "$IMAGE_TAG" != "$VERSION" ]]; then
+            echo "Image tag $IMAGE_TAG does not match release version $VERSION" >&2
+            exit 1
+          fi
+          echo "version=$MAVEN_VERSION" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Compute image tags
         id: tags
         shell: bash
         run: |
-          TAG="${{ steps.meta.outputs.TAG }}"
+          TAG="${{ steps.release.outputs.image_tag }}"
 
           # Always publish an immutable, versioned tag.
           VERSIONED="ghcr.io/${{ github.repository }}/${{ matrix.service }}:${TAG}"

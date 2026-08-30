@@ -6,6 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **dsearch** is a horizontally scalable, Lucene-based distributed search engine built with Java 21. It provides lexical (BM25), semantic (vector kNN), and hybrid search capabilities.
 
+`main` is the authoritative integration and release branch. Development builds use the root
+Maven `revision` with a `-SNAPSHOT` suffix. To publish a release, set that one value to the
+release version on `main`, tag the resulting commit as `v<version>`, and let the publish workflow
+verify the branch, Maven version, and image tag before it pushes images.
+
 **Tech Stack**: Java 21, Maven, Apache Lucene 9.8.0, gRPC (inter-service), Spring Boot (REST API), DJL/PyTorch (embeddings)
 
 ## Build & Run Commands
