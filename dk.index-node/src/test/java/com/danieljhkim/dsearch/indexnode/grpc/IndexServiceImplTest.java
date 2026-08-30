@@ -6,7 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.danieljhkim.dsearch.common.model.SearchDocument;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.common.validation.RequestAdmissionException;
 import com.danieljhkim.dsearch.indexnode.index.IndexManager;
 import com.danieljhkim.dsearch.indexnode.index.ShardIndex;
 import com.danieljhkim.dsearch.ml.embedding.TextEmbedder;
@@ -109,6 +111,44 @@ class IndexServiceImplTest {
             assertTrue(emptyObserver.completed);
             assertTrue(emptyObserver.value.getSuccess());
             assertEquals(0, emptyObserver.value.getResultsCount());
+        }
+    }
+
+    @Test
+    void bulkAdmissionExhaustionReturnsPartialResultsWithCommittedGeneratedIds() throws IOException {
+        try (IndexManager manager = new AdmissionExhaustingManager(tempDir.resolve("bulk-admission"), 2)) {
+            RecordingObserver<BulkIndexDocumentResponse> observer = new RecordingObserver<>();
+
+            new IndexServiceImpl(manager)
+                    .bulkIndexDocument(
+                            BulkIndexDocumentRequest.newBuilder()
+                                    .setPartitionId("0")
+                                    .addDocuments(document("", "first durable content"))
+                                    .addDocuments(document("", "admission exhausted content"))
+                                    .addDocuments(document("doc-3", "third durable content"))
+                                    .build(),
+                            observer);
+
+            assertNull(observer.error);
+            assertTrue(observer.completed);
+            assertFalse(observer.value.getSuccess());
+            assertEquals(3, observer.value.getResultsCount());
+            assertEquals(2, observer.value.getIdsCount());
+
+            var firstResult = observer.value.getResults(0);
+            assertTrue(firstResult.getSuccess());
+            assertFalse(firstResult.getId().isBlank());
+            assertEquals(firstResult.getId(), observer.value.getIds(0));
+
+            var admissionResult = observer.value.getResults(1);
+            assertFalse(admissionResult.getSuccess());
+            assertFalse(admissionResult.getId().isBlank());
+            assertTrue(admissionResult.getError().contains("retry with the returned id"));
+
+            var thirdResult = observer.value.getResults(2);
+            assertTrue(thirdResult.getSuccess());
+            assertEquals("doc-3", thirdResult.getId());
+            assertEquals(java.util.List.of(firstResult.getId(), "doc-3"), observer.value.getIdsList());
         }
     }
 
@@ -304,6 +344,24 @@ class IndexServiceImplTest {
                 java.util.List<FacetRequest> facetRequests)
                 throws IOException {
             throw new IOException("search failure");
+        }
+    }
+
+    private static final class AdmissionExhaustingManager extends IndexManager {
+        private final int failingCall;
+        private int calls;
+
+        AdmissionExhaustingManager(Path baseDir, int failingCall) {
+            super(baseDir, 10, Duration.ofHours(1), null, FAKE_EMBEDDER);
+            this.failingCall = failingCall;
+        }
+
+        @Override
+        public void indexDocumentDurably(String partitionId, SearchDocument document) throws IOException {
+            if (++calls == failingCall) {
+                throw new RequestAdmissionException("embedding predictor", 100);
+            }
+            super.indexDocumentDurably(partitionId, document);
         }
     }
 

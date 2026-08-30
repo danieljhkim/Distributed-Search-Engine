@@ -112,8 +112,8 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
                 respBuilder.addIds(docId);
                 result.setSuccess(true);
             } catch (RequestAdmissionException e) {
-                resourceExhausted(responseObserver, e);
-                return;
+                success = false;
+                result.setSuccess(false).setError("request admission exhausted; retry with the returned id");
             } catch (IOException | RuntimeException e) {
                 LOGGER.log(Level.SEVERE, "BulkIndexDocument failed for request index " + requestIndex, e);
                 success = false;
