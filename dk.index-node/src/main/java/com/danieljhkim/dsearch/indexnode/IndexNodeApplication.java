@@ -1,12 +1,17 @@
 package com.danieljhkim.dsearch.indexnode;
 
+import com.danieljhkim.dsearch.common.cluster.NodeMembershipAgent;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.config.AppConfig.FieldConfig;
 import com.danieljhkim.dsearch.common.config.ConfigLoader;
 import com.danieljhkim.dsearch.common.health.HealthHttpServer;
 import com.danieljhkim.dsearch.indexnode.index.IndexManager;
 import com.danieljhkim.dsearch.indexnode.server.IndexNodeServer;
+import com.danieljhkim.dsearch.proto.cluster.ClusterServiceGrpc;
+import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import com.sun.net.httpserver.HttpServer;
+import io.grpc.ManagedChannel;
+import io.grpc.ManagedChannelBuilder;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -35,17 +40,23 @@ public class IndexNodeApplication {
                 baseDir, indexingConfig.maxBufferedOpsPerShard(), indexingConfig.maxFlushInterval(), fieldConfigs);
         IndexNodeServer indexNodeServer = new IndexNodeServer(grpcPort, indexManager);
         HttpServer healthServer = HealthHttpServer.start(healthPort, "index-node");
+        NodeMembershipAgent membershipAgent = createMembershipAgent(appConfig, System.getenv(), grpcPort, healthPort);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             LOGGER.info("Shutting down IndexNode gRPC server...");
+            if (membershipAgent != null) {
+                membershipAgent.close();
+            }
             try {
-                indexManager.close();
                 indexNodeServer.shutdown();
                 healthServer.stop(0);
 
             } catch (InterruptedException e) {
                 LOGGER.log(Level.SEVERE, "Error during shutdown", e);
                 Thread.currentThread().interrupt();
+            }
+            try {
+                indexManager.close();
             } catch (IOException e) {
                 LOGGER.log(Level.SEVERE, "Error closing IndexManager", e);
             }
@@ -54,7 +65,27 @@ public class IndexNodeApplication {
         LOGGER.info(() -> "IndexNode gRPC server started on port " + grpcPort);
         LOGGER.info(() -> "IndexNode health endpoint on port " + healthPort + " at /health");
 
-        indexNodeServer.start();
+        indexNodeServer.startAsync();
+        if (membershipAgent != null) {
+            membershipAgent.start();
+        }
+        indexNodeServer.awaitTermination();
+    }
+
+    static NodeMembershipAgent createMembershipAgent(
+            AppConfig appConfig, Map<String, String> environment, int grpcPort, int healthPort) {
+        NodeMembershipAgent.ResolvedMembership resolved =
+                NodeMembershipAgent.resolve(appConfig, environment, NodeRole.NODE_ROLE_INDEX, grpcPort, healthPort);
+        if (resolved == null) {
+            return null;
+        }
+        ManagedChannel channel = ManagedChannelBuilder.forAddress(
+                        resolved.settings().coordinatorHost(),
+                        resolved.settings().coordinatorPort())
+                .usePlaintext()
+                .build();
+        return new NodeMembershipAgent(
+                resolved.identity(), resolved.settings(), ClusterServiceGrpc.newBlockingStub(channel), channel);
     }
 
     static IndexingRuntimeConfig resolveIndexingConfig(AppConfig appConfig, Map<String, String> environment) {

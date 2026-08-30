@@ -1,6 +1,7 @@
 package com.danieljhkim.dsearch.querynode;
 
 import com.danieljhkim.dsearch.common.cluster.NodeGroupManager;
+import com.danieljhkim.dsearch.common.cluster.NodeMembershipAgent;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.config.ConfigLoader;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
@@ -13,7 +14,10 @@ import com.danieljhkim.dsearch.querynode.grpc.IndexService;
 import com.danieljhkim.dsearch.querynode.search.SearchExecutor;
 import com.danieljhkim.dsearch.querynode.server.QueryNodeServer;
 import com.sun.net.httpserver.HttpServer;
+import io.grpc.ManagedChannel;
+import io.grpc.ManagedChannelBuilder;
 import java.io.IOException;
+import java.util.Map;
 import java.util.logging.Logger;
 
 public class QueryNodeApplication {
@@ -23,13 +27,18 @@ public class QueryNodeApplication {
     public static void main(String[] args) throws IOException, InterruptedException {
         int grpcPort = requiredPort("QUERY_NODE_PORT");
         int healthPort = requiredPort("QUERY_NODE_HEALTH_PORT");
-        QueryNodeRuntime runtime = createRuntime(grpcPort, healthPort, ConfigLoader.load());
+        QueryNodeRuntime runtime = createRuntime(grpcPort, healthPort, ConfigLoader.load(), System.getenv());
 
         Runtime.getRuntime().addShutdownHook(new Thread(runtime::close));
         runtime.start();
     }
 
     static QueryNodeRuntime createRuntime(int grpcPort, int healthPort, AppConfig appConfig) {
+        return createRuntime(grpcPort, healthPort, appConfig, System.getenv());
+    }
+
+    static QueryNodeRuntime createRuntime(
+            int grpcPort, int healthPort, AppConfig appConfig, Map<String, String> environment) {
         NodeGroupManager nodeGroupManager = new NodeGroupManager(appConfig);
         NodeClientManager<ClusterServiceGrpc.ClusterServiceBlockingStub> coordinatorClientManager =
                 nodeGroupManager.isServiceDiscoveryEnabled()
@@ -45,8 +54,30 @@ public class QueryNodeApplication {
         SearchExecutor searchExecutor = new SearchExecutor(nodeClientManager);
         BaseIndexService indexService = new IndexService(nodeClientManager);
         QueryNodeServer queryNodeServer = new QueryNodeServer(grpcPort, searchExecutor, indexService, appConfig);
+        NodeMembershipAgent membershipAgent = createMembershipAgent(appConfig, environment, grpcPort, healthPort);
         return new QueryNodeRuntime(
-                healthPort, queryNodeServer, searchExecutor, nodeClientManager, coordinatorClientManager);
+                healthPort,
+                queryNodeServer,
+                searchExecutor,
+                nodeClientManager,
+                coordinatorClientManager,
+                membershipAgent);
+    }
+
+    private static NodeMembershipAgent createMembershipAgent(
+            AppConfig appConfig, Map<String, String> environment, int grpcPort, int healthPort) {
+        NodeMembershipAgent.ResolvedMembership resolved =
+                NodeMembershipAgent.resolve(appConfig, environment, NodeRole.NODE_ROLE_QUERY, grpcPort, healthPort);
+        if (resolved == null) {
+            return null;
+        }
+        ManagedChannel channel = ManagedChannelBuilder.forAddress(
+                        resolved.settings().coordinatorHost(),
+                        resolved.settings().coordinatorPort())
+                .usePlaintext()
+                .build();
+        return new NodeMembershipAgent(
+                resolved.identity(), resolved.settings(), ClusterServiceGrpc.newBlockingStub(channel), channel);
     }
 
     private static int requiredPort(String environmentVariable) {
@@ -70,6 +101,7 @@ public class QueryNodeApplication {
         private final SearchExecutor searchExecutor;
         private final NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager;
         private final NodeClientManager<ClusterServiceGrpc.ClusterServiceBlockingStub> coordinatorClientManager;
+        private final NodeMembershipAgent membershipAgent;
         private HttpServer healthServer;
 
         private QueryNodeRuntime(
@@ -77,18 +109,24 @@ public class QueryNodeApplication {
                 QueryNodeServer queryNodeServer,
                 SearchExecutor searchExecutor,
                 NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager,
-                NodeClientManager<ClusterServiceGrpc.ClusterServiceBlockingStub> coordinatorClientManager) {
+                NodeClientManager<ClusterServiceGrpc.ClusterServiceBlockingStub> coordinatorClientManager,
+                NodeMembershipAgent membershipAgent) {
             this.healthPort = healthPort;
             this.queryNodeServer = queryNodeServer;
             this.searchExecutor = searchExecutor;
             this.nodeClientManager = nodeClientManager;
             this.coordinatorClientManager = coordinatorClientManager;
+            this.membershipAgent = membershipAgent;
         }
 
         void start() throws IOException, InterruptedException {
             try {
                 healthServer = HealthHttpServer.start(healthPort, "query-node");
-                queryNodeServer.start();
+                queryNodeServer.startAsync();
+                if (membershipAgent != null) {
+                    membershipAgent.start();
+                }
+                queryNodeServer.awaitTermination();
             } catch (IOException | RuntimeException e) {
                 close();
                 throw e;
@@ -101,6 +139,9 @@ public class QueryNodeApplication {
         @Override
         public void close() {
             LOGGER.info("Shutting down QueryNode gRPC server...");
+            if (membershipAgent != null) {
+                membershipAgent.close();
+            }
             try {
                 queryNodeServer.shutdown();
             } catch (InterruptedException e) {

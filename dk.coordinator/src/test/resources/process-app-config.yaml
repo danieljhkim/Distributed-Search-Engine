@@ -3,6 +3,11 @@ serviceDiscovery:
   refreshIntervalSeconds: 1
   nodeExpirySeconds: 1
   maxStalenessSeconds: 1
+  heartbeatIntervalSeconds: 1
+  registrationInitialBackoffMillis: 50
+  registrationMaxBackoffSeconds: 1
+  membershipRpcDeadlineMillis: 250
+  shutdownDeregisterTimeoutMillis: 250
 
 indexNodes:
   routingStrategy: "ROUND_ROBIN"

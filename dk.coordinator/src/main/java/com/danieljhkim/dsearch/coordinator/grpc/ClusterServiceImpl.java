@@ -3,6 +3,8 @@ package com.danieljhkim.dsearch.coordinator.grpc;
 import com.danieljhkim.dsearch.common.cluster.NodeGroup;
 import com.danieljhkim.dsearch.coordinator.cluster.ClusterMembershipService;
 import com.danieljhkim.dsearch.proto.cluster.ClusterServiceGrpc;
+import com.danieljhkim.dsearch.proto.cluster.DeregisterNodeRequest;
+import com.danieljhkim.dsearch.proto.cluster.DeregisterNodeResponse;
 import com.danieljhkim.dsearch.proto.cluster.GetClusterInfoRequest;
 import com.danieljhkim.dsearch.proto.cluster.GetClusterInfoResponse;
 import com.danieljhkim.dsearch.proto.cluster.GetShardMapRequest;
@@ -44,6 +46,8 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
                 return;
             }
 
+            membershipService.assertRegistrationTopology(
+                    request.getObservedTopologyEpoch(), request.getObservedTopologyVersion());
             membershipService.registerNode(
                     new NodeGroup.NodeInfo(
                             request.getNodeId(),
@@ -58,9 +62,12 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
                     .setContractVersion(ClusterMembershipService.CONTRACT_VERSION)
                     .setTopologyEpoch(membershipService.getTopologyEpoch())
                     .setTopologyVersion(membershipService.getTopologyVersion())
+                    .setLeaseDurationMillis(membershipService.getLeaseDurationMillis())
                     .build();
             responseObserver.onNext(resp);
             responseObserver.onCompleted();
+        } catch (ClusterMembershipService.StaleTopologyException e) {
+            responseObserver.onError(staleTopologyStatus(e).asRuntimeException());
         } catch (IllegalArgumentException e) {
             responseObserver.onError(
                     Status.INVALID_ARGUMENT.withDescription(e.getMessage()).asRuntimeException());
@@ -80,7 +87,11 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
             if (request.getNodeId().isBlank()) {
                 throw new IllegalArgumentException("node_id must not be empty");
             }
-            long version = membershipService.heartbeat(request.getNodeId(), role, request.getObservedTopologyVersion());
+            long version = membershipService.heartbeat(
+                    request.getNodeId(),
+                    role,
+                    request.getObservedTopologyEpoch(),
+                    request.getObservedTopologyVersion());
             responseObserver.onNext(HeartbeatResponse.newBuilder()
                     .setSuccess(true)
                     .setContractVersion(ClusterMembershipService.CONTRACT_VERSION)
@@ -89,7 +100,8 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
                     .setLeaseDurationMillis(membershipService.getLeaseDurationMillis())
                     .build());
             responseObserver.onCompleted();
-        } catch (ClusterMembershipService.StaleTopologyException e) {
+        } catch (ClusterMembershipService.StaleTopologyException
+                | ClusterMembershipService.StaleTopologyEpochException e) {
             responseObserver.onError(staleTopologyStatus(e).asRuntimeException());
         } catch (NoSuchElementException e) {
             responseObserver.onError(
@@ -101,6 +113,40 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
             LOGGER.log(Level.SEVERE, "Failed to renew node heartbeat: " + request.getNodeId(), e);
             responseObserver.onError(Status.INTERNAL
                     .withDescription("Failed to renew node heartbeat: " + request.getNodeId())
+                    .withCause(e)
+                    .asRuntimeException());
+        }
+    }
+
+    @Override
+    public void deregisterNode(DeregisterNodeRequest request, StreamObserver<DeregisterNodeResponse> responseObserver) {
+        try {
+            NodeRole role = validateRole(request.getRole());
+            if (request.getNodeId().isBlank()) {
+                throw new IllegalArgumentException("node_id must not be empty");
+            }
+            long version = membershipService.deregisterNode(
+                    request.getNodeId(),
+                    role,
+                    request.getObservedTopologyEpoch(),
+                    request.getObservedTopologyVersion());
+            responseObserver.onNext(DeregisterNodeResponse.newBuilder()
+                    .setSuccess(true)
+                    .setContractVersion(ClusterMembershipService.CONTRACT_VERSION)
+                    .setTopologyEpoch(membershipService.getTopologyEpoch())
+                    .setTopologyVersion(version)
+                    .build());
+            responseObserver.onCompleted();
+        } catch (ClusterMembershipService.StaleTopologyException
+                | ClusterMembershipService.StaleTopologyEpochException e) {
+            responseObserver.onError(staleTopologyStatus(e).asRuntimeException());
+        } catch (IllegalArgumentException e) {
+            responseObserver.onError(
+                    Status.INVALID_ARGUMENT.withDescription(e.getMessage()).asRuntimeException());
+        } catch (Exception e) {
+            LOGGER.log(Level.SEVERE, "Failed to deregister node: " + request.getNodeId(), e);
+            responseObserver.onError(Status.INTERNAL
+                    .withDescription("Failed to deregister node: " + request.getNodeId())
                     .withCause(e)
                     .asRuntimeException());
         }
@@ -224,7 +270,7 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
         return Status.NOT_FOUND.withDescription("No node group registered for role: " + role);
     }
 
-    private Status staleTopologyStatus(ClusterMembershipService.StaleTopologyException error) {
+    private Status staleTopologyStatus(RuntimeException error) {
         return Status.FAILED_PRECONDITION.withDescription(error.getMessage());
     }
 }
