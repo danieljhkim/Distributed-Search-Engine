@@ -92,7 +92,12 @@ jobs:
             echo "TAGS=${VERSIONED}" >> "$GITHUB_OUTPUT"
           else
             LATEST="ghcr.io/${{ github.repository }}/${{ matrix.service }}:latest"
-            echo -e "TAGS=${VERSIONED}\n${LATEST}" >> "$GITHUB_OUTPUT"
+            {
+              echo "TAGS<<EOF"
+              echo "$VERSIONED"
+              echo "$LATEST"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build and push
