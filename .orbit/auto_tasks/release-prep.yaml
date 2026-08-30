@@ -51,8 +51,8 @@ template:
     semver bump; and every breaking-change candidate with commit/task evidence.
     Derive the candidate from RELEASING.md and the effective Maven version.
     In the present `v0.2.0` to `1.0.0-SNAPSHOT` baseline mismatch, report
-    `1.0.0` only as a human-confirmed-policy candidate; never silently inherit
-    a pre-1.0 policy or classify a breaking change autonomously.
+    `1.0.0` as a policy candidate; never silently inherit a pre-1.0 policy or
+    classify a breaking change autonomously.
 
     Locate open tasks with both the exact `Prepare v<X.Y.Z> release` title
     pattern and the `release` tag. Select the lexicographically smallest ID if
@@ -62,7 +62,7 @@ template:
     survey evidence, and stops before all release actions. Its context_files
     must contain only the existing dsearch release modification targets:
     `file:CHANGELOG.md` and `file:pom.xml`. If a canonical task already exists,
-    update only it with current evidence and retain its human approval boundary.
+    update only it with current evidence.
 
     Stop after the survey and canonical-task handoff. Do not edit files,
     CHANGELOG.md, or the Maven revision; commit; tag; push; publish; approve a
