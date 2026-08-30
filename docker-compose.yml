@@ -6,6 +6,7 @@ networks:
   dsearch-net:
 
 volumes:
+  coordinator-state:
   indexnode0-data:
 
 services:
@@ -26,10 +27,13 @@ services:
       COORDINATOR_PORT: "7000"
       COORDINATOR_HEALTH_PORT: "8080"
       APP_CONFIG_PATH: "app-config.docker.yaml"
+      COORDINATOR_STATE_FILE: "/data/coordinator-topology.properties"
     ports:
       - "17000:7000"
       - "18080:8080"
     restart: unless-stopped
+    volumes:
+      - coordinator-state:/data
 
   gateway:
     build:
