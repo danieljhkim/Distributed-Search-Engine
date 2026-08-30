@@ -37,6 +37,7 @@ public class ClusterMembershipService {
 
     public static final int CONTRACT_VERSION = 1;
 
+    private static final int LEGACY_STATE_FORMAT_VERSION = 1;
     private static final String STATE_FORMAT_VERSION_KEY = "state.format.version";
     private static final String BACKUP_SUFFIX = ".bak";
 
@@ -412,12 +413,15 @@ public class ClusterMembershipService {
     }
 
     private static void validateStateFormat(Properties properties) {
-        String serializedVersion = required(properties, STATE_FORMAT_VERSION_KEY);
-        int stateFormatVersion;
-        try {
-            stateFormatVersion = Integer.parseInt(serializedVersion);
-        } catch (NumberFormatException e) {
-            throw new IllegalStateException("Coordinator state has an invalid format version: " + serializedVersion, e);
+        String serializedVersion = properties.getProperty(STATE_FORMAT_VERSION_KEY);
+        int stateFormatVersion = LEGACY_STATE_FORMAT_VERSION;
+        if (serializedVersion != null) {
+            try {
+                stateFormatVersion = Integer.parseInt(serializedVersion);
+            } catch (NumberFormatException e) {
+                throw new IllegalStateException(
+                        "Coordinator state has an invalid format version: " + serializedVersion, e);
+            }
         }
         if (stateFormatVersion != CONTRACT_VERSION) {
             throw new IllegalStateException("Coordinator state format version " + stateFormatVersion

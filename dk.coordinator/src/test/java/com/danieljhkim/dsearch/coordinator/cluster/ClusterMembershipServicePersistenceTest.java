@@ -1,6 +1,7 @@
 package com.danieljhkim.dsearch.coordinator.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -14,6 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.List;
+import java.util.Properties;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -42,6 +44,38 @@ class ClusterMembershipServicePersistenceTest {
 
         recreated.registerNode(node("index-1"), NodeRole.NODE_ROLE_INDEX);
         assertTrue(recreated.getTopologyVersion() > registeredVersion);
+    }
+
+    @Test
+    void legacyStateWithoutFormatVersionRetainsTopology() throws IOException {
+        Path stateFile = tempDir.resolve("coordinator-topology.properties");
+        ClusterMembershipService beforeMigration =
+                new ClusterMembershipService(config(), stateFile, java.time.Clock.systemUTC());
+        beforeMigration.registerNode(node("index-0"), NodeRole.NODE_ROLE_INDEX);
+        String epoch = beforeMigration.getTopologyEpoch();
+        long version = beforeMigration.getTopologyVersion();
+
+        Properties legacyProperties = new Properties();
+        try (var input = Files.newInputStream(stateFile)) {
+            legacyProperties.load(input);
+        }
+        legacyProperties.remove("state.format.version");
+        assertFalse(legacyProperties.containsKey("state.format.version"));
+        try (var output = Files.newOutputStream(stateFile)) {
+            legacyProperties.store(output, "legacy coordinator topology");
+        }
+
+        ClusterMembershipService recovered =
+                new ClusterMembershipService(config(), stateFile, java.time.Clock.systemUTC());
+
+        assertEquals(epoch, recovered.getTopologyEpoch());
+        assertEquals(version, recovered.getTopologyVersion());
+        NodeGroup.NodeInfo recoveredNode = recovered.getIndexGroup().getNode("index-0");
+        assertNotNull(recoveredNode);
+        assertEquals("localhost", recoveredNode.getHost());
+        assertEquals(5000, recoveredNode.getPort());
+        assertEquals(5100, recoveredNode.getHealthPort());
+        assertTrue(recoveredNode.isHealthy());
     }
 
     @Test
