@@ -14,6 +14,7 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 import lombok.Setter;
 
@@ -93,7 +94,10 @@ public class NodeGroupManager {
                 .setMinTopologyVersion(minimumVersion)
                 .build();
         try {
-            GetClusterInfoResponse response = coordinatorManager.nextClient().getClusterInfo(request);
+            GetClusterInfoResponse response = coordinatorManager
+                    .nextClient()
+                    .withDeadlineAfter(requestTimeoutMillis(), TimeUnit.MILLISECONDS)
+                    .getClusterInfo(request);
             NodeGroup group = NodeGroup.fromResponse(response, role);
             acceptResponse(role, response);
             acceptedTopologies.put(
@@ -170,6 +174,11 @@ public class NodeGroupManager {
     private int maxStalenessSeconds() {
         AppConfig.ServiceDiscoveryConfig config = defaultConfig.getServiceDiscovery();
         return config == null ? 0 : config.getMaxStalenessSeconds();
+    }
+
+    private long requestTimeoutMillis() {
+        AppConfig.RequestLimitsConfig limits = defaultConfig.getRequestLimits();
+        return Math.max(1L, limits != null ? limits.getRequestTimeoutMillis() : 3000L);
     }
 
     private static String describe(String reason, Exception cause) {

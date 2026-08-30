@@ -3,12 +3,14 @@ package com.danieljhkim.dsearch.ml.embedding;
 import ai.djl.inference.Predictor;
 import ai.djl.translate.TranslateException;
 import com.danieljhkim.dsearch.common.config.AppConfig;
+import com.danieljhkim.dsearch.common.validation.RequestAdmissionException;
 import java.io.Closeable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -23,6 +25,8 @@ public class TextEmbeddingService implements TextEmbedder, Closeable {
     private final boolean predictorPerCall;
     private final BlockingQueue<Predictor<String, float[]>> predictorPool;
     private final List<Predictor<String, float[]>> pooledPredictors;
+    private final Semaphore predictorAdmission;
+    private final int retryAfterMillis;
     private final AtomicInteger embeddingDimension = new AtomicInteger();
     private final AtomicBoolean closed = new AtomicBoolean();
     private final ReentrantReadWriteLock lifecycleLock = new ReentrantReadWriteLock();
@@ -39,6 +43,10 @@ public class TextEmbeddingService implements TextEmbedder, Closeable {
         this.modelManager = Objects.requireNonNull(modelManager, "modelManager");
         this.predictorPerCall = predictorPerCall;
         predictorPoolSize = Math.max(1, predictorPoolSize);
+        this.predictorAdmission = new Semaphore(predictorPoolSize, true);
+        AppConfig.RequestLimitsConfig requestLimits =
+                modelManager.getAppConfig().getRequestLimits();
+        this.retryAfterMillis = Math.max(1, requestLimits != null ? requestLimits.getRetryAfterMillis() : 100);
         if (predictorPerCall) {
             this.predictorPool = null;
             this.pooledPredictors = new ArrayList<>();
@@ -109,18 +117,25 @@ public class TextEmbeddingService implements TextEmbedder, Closeable {
             return new float[0];
         }
 
-        if (predictorPerCall) {
-            return embedWithNewPredictor(text);
+        if (!predictorAdmission.tryAcquire()) {
+            throw new RequestAdmissionException("embedding predictor", retryAfterMillis);
         }
-
-        Predictor<String, float[]> predictor = borrowPredictor();
         try {
-            return validateEmbedding(predictor.predict(text));
-        } catch (TranslateException e) {
-            LOGGER.log(Level.SEVERE, "Failed to compute embedding", e);
-            throw new RuntimeException("Failed to compute embedding", e);
+            if (predictorPerCall) {
+                return embedWithNewPredictor(text);
+            }
+
+            Predictor<String, float[]> predictor = borrowPredictor();
+            try {
+                return validateEmbedding(predictor.predict(text));
+            } catch (TranslateException e) {
+                LOGGER.log(Level.SEVERE, "Failed to compute embedding", e);
+                throw new RuntimeException("Failed to compute embedding", e);
+            } finally {
+                returnPredictor(predictor);
+            }
         } finally {
-            returnPredictor(predictor);
+            predictorAdmission.release();
         }
     }
 
@@ -156,12 +171,11 @@ public class TextEmbeddingService implements TextEmbedder, Closeable {
     }
 
     private Predictor<String, float[]> borrowPredictor() {
-        try {
-            return predictorPool.take();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException("Interrupted while waiting for embedding predictor", e);
+        Predictor<String, float[]> predictor = predictorPool.poll();
+        if (predictor == null) {
+            throw new RequestAdmissionException("embedding predictor", retryAfterMillis);
         }
+        return predictor;
     }
 
     private void returnPredictor(Predictor<String, float[]> predictor) {

@@ -3,6 +3,11 @@ package com.danieljhkim.dsearch.common.validation;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import com.danieljhkim.dsearch.common.config.AppConfig;
+import com.danieljhkim.dsearch.proto.common.FacetRequest;
+import com.danieljhkim.dsearch.proto.index.Document;
+import com.danieljhkim.dsearch.proto.index.Field;
+import com.danieljhkim.dsearch.proto.query.QueryRequest;
 import org.junit.jupiter.api.Test;
 
 class RequestLimitsValidatorTest {
@@ -54,5 +59,67 @@ class RequestLimitsValidatorTest {
         IllegalArgumentException exception = assertThrows(
                 IllegalArgumentException.class, () -> RequestLimitsValidator.validateQueryLength(longQuery, 1024));
         assert exception.getMessage().contains("Query length (2048) exceeds maximum allowed (1024)");
+    }
+
+    @Test
+    void overflowSizedPageIsRejectedBeforeFanout() {
+        AppConfig.RequestLimitsConfig limits = new AppConfig.RequestLimitsConfig();
+        limits.setMaxSize(1000);
+        limits.setMaxResultWindow(10000);
+
+        IllegalArgumentException exception = assertThrows(
+                IllegalArgumentException.class,
+                () -> RequestLimitsValidator.validateSearchWindow("query", Integer.MAX_VALUE, 1000, limits));
+
+        assert exception.getMessage().contains("result window");
+        assert exception.getMessage().contains("cursor pagination");
+    }
+
+    @Test
+    void deeplyNestedFacetsAreRejectedAtTheGrpcBoundary() {
+        AppConfig.RequestLimitsConfig limits = new AppConfig.RequestLimitsConfig();
+        limits.setMaxFacetDepth(2);
+        FacetRequest depthThree = FacetRequest.newBuilder()
+                .setField("level-1")
+                .addNested(FacetRequest.newBuilder()
+                        .setField("level-2")
+                        .addNested(FacetRequest.newBuilder().setField("level-3")))
+                .build();
+        QueryRequest request = QueryRequest.newBuilder()
+                .setQueryString("query")
+                .setSize(10)
+                .addFacets(depthThree)
+                .build();
+
+        IllegalArgumentException exception = assertThrows(
+                IllegalArgumentException.class, () -> RequestLimitsValidator.validateQueryRequest(request, limits));
+
+        assert exception.getMessage().contains("Facet depth (3)");
+    }
+
+    @Test
+    void oversizedDocumentFieldsAndAggregatePayloadAreRejected() {
+        AppConfig.RequestLimitsConfig fieldLimits = new AppConfig.RequestLimitsConfig();
+        fieldLimits.setMaxFieldsPerDocument(1);
+        Document tooManyFields = Document.newBuilder()
+                .setId("doc")
+                .addFields(Field.newBuilder().setName("one").setValue("1"))
+                .addFields(Field.newBuilder().setName("two").setValue("2"))
+                .build();
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> RequestLimitsValidator.validateDocument(tooManyFields, fieldLimits));
+
+        AppConfig.RequestLimitsConfig payloadLimits = new AppConfig.RequestLimitsConfig();
+        payloadLimits.setMaxFieldValueBytes(1024);
+        payloadLimits.setMaxIndexPayloadBytes(8);
+        Document oversized = Document.newBuilder()
+                .setId("doc")
+                .addFields(Field.newBuilder().setName("body").setValue("payload"))
+                .build();
+        IllegalArgumentException exception = assertThrows(
+                IllegalArgumentException.class,
+                () -> RequestLimitsValidator.validateDocument(oversized, payloadLimits));
+        assert exception.getMessage().contains("Index payload bytes");
     }
 }

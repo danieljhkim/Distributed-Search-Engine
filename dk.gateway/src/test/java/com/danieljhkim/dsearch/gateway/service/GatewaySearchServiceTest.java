@@ -2,6 +2,7 @@ package com.danieljhkim.dsearch.gateway.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -24,6 +25,7 @@ import com.danieljhkim.dsearch.proto.query.QueryResponse;
 import com.danieljhkim.dsearch.proto.query.QueryServiceGrpc;
 import com.danieljhkim.dsearch.proto.query.SearchHit;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -45,6 +47,7 @@ class GatewaySearchServiceTest {
     @BeforeEach
     void setUp() {
         service = new GatewaySearchService(qnClientManager, new QueryResponseMapper(), new QueryRequestMapper());
+        when(queryStub.withDeadlineAfter(anyLong(), any(TimeUnit.class))).thenReturn(queryStub);
     }
 
     @Test

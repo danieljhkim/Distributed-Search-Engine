@@ -16,7 +16,12 @@ import ai.djl.inference.Predictor;
 import ai.djl.repository.zoo.ZooModel;
 import ai.djl.translate.TranslateException;
 import com.danieljhkim.dsearch.common.config.AppConfig;
+import com.danieljhkim.dsearch.common.validation.RequestAdmissionException;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import org.junit.jupiter.api.Test;
@@ -216,6 +221,38 @@ class TextEmbeddingServiceTest {
         assertArrayEquals(new float[] {1.0f}, service.embed("one-shot"));
         verify(predictor).close();
         service.close();
+    }
+
+    @Test
+    void concurrentPredictorOverloadIsRejectedWithoutWaiting() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Predictor<String, float[]> predictor = mockPredictor();
+        ZooModel<String, float[]> model = mockModel();
+        when(model.newPredictor()).thenReturn(predictor);
+        when(predictor.predict("first")).thenAnswer(invocation -> {
+            started.countDown();
+            release.await(5, TimeUnit.SECONDS);
+            return new float[] {1.0f};
+        });
+        TextEmbeddingService service = new TextEmbeddingService(manager(model, config()), false, 1);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            var first = executor.submit(() -> service.embed("first"));
+            assertTrue(started.await(5, TimeUnit.SECONDS));
+
+            RequestAdmissionException overload =
+                    assertThrows(RequestAdmissionException.class, () -> service.embed("second"));
+            assertTrue(overload.getMessage().contains("retry after"));
+            verify(predictor, never()).predict("second");
+
+            release.countDown();
+            assertArrayEquals(new float[] {1.0f}, first.get(5, TimeUnit.SECONDS));
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+            service.close();
+        }
     }
 
     private static EmbeddingModelManager manager(ZooModel<String, float[]> model, AppConfig config) {

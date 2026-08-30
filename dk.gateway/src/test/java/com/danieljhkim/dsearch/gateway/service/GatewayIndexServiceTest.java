@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -24,6 +26,7 @@ import io.grpc.ManagedChannel;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -47,6 +50,9 @@ class GatewayIndexServiceTest {
     void setUp() {
         ownerClient = new NodeClient<>("1", indexStub, mock(ManagedChannel.class), "localhost", 5101);
         service = new GatewayIndexService(indexNodeClientManager);
+        lenient()
+                .when(indexStub.withDeadlineAfter(anyLong(), any(TimeUnit.class)))
+                .thenReturn(indexStub);
     }
 
     @Test

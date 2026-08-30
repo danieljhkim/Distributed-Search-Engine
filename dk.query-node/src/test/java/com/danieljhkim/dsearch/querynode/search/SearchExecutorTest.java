@@ -7,11 +7,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.enums.RoutingStrategy;
 import com.danieljhkim.dsearch.common.grpc.NodeClient;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.common.validation.RequestAdmissionException;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import com.danieljhkim.dsearch.proto.common.FacetBucket;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
@@ -32,8 +34,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.document.Document;
@@ -252,6 +256,45 @@ class SearchExecutorTest {
         assertThrows(
                 NullPointerException.class,
                 () -> new SearchExecutor(Executors.newSingleThreadExecutor(), mock(NodeClientManager.class), null));
+    }
+
+    @Test
+    void concurrentFanoutOverloadIsRejectedWithoutQueuing() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        BaseIndexService blockingService = (query, nodeId, shardId, page, size, type) -> {
+            started.countDown();
+            try {
+                release.await(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return result(hit("doc", 1.0f));
+        };
+        AppConfig.RequestLimitsConfig limits = new AppConfig.RequestLimitsConfig();
+        limits.setMaxConcurrentFanoutCalls(1);
+        limits.setRequestTimeoutMillis(5000);
+        shardExecutor = Executors.newCachedThreadPool();
+        SearchExecutor executor =
+                new SearchExecutor(shardExecutor, manager(node("1", true)), Duration.ofSeconds(5), limits);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        try {
+            var first =
+                    caller.submit(() -> executor.search("query", "shard-a", 0, 10, SearchType.BM25, blockingService));
+            assertTrue(started.await(5, TimeUnit.SECONDS));
+
+            RequestAdmissionException overload = assertThrows(
+                    RequestAdmissionException.class,
+                    () -> executor.search("query", "shard-a", 0, 10, SearchType.BM25, blockingService));
+            assertTrue(overload.getMessage().contains("retry after"));
+
+            release.countDown();
+            assertEquals(
+                    "doc", first.get(5, TimeUnit.SECONDS).getHits().getFirst().getDocId());
+        } finally {
+            release.countDown();
+            caller.shutdownNow();
+        }
     }
 
     @Test

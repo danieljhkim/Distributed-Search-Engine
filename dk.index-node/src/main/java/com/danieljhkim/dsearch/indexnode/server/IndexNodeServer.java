@@ -1,5 +1,6 @@
 package com.danieljhkim.dsearch.indexnode.server;
 
+import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.grpc.GlobalExceptionInterceptor;
 import com.danieljhkim.dsearch.common.grpc.PrometheusGrpcServerInterceptor;
 import com.danieljhkim.dsearch.common.tracing.CorrelationIdServerInterceptor;
@@ -24,15 +25,30 @@ public class IndexNodeServer {
     private HTTPServer metricsServer;
 
     public IndexNodeServer(int port, IndexManager indexManager) {
-        this(port, port + 4000, indexManager);
+        this(port, port + 4000, indexManager, new AppConfig.RequestLimitsConfig());
+    }
+
+    public IndexNodeServer(int port, IndexManager indexManager, AppConfig appConfig) {
+        this(
+                port,
+                port + 4000,
+                indexManager,
+                appConfig.getRequestLimits() != null
+                        ? appConfig.getRequestLimits()
+                        : new AppConfig.RequestLimitsConfig());
     }
 
     IndexNodeServer(int port, int metricsPort, IndexManager indexManager) {
-        IndexServiceImpl indexService = new IndexServiceImpl(indexManager);
+        this(port, metricsPort, indexManager, new AppConfig.RequestLimitsConfig());
+    }
+
+    IndexNodeServer(int port, int metricsPort, IndexManager indexManager, AppConfig.RequestLimitsConfig requestLimits) {
+        IndexServiceImpl indexService = new IndexServiceImpl(indexManager, requestLimits);
         ServerServiceDefinition interceptedService =
                 ServerInterceptors.intercept(indexService, new GlobalExceptionInterceptor());
 
         this.server = NettyServerBuilder.forPort(port)
+                .maxInboundMessageSize(Math.max(1, requestLimits.getMaxGrpcInboundBytes()))
                 .addService(interceptedService)
                 .intercept(new CorrelationIdServerInterceptor())
                 .intercept(new PrometheusGrpcServerInterceptor())

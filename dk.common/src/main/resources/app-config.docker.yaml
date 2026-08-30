@@ -44,8 +44,22 @@ gatewayNodes:
       healthPort: 8180
 
 requestLimits:
+  requestTimeoutMillis: 3000
   maxSize: 1000
+  maxResultWindow: 10000
   maxQueryLength: 1024
+  maxHttpBodyBytes: 1048576
+  maxGrpcInboundBytes: 2097152
+  maxDocumentIdBytes: 512
+  maxFieldsPerDocument: 100
+  maxFieldValueBytes: 65536
+  maxIndexPayloadBytes: 1048576
+  maxFilterClauses: 100
+  maxFacetCount: 20
+  maxFacetDepth: 3
+  maxConcurrentHttpRequests: 128
+  maxConcurrentFanoutCalls: 64
+  retryAfterMillis: 100
 
 indexing:
   maxBufferedOpsPerShard: 100

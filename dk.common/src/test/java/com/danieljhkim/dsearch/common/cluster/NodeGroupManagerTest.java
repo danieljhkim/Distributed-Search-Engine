@@ -3,6 +3,7 @@ package com.danieljhkim.dsearch.common.cluster;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -19,6 +20,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 class NodeGroupManagerTest {
@@ -81,6 +83,7 @@ class NodeGroupManagerTest {
         NodeClientManager<ClusterServiceGrpc.ClusterServiceBlockingStub> clientManager = mock(NodeClientManager.class);
         ClusterServiceGrpc.ClusterServiceBlockingStub stub = mock(ClusterServiceGrpc.ClusterServiceBlockingStub.class);
         when(clientManager.nextClient()).thenReturn(stub);
+        when(stub.withDeadlineAfter(anyLong(), any(TimeUnit.class))).thenReturn(stub);
 
         org.mockito.stubbing.OngoingStubbing<GetClusterInfoResponse> stubbing = when(stub.getClusterInfo(any()));
         for (Object response : responses) {

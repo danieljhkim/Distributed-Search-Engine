@@ -135,12 +135,34 @@ public class AppConfig {
     @Setter
     @Getter
     public static class RequestLimitsConfig {
+        private int requestTimeoutMillis = 3000;
         private int maxSize = 1000;
+        private int maxResultWindow = 10000;
         private int maxQueryLength = 1024;
+        private int maxHttpBodyBytes = 1048576;
+        private int maxGrpcInboundBytes = 2097152;
+        private int maxDocumentIdBytes = 512;
+        private int maxFieldsPerDocument = 100;
+        private int maxFieldValueBytes = 65536;
+        private int maxIndexPayloadBytes = 1048576;
+        private int maxFilterClauses = 100;
+        private int maxFacetCount = 20;
+        private int maxFacetDepth = 3;
+        private int maxConcurrentHttpRequests = 128;
+        private int maxConcurrentFanoutCalls = 64;
+        private int retryAfterMillis = 100;
 
         @Override
         public String toString() {
-            return "RequestLimitsConfig{" + "maxSize=" + maxSize + ", maxQueryLength=" + maxQueryLength + '}';
+            return "RequestLimitsConfig{" + "requestTimeoutMillis=" + requestTimeoutMillis + ", maxSize=" + maxSize
+                    + ", maxResultWindow=" + maxResultWindow + ", maxQueryLength=" + maxQueryLength
+                    + ", maxHttpBodyBytes=" + maxHttpBodyBytes + ", maxGrpcInboundBytes=" + maxGrpcInboundBytes
+                    + ", maxDocumentIdBytes=" + maxDocumentIdBytes + ", maxFieldsPerDocument="
+                    + maxFieldsPerDocument + ", maxFieldValueBytes=" + maxFieldValueBytes
+                    + ", maxIndexPayloadBytes=" + maxIndexPayloadBytes + ", maxFilterClauses=" + maxFilterClauses
+                    + ", maxFacetCount=" + maxFacetCount + ", maxFacetDepth=" + maxFacetDepth
+                    + ", maxConcurrentHttpRequests=" + maxConcurrentHttpRequests + ", maxConcurrentFanoutCalls="
+                    + maxConcurrentFanoutCalls + ", retryAfterMillis=" + retryAfterMillis + '}';
         }
     }
 

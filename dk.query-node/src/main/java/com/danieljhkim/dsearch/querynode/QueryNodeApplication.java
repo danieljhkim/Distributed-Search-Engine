@@ -52,8 +52,11 @@ public class QueryNodeApplication {
         NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager =
                 NodeClientManager.loadClientManager(
                         NodeRole.NODE_ROLE_INDEX, IndexServiceGrpc::newBlockingStub, nodeGroupManager);
-        SearchExecutor searchExecutor = new SearchExecutor(nodeClientManager);
-        BaseIndexService indexService = new IndexService(nodeClientManager);
+        AppConfig.RequestLimitsConfig requestLimits = appConfig.getRequestLimits() != null
+                ? appConfig.getRequestLimits()
+                : new AppConfig.RequestLimitsConfig();
+        SearchExecutor searchExecutor = new SearchExecutor(nodeClientManager, requestLimits);
+        BaseIndexService indexService = new IndexService(nodeClientManager, requestLimits);
         QueryNodeServer queryNodeServer = new QueryNodeServer(grpcPort, searchExecutor, indexService, appConfig);
         NodeMembershipAgent membershipAgent = createMembershipAgent(appConfig, environment, grpcPort, healthPort);
         return new QueryNodeRuntime(

@@ -46,7 +46,7 @@ public class IndexNodeApplication {
         });
         IndexManager indexManager =
                 waitForIndexManager(baseDir, indexingConfig, fieldConfigs, indexManagerReference, startupReadiness);
-        IndexNodeServer indexNodeServer = new IndexNodeServer(grpcPort, indexManager);
+        IndexNodeServer indexNodeServer = new IndexNodeServer(grpcPort, indexManager, appConfig);
         NodeMembershipAgent membershipAgent = createMembershipAgent(appConfig, System.getenv(), grpcPort, healthPort);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {

@@ -179,6 +179,30 @@ class IndexServiceTest {
     }
 
     @Test
+    void callerCancellationPropagatesToHangingDownstreamCall() throws Exception {
+        grpcService.block = true;
+        Context.CancellableContext requestContext = Context.current().withCancellation();
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            var call = executor.submit(() -> requestContext.call(() -> indexService.searchShardTopK(
+                    "coffee", "node-1", "shard-a", 10, SearchType.BM25, null, false, null, Duration.ofSeconds(5))));
+            assertTrue(await(grpcService.started));
+
+            requestContext.cancel(new RuntimeException("client disconnected"));
+
+            ExecutionException error = assertThrows(ExecutionException.class, () -> call.get(5, TimeUnit.SECONDS));
+            assertTrue(error.getCause() instanceof StatusRuntimeException);
+            assertEquals(
+                    Status.Code.CANCELLED,
+                    ((StatusRuntimeException) error.getCause()).getStatus().getCode());
+            assertTrue(await(grpcService.cancelled));
+        } finally {
+            requestContext.cancel(null);
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void defaultInterfaceMethodsPreserveBasicSearchContract() {
         SearchResult expected = new SearchResult(List.of(), 0, 0);
         BaseIndexService basic = (query, node, shard, page, size, type) -> expected;
