@@ -520,7 +520,7 @@ class SearchExecutorTest {
                     String id = searcher.storedFields().document(scoreDoc.doc).get("id");
                     hits.add(hit(id, scoreDoc.score));
                 }
-                return new SearchResult(hits, topDocs.totalHits.value, 0);
+                return new SearchResult(hits, topDocs.totalHits.value(), 0);
             }
         }
     }

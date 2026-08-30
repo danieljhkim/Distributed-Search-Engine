@@ -47,10 +47,10 @@ class FilterQueryBuilderTest {
         BooleanQuery booleanQuery = assertInstanceOf(BooleanQuery.class, query);
         assertEquals(2, booleanQuery.clauses().size());
         assertInstanceOf(MatchAllDocsQuery.class, clauseQuery(booleanQuery, 0));
-        assertEquals(BooleanClause.Occur.MUST, booleanQuery.clauses().get(0).getOccur());
+        assertEquals(BooleanClause.Occur.MUST, booleanQuery.clauses().get(0).occur());
 
         TermQuery excluded = assertInstanceOf(TermQuery.class, clauseQuery(booleanQuery, 1));
-        assertEquals(BooleanClause.Occur.MUST_NOT, booleanQuery.clauses().get(1).getOccur());
+        assertEquals(BooleanClause.Occur.MUST_NOT, booleanQuery.clauses().get(1).occur());
         assertEquals("status", excluded.getTerm().field());
         assertEquals("archived", excluded.getTerm().text());
     }
@@ -62,7 +62,7 @@ class FilterQueryBuilderTest {
         BooleanQuery booleanQuery = assertInstanceOf(BooleanQuery.class, query);
         assertEquals(1, booleanQuery.getMinimumNumberShouldMatch());
         assertEquals(2, booleanQuery.clauses().size());
-        assertTrue(booleanQuery.clauses().stream().allMatch(clause -> clause.getOccur() == BooleanClause.Occur.SHOULD));
+        assertTrue(booleanQuery.clauses().stream().allMatch(clause -> clause.occur() == BooleanClause.Occur.SHOULD));
 
         TermQuery first = assertInstanceOf(TermQuery.class, clauseQuery(booleanQuery, 0));
         TermQuery second = assertInstanceOf(TermQuery.class, clauseQuery(booleanQuery, 1));
@@ -79,12 +79,12 @@ class FilterQueryBuilderTest {
         BooleanQuery booleanQuery = assertInstanceOf(BooleanQuery.class, query);
         assertEquals(3, booleanQuery.clauses().size());
         assertInstanceOf(MatchAllDocsQuery.class, clauseQuery(booleanQuery, 0));
-        assertEquals(BooleanClause.Occur.MUST, booleanQuery.clauses().get(0).getOccur());
+        assertEquals(BooleanClause.Occur.MUST, booleanQuery.clauses().get(0).occur());
 
         TermQuery firstExcluded = assertInstanceOf(TermQuery.class, clauseQuery(booleanQuery, 1));
         TermQuery secondExcluded = assertInstanceOf(TermQuery.class, clauseQuery(booleanQuery, 2));
-        assertEquals(BooleanClause.Occur.MUST_NOT, booleanQuery.clauses().get(1).getOccur());
-        assertEquals(BooleanClause.Occur.MUST_NOT, booleanQuery.clauses().get(2).getOccur());
+        assertEquals(BooleanClause.Occur.MUST_NOT, booleanQuery.clauses().get(1).occur());
+        assertEquals(BooleanClause.Occur.MUST_NOT, booleanQuery.clauses().get(2).occur());
         assertEquals("spam", firstExcluded.getTerm().text());
         assertEquals("deleted", secondExcluded.getTerm().text());
     }
@@ -120,7 +120,7 @@ class FilterQueryBuilderTest {
 
         BooleanQuery booleanQuery = assertInstanceOf(BooleanQuery.class, query);
         assertEquals(2, booleanQuery.clauses().size());
-        assertTrue(booleanQuery.clauses().stream().allMatch(clause -> clause.getOccur() == BooleanClause.Occur.MUST));
+        assertTrue(booleanQuery.clauses().stream().allMatch(clause -> clause.occur() == BooleanClause.Occur.MUST));
 
         TermQuery statusQuery = assertInstanceOf(TermQuery.class, clauseQuery(booleanQuery, 0));
         assertEquals("status", statusQuery.getTerm().field());
@@ -156,7 +156,7 @@ class FilterQueryBuilderTest {
     }
 
     private static Query clauseQuery(BooleanQuery query, int index) {
-        return query.clauses().get(index).getQuery();
+        return query.clauses().get(index).query();
     }
 
     private static Filter filter(String field, FilterOperator operator, String... values) {
