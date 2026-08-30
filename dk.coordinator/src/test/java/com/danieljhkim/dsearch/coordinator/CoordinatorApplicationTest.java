@@ -52,6 +52,10 @@ class CoordinatorApplicationTest {
                     .toURL()
                     .openConnection();
             assertEquals(200, health.getResponseCode());
+            HttpURLConnection readiness = (HttpURLConnection) URI.create("http://localhost:" + healthPort + "/readyz")
+                    .toURL()
+                    .openConnection();
+            assertEquals(200, readiness.getResponseCode());
         } finally {
             channel.shutdownNow().awaitTermination(5, TimeUnit.SECONDS);
             runtime.shutdown();

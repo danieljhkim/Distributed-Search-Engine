@@ -47,6 +47,11 @@ requestLimits:
   maxSize: 1000
   maxQueryLength: 1024
 
+indexing:
+  maxBufferedOpsPerShard: 100
+  maxFlushIntervalSeconds: 5
+  minimumFreeDiskBytes: 104857600
+
 coordinatorNodes:
   routingStrategy: "ROUND_ROBIN"
   componentLabel: "dsearch-coordinator-node"

@@ -17,6 +17,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -36,10 +37,16 @@ public class IndexNodeApplication {
         List<FieldConfig> fieldConfigs = appConfig.getFieldConfigs();
 
         IndexingRuntimeConfig indexingConfig = resolveIndexingConfig(appConfig, System.getenv());
-        IndexManager indexManager = new IndexManager(
-                baseDir, indexingConfig.maxBufferedOpsPerShard(), indexingConfig.maxFlushInterval(), fieldConfigs);
+        AtomicReference<IndexManager> indexManagerReference = new AtomicReference<>();
+        AtomicReference<HealthHttpServer.Readiness> startupReadiness =
+                new AtomicReference<>(HealthHttpServer.Readiness.notReady("index_initializing"));
+        HttpServer healthServer = HealthHttpServer.start(healthPort, "index-node", () -> {
+            IndexManager manager = indexManagerReference.get();
+            return manager == null ? startupReadiness.get() : manager.readiness();
+        });
+        IndexManager indexManager =
+                waitForIndexManager(baseDir, indexingConfig, fieldConfigs, indexManagerReference, startupReadiness);
         IndexNodeServer indexNodeServer = new IndexNodeServer(grpcPort, indexManager);
-        HttpServer healthServer = HealthHttpServer.start(healthPort, "index-node");
         NodeMembershipAgent membershipAgent = createMembershipAgent(appConfig, System.getenv(), grpcPort, healthPort);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -63,7 +70,7 @@ public class IndexNodeApplication {
         }));
 
         LOGGER.info(() -> "IndexNode gRPC server started on port " + grpcPort);
-        LOGGER.info(() -> "IndexNode health endpoint on port " + healthPort + " at /health");
+        LOGGER.info(() -> "IndexNode liveness endpoint on port " + healthPort + " at /livez and readiness at /readyz");
 
         indexNodeServer.startAsync();
         if (membershipAgent != null) {
@@ -95,13 +102,45 @@ public class IndexNodeApplication {
         int maxFlushIntervalSeconds = config != null
                 ? config.getMaxFlushIntervalSeconds()
                 : (int) IndexManager.DEFAULT_MAX_FLUSH_INTERVAL.toSeconds();
+        long minimumFreeDiskBytes =
+                config != null ? config.getMinimumFreeDiskBytes() : IndexManager.DEFAULT_MINIMUM_FREE_DISK_BYTES;
 
         maxBufferedOpsPerShard =
                 readPositiveInt(environment, "INDEX_NODE_MAX_BUFFERED_OPS_PER_SHARD", maxBufferedOpsPerShard);
         maxFlushIntervalSeconds =
                 readPositiveInt(environment, "INDEX_NODE_MAX_FLUSH_INTERVAL_SECONDS", maxFlushIntervalSeconds);
+        minimumFreeDiskBytes =
+                readNonNegativeLong(environment, "INDEX_NODE_MINIMUM_FREE_DISK_BYTES", minimumFreeDiskBytes);
 
-        return new IndexingRuntimeConfig(maxBufferedOpsPerShard, Duration.ofSeconds(maxFlushIntervalSeconds));
+        return new IndexingRuntimeConfig(
+                maxBufferedOpsPerShard, Duration.ofSeconds(maxFlushIntervalSeconds), minimumFreeDiskBytes);
+    }
+
+    private static IndexManager waitForIndexManager(
+            Path baseDir,
+            IndexingRuntimeConfig indexingConfig,
+            List<FieldConfig> fieldConfigs,
+            AtomicReference<IndexManager> indexManagerReference,
+            AtomicReference<HealthHttpServer.Readiness> startupReadiness)
+            throws InterruptedException {
+        while (true) {
+            try {
+                IndexManager manager = new IndexManager(
+                        baseDir,
+                        indexingConfig.maxBufferedOpsPerShard(),
+                        indexingConfig.maxFlushInterval(),
+                        fieldConfigs,
+                        new com.danieljhkim.dsearch.ml.embedding.TextEmbeddingService(),
+                        indexingConfig.minimumFreeDiskBytes());
+                indexManagerReference.set(manager);
+                return manager;
+            } catch (RuntimeException e) {
+                String reason = "index_initialization_failed:" + e.getClass().getSimpleName();
+                startupReadiness.set(HealthHttpServer.Readiness.notReady(reason));
+                LOGGER.log(Level.WARNING, "Index node is live but not ready; retrying initialization", e);
+                Thread.sleep(1000);
+            }
+        }
     }
 
     private static int readPositiveInt(Map<String, String> environment, String name, int defaultValue) {
@@ -117,5 +156,18 @@ public class IndexNodeApplication {
         return parsedValue;
     }
 
-    static record IndexingRuntimeConfig(int maxBufferedOpsPerShard, Duration maxFlushInterval) {}
+    private static long readNonNegativeLong(Map<String, String> environment, String name, long defaultValue) {
+        String rawValue = environment.get(name);
+        if (rawValue == null || rawValue.isBlank()) {
+            return defaultValue;
+        }
+        long parsedValue = Long.parseLong(rawValue);
+        if (parsedValue < 0) {
+            throw new IllegalArgumentException(name + " must not be negative");
+        }
+        return parsedValue;
+    }
+
+    static record IndexingRuntimeConfig(
+            int maxBufferedOpsPerShard, Duration maxFlushInterval, long minimumFreeDiskBytes) {}
 }

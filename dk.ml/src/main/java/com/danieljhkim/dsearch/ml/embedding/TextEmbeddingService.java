@@ -96,6 +96,14 @@ public class TextEmbeddingService implements TextEmbedder, Closeable {
         return embeddings;
     }
 
+    /**
+     * Exposes model admission state without borrowing a predictor. This is used by node readiness
+     * checks and remains independent of request traffic.
+     */
+    public boolean isReady() {
+        return !closed.get() && modelManager.isDefaultModelReady();
+    }
+
     private float[] embedOpen(String text) {
         if (text == null || text.isBlank()) {
             return new float[0];

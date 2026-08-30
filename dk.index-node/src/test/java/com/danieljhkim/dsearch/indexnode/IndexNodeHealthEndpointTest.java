@@ -14,8 +14,9 @@ import org.junit.jupiter.api.Test;
 class IndexNodeHealthEndpointTest {
 
     @Test
-    void healthEndpointReportsUpAndRejectsNonGetRequests() throws Exception {
-        HttpServer server = HealthHttpServer.start(0, "index-node");
+    void livenessStaysAvailableWhileReadinessReportsDependencyFailure() throws Exception {
+        HttpServer server = HealthHttpServer.start(
+                0, "index-node", () -> HealthHttpServer.Readiness.notReady("disk_space_below_threshold"));
         try {
             int port = server.getAddress().getPort();
             HttpClient client = HttpClient.newHttpClient();
@@ -29,6 +30,23 @@ class IndexNodeHealthEndpointTest {
             assertEquals(200, health.statusCode());
             assertTrue(health.body().contains("\"status\":\"UP\""));
             assertTrue(health.body().contains("\"service\":\"index-node\""));
+
+            HttpResponse<String> liveness = client.send(
+                    HttpRequest.newBuilder()
+                            .uri(URI.create("http://localhost:" + port + "/livez"))
+                            .GET()
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, liveness.statusCode());
+
+            HttpResponse<String> readiness = client.send(
+                    HttpRequest.newBuilder()
+                            .uri(URI.create("http://localhost:" + port + "/readyz"))
+                            .GET()
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(503, readiness.statusCode());
+            assertTrue(readiness.body().contains("\"reason\":\"disk_space_below_threshold\""));
 
             HttpResponse<String> methodNotAllowed = client.send(
                     HttpRequest.newBuilder()

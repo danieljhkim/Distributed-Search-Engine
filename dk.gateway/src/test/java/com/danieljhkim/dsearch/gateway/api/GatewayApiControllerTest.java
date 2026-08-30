@@ -12,6 +12,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.danieljhkim.dsearch.common.cluster.NodeGroup;
+import com.danieljhkim.dsearch.common.cluster.NodeGroupManager;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
@@ -21,6 +23,7 @@ import com.danieljhkim.dsearch.gateway.config.MetricsConfig;
 import com.danieljhkim.dsearch.gateway.service.GatewayIndexService;
 import com.danieljhkim.dsearch.gateway.service.GatewaySearchService;
 import com.danieljhkim.dsearch.gateway.tracing.CorrelationIdFilter;
+import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import com.danieljhkim.dsearch.proto.common.FilterOperator;
 import com.danieljhkim.dsearch.proto.common.FusionStrategy;
 import com.danieljhkim.dsearch.proto.common.SearchType;
@@ -66,7 +69,7 @@ class GatewayApiControllerTest {
     private RestTemplate restTemplate;
 
     @MockBean
-    private AppConfig appConfig;
+    private NodeGroupManager nodeGroupManager;
 
     @Test
     void indexDocumentReturnsSuccessAndMapsRequestBody() throws Exception {
@@ -225,14 +228,17 @@ class GatewayApiControllerTest {
 
     @Test
     void clusterHealthReturnsAggregatedSuccessStatus() throws Exception {
-        when(appConfig.getIndexNodes()).thenReturn(nodeGroup("index-0", "127.0.0.1", 5000, 5100));
-        when(appConfig.getQueryNodes()).thenReturn(nodeGroup("query-0", "127.0.0.1", 6000, 6100));
-        when(appConfig.getCoordinatorNodes()).thenReturn(nodeGroup("coordinator-0", "127.0.0.1", 7000, 7100));
-        when(restTemplate.getForEntity("http://127.0.0.1:5100/health", String.class))
+        when(nodeGroupManager.getNodeGroup(NodeRole.NODE_ROLE_INDEX))
+                .thenReturn(nodeGroup(NodeRole.NODE_ROLE_INDEX, "index-0", "127.0.0.1", 5000, 5100));
+        when(nodeGroupManager.getNodeGroup(NodeRole.NODE_ROLE_QUERY))
+                .thenReturn(nodeGroup(NodeRole.NODE_ROLE_QUERY, "query-0", "127.0.0.1", 6000, 6100));
+        when(nodeGroupManager.getNodeGroup(NodeRole.NODE_ROLE_COORDINATOR))
+                .thenReturn(nodeGroup(NodeRole.NODE_ROLE_COORDINATOR, "coordinator-0", "127.0.0.1", 7000, 7100));
+        when(restTemplate.getForEntity("http://127.0.0.1:5100/readyz", String.class))
                 .thenReturn(ResponseEntity.ok("{\"status\":\"UP\"}"));
-        when(restTemplate.getForEntity("http://127.0.0.1:6100/health", String.class))
+        when(restTemplate.getForEntity("http://127.0.0.1:6100/readyz", String.class))
                 .thenReturn(ResponseEntity.ok("{\"status\":\"UP\"}"));
-        when(restTemplate.getForEntity("http://127.0.0.1:7100/health", String.class))
+        when(restTemplate.getForEntity("http://127.0.0.1:7100/readyz", String.class))
                 .thenReturn(ResponseEntity.ok("{\"status\":\"UP\"}"));
 
         mockMvc.perform(get("/cluster/health").header(REQUEST_ID_HEADER, "health-request-1"))
@@ -253,14 +259,17 @@ class GatewayApiControllerTest {
 
     @Test
     void clusterHealthReturnsDegradedWhenCoordinatorIsDown() throws Exception {
-        when(appConfig.getIndexNodes()).thenReturn(nodeGroup("index-0", "127.0.0.1", 5000, 5100));
-        when(appConfig.getQueryNodes()).thenReturn(nodeGroup("query-0", "127.0.0.1", 6000, 6100));
-        when(appConfig.getCoordinatorNodes()).thenReturn(nodeGroup("coordinator-0", "127.0.0.1", 7000, 7100));
-        when(restTemplate.getForEntity("http://127.0.0.1:5100/health", String.class))
+        when(nodeGroupManager.getNodeGroup(NodeRole.NODE_ROLE_INDEX))
+                .thenReturn(nodeGroup(NodeRole.NODE_ROLE_INDEX, "index-0", "127.0.0.1", 5000, 5100));
+        when(nodeGroupManager.getNodeGroup(NodeRole.NODE_ROLE_QUERY))
+                .thenReturn(nodeGroup(NodeRole.NODE_ROLE_QUERY, "query-0", "127.0.0.1", 6000, 6100));
+        when(nodeGroupManager.getNodeGroup(NodeRole.NODE_ROLE_COORDINATOR))
+                .thenReturn(nodeGroup(NodeRole.NODE_ROLE_COORDINATOR, "coordinator-0", "127.0.0.1", 7000, 7100));
+        when(restTemplate.getForEntity("http://127.0.0.1:5100/readyz", String.class))
                 .thenReturn(ResponseEntity.ok("{\"status\":\"UP\"}"));
-        when(restTemplate.getForEntity("http://127.0.0.1:6100/health", String.class))
+        when(restTemplate.getForEntity("http://127.0.0.1:6100/readyz", String.class))
                 .thenReturn(ResponseEntity.ok("{\"status\":\"UP\"}"));
-        when(restTemplate.getForEntity("http://127.0.0.1:7100/health", String.class))
+        when(restTemplate.getForEntity("http://127.0.0.1:7100/readyz", String.class))
                 .thenThrow(new RuntimeException("coordinator unavailable"));
 
         mockMvc.perform(get("/cluster/health"))
@@ -270,20 +279,51 @@ class GatewayApiControllerTest {
     }
 
     @Test
-    void clusterHealthOnlyProbesTheEffectiveConfiguredNodeSet() throws Exception {
-        when(appConfig.getIndexNodes()).thenReturn(nodeGroup("index-0", "127.0.0.1", 5000, 5100));
-        when(appConfig.getQueryNodes()).thenReturn(nodeGroup("query-0", "127.0.0.1", 6000, 6100));
-        when(appConfig.getCoordinatorNodes()).thenReturn(nodeGroup("coordinator-0", "127.0.0.1", 7000, 7100));
+    void clusterHealthOnlyProbesTheAuthoritativeNodeSet() throws Exception {
+        when(nodeGroupManager.getNodeGroup(NodeRole.NODE_ROLE_INDEX))
+                .thenReturn(nodeGroup(NodeRole.NODE_ROLE_INDEX, "index-0", "127.0.0.1", 5000, 5100));
+        when(nodeGroupManager.getNodeGroup(NodeRole.NODE_ROLE_QUERY))
+                .thenReturn(nodeGroup(NodeRole.NODE_ROLE_QUERY, "query-0", "127.0.0.1", 6000, 6100));
+        when(nodeGroupManager.getNodeGroup(NodeRole.NODE_ROLE_COORDINATOR))
+                .thenReturn(nodeGroup(NodeRole.NODE_ROLE_COORDINATOR, "coordinator-0", "127.0.0.1", 7000, 7100));
         when(restTemplate.getForEntity(any(String.class), org.mockito.ArgumentMatchers.eq(String.class)))
                 .thenReturn(ResponseEntity.ok("{\"status\":\"UP\"}"));
 
         mockMvc.perform(get("/cluster/health")).andExpect(status().isOk());
 
-        verify(restTemplate).getForEntity("http://127.0.0.1:5100/health", String.class);
-        verify(restTemplate).getForEntity("http://127.0.0.1:6100/health", String.class);
-        verify(restTemplate).getForEntity("http://127.0.0.1:7100/health", String.class);
-        verify(restTemplate, never()).getForEntity("http://127.0.0.1:5101/health", String.class);
-        verify(restTemplate, never()).getForEntity("http://127.0.0.1:6101/health", String.class);
+        verify(restTemplate).getForEntity("http://127.0.0.1:5100/readyz", String.class);
+        verify(restTemplate).getForEntity("http://127.0.0.1:6100/readyz", String.class);
+        verify(restTemplate).getForEntity("http://127.0.0.1:7100/readyz", String.class);
+        verify(restTemplate, never()).getForEntity("http://127.0.0.1:5101/readyz", String.class);
+        verify(restTemplate, never()).getForEntity("http://127.0.0.1:6101/readyz", String.class);
+    }
+
+    @Test
+    void gatewayLivenessRemainsAvailableWhenAuthoritativeTopologyIsLost() throws Exception {
+        when(nodeGroupManager.getNodeGroup(NodeRole.NODE_ROLE_INDEX))
+                .thenThrow(new IllegalStateException("coordinator unavailable"));
+
+        mockMvc.perform(get("/readyz"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.status").value("DOWN"))
+                .andExpect(jsonPath("$.reason").value("authoritative_topology_unavailable:IllegalStateException"));
+        mockMvc.perform(get("/livez"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"));
+    }
+
+    @Test
+    void gatewayReadinessRejectsAnEmptyAuthoritativeIndexTopology() throws Exception {
+        when(nodeGroupManager.getNodeGroup(NodeRole.NODE_ROLE_INDEX))
+                .thenReturn(emptyNodeGroup(NodeRole.NODE_ROLE_INDEX));
+        when(nodeGroupManager.getNodeGroup(NodeRole.NODE_ROLE_QUERY))
+                .thenReturn(nodeGroup(NodeRole.NODE_ROLE_QUERY, "query-0", "127.0.0.1", 6000, 6100));
+        when(nodeGroupManager.getNodeGroup(NodeRole.NODE_ROLE_COORDINATOR))
+                .thenReturn(nodeGroup(NodeRole.NODE_ROLE_COORDINATOR, "coordinator-0", "127.0.0.1", 7000, 7100));
+
+        mockMvc.perform(get("/readyz"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.reason").value("authoritative_index_topology_empty"));
     }
 
     @Test
@@ -460,16 +500,25 @@ class GatewayApiControllerTest {
                 .andExpect(header().string(REQUEST_ID_HEADER, "client-request-123"));
     }
 
-    private static AppConfig.NodeGroupConfig nodeGroup(String id, String host, int grpcPort, int healthPort) {
+    private static NodeGroup nodeGroup(NodeRole role, String id, String host, int grpcPort, int healthPort) {
         AppConfig.NodeConfig node = new AppConfig.NodeConfig();
         node.setId(id);
         node.setHost(host);
         node.setPort(grpcPort);
         node.setHealthPort(healthPort);
 
-        AppConfig.NodeGroupConfig group = new AppConfig.NodeGroupConfig();
+        com.danieljhkim.dsearch.common.config.AppConfig.NodeGroupConfig group =
+                new com.danieljhkim.dsearch.common.config.AppConfig.NodeGroupConfig();
         group.setNodes(List.of(node));
-        return group;
+        group.setRoutingStrategy(com.danieljhkim.dsearch.common.enums.RoutingStrategy.ROUND_ROBIN);
+        return NodeGroup.fromConfig(role, group);
+    }
+
+    private static NodeGroup emptyNodeGroup(NodeRole role) {
+        AppConfig.NodeGroupConfig group = new AppConfig.NodeGroupConfig();
+        group.setNodes(List.of());
+        group.setRoutingStrategy(com.danieljhkim.dsearch.common.enums.RoutingStrategy.ROUND_ROBIN);
+        return NodeGroup.fromConfig(role, group);
     }
 
     @TestConfiguration

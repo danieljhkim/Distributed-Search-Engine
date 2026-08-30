@@ -25,8 +25,8 @@ public class EmbeddingModelManager {
     private final String DEFAULT_ENGINE;
     private final ModelLoader modelLoader;
     private final Map<String, ZooModel<String, float[]>> modelCache = new ConcurrentHashMap<>();
-    private ZooModel<String, float[]> defaultModel;
-    private boolean closed;
+    private volatile ZooModel<String, float[]> defaultModel;
+    private volatile boolean closed;
 
     private EmbeddingModelManager() throws IOException {
         this(ConfigLoader.load(), EmbeddingModelManager::loadModel);
@@ -41,23 +41,23 @@ public class EmbeddingModelManager {
     }
 
     public static EmbeddingModelManager getInstance() {
-        if (INSTANCE == null) {
-            synchronized (EmbeddingModelManager.class) {
-                if (INSTANCE == null) {
-                    try {
-                        INSTANCE = new EmbeddingModelManager();
-                    } catch (IOException e) {
-                        LOGGER.log(Level.SEVERE, "Failed to initialize EmbeddingModelManager", e);
-                        throw new RuntimeException("Failed to initialize EmbeddingModelManager", e);
-                    }
-                    INSTANCE.init();
+        synchronized (EmbeddingModelManager.class) {
+            if (INSTANCE == null) {
+                try {
+                    INSTANCE = new EmbeddingModelManager();
+                } catch (IOException e) {
+                    LOGGER.log(Level.SEVERE, "Failed to initialize EmbeddingModelManager", e);
+                    throw new RuntimeException("Failed to initialize EmbeddingModelManager", e);
                 }
+            }
+            if (!INSTANCE.isDefaultModelReady()) {
+                INSTANCE.initializeDefaultModel();
             }
         }
         return INSTANCE;
     }
 
-    private synchronized void init() {
+    synchronized void initializeDefaultModel() {
         ensureOpen();
         LOGGER.info(() -> "Loading default embedding model: " + DEFAULT_MODEL_URL);
         this.defaultModel = loadAndCache(DEFAULT_MODEL_URL, DEFAULT_ENGINE);
@@ -89,6 +89,11 @@ public class EmbeddingModelManager {
             return cached;
         }
         return loadAndCache(modelUrl, engine);
+    }
+
+    /** True only after the configured default embedding model has loaded and before shutdown. */
+    public boolean isDefaultModelReady() {
+        return !closed && defaultModel != null;
     }
 
     public synchronized void close() {

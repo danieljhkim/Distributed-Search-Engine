@@ -163,7 +163,20 @@ public class NodeClientManager<T> {
         // from discovery, so it is identical in every process and across restarts. Discovery
         // only decides which of those nodes is currently reachable.
         NodeGroup configuredNodeGroup = nodeGroupManager.getConfiguredNodeGroup(role);
-        NodeGroup nodeGroup = useServiceDiscovery ? nodeGroupManager.getNodeGroup(role) : configuredNodeGroup;
+        NodeGroup nodeGroup = configuredNodeGroup;
+        boolean authoritativeTopologyAvailable = !useServiceDiscovery;
+        if (useServiceDiscovery) {
+            try {
+                nodeGroup = nodeGroupManager.getNodeGroup(role);
+                authoritativeTopologyAvailable = true;
+            } catch (IllegalStateException e) {
+                // A process must remain live while its coordinator is unavailable. Keep its
+                // configured ownership clients, but mark every one inactive until a later
+                // authoritative refresh succeeds; never route using static membership.
+                LOGGER.warning(() -> "Authoritative topology is unavailable during startup for " + role
+                        + "; starting with no ready downstream clients. Cause: " + e.getMessage());
+            }
+        }
         if (nodeGroup == null) {
             throw new IllegalStateException("No node group configured for role: " + role);
         }
@@ -172,7 +185,9 @@ public class NodeClientManager<T> {
                 new PrometheusGrpcClientInterceptor(componentLabel(nodeGroup));
         Map<String, NodeClient<T>> clientMap = new HashMap<>();
         for (NodeGroup.NodeInfo node : nodeGroup.getAllNodes()) {
-            clientMap.put(node.getNodeId(), createNodeClient(node, clientFactory, metricsInterceptor));
+            NodeClient<T> client = createNodeClient(node, clientFactory, metricsInterceptor);
+            client.setActive(authoritativeTopologyAvailable);
+            clientMap.put(node.getNodeId(), client);
         }
         // A configured node that is down when this process starts still owns its documents,
         // so keep a client for it; it stays inactive until discovery reports it healthy.

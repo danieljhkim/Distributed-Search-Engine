@@ -9,6 +9,7 @@ import com.danieljhkim.dsearch.coordinator.server.CoordinatorServer;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -40,13 +41,21 @@ public class CoordinatorApplication {
         ClusterMembershipService membershipService = new ClusterMembershipService(appConfig);
         CoordinatorServer server = new CoordinatorServer(port, membershipService);
         HealthCheckScheduler healthCheckScheduler = new HealthCheckScheduler(membershipService, appConfig);
-        HttpServer healthServer = HealthHttpServer.start(healthPort, "coordinator-node");
+        AtomicBoolean acceptingRequests = new AtomicBoolean();
+        HttpServer healthServer = HealthHttpServer.start(
+                healthPort,
+                "coordinator-node",
+                () -> acceptingRequests.get()
+                        ? HealthHttpServer.Readiness.up()
+                        : HealthHttpServer.Readiness.notReady("coordinator_starting"));
         try {
             server.startAsync();
             healthCheckScheduler.start();
+            acceptingRequests.set(true);
             LOGGER.info(() -> "Coordinator gRPC server started on port " + server.getPort());
-            return new CoordinatorRuntime(server, healthCheckScheduler, healthServer);
+            return new CoordinatorRuntime(server, healthCheckScheduler, healthServer, acceptingRequests);
         } catch (IOException | RuntimeException e) {
+            acceptingRequests.set(false);
             healthServer.stop(0);
             try {
                 healthCheckScheduler.shutdown();
@@ -76,12 +85,17 @@ public class CoordinatorApplication {
         private final CoordinatorServer server;
         private final HealthCheckScheduler healthCheckScheduler;
         private final HttpServer healthServer;
+        private final AtomicBoolean acceptingRequests;
 
         private CoordinatorRuntime(
-                CoordinatorServer server, HealthCheckScheduler healthCheckScheduler, HttpServer healthServer) {
+                CoordinatorServer server,
+                HealthCheckScheduler healthCheckScheduler,
+                HttpServer healthServer,
+                AtomicBoolean acceptingRequests) {
             this.server = server;
             this.healthCheckScheduler = healthCheckScheduler;
             this.healthServer = healthServer;
+            this.acceptingRequests = acceptingRequests;
         }
 
         void awaitTermination() throws InterruptedException {
@@ -97,6 +111,7 @@ public class CoordinatorApplication {
         }
 
         void shutdown() throws InterruptedException {
+            acceptingRequests.set(false);
             server.shutdown();
             healthCheckScheduler.shutdown();
             healthServer.stop(0);
