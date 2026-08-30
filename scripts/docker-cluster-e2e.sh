@@ -187,6 +187,35 @@ index_document_success() {
   assert_json "$HTTP_BODY" ".id == \"$id\" and .success == true" "index response confirms $id"
 }
 
+index_document_after_owner_rejoin() {
+  local id=$1
+  local payload=$2
+  local timeout_seconds=${3:-30}
+  local deadline=$((SECONDS + timeout_seconds))
+
+  while ((SECONDS < deadline)); do
+    http_request POST /api/v1/index "$payload"
+    if [[ "$HTTP_STATUS" == "200" ]]; then
+      assert_json "$HTTP_BODY" ".id == \"$id\" and .success == true" \
+        'rejoined owner confirms the previously rejected key'
+      return 0
+    fi
+    if [[ "$HTTP_STATUS" != "503" ]] || ! jq -e --arg id "$id" \
+      '.status == 503
+        and .path == "/api/v1/index"
+        and (.message | type == "string"
+          and contains("Owner node ")
+          and contains("document " + $id + " in partition")
+          and contains(" is not available; the mutation is not rerouted"))' \
+      <<<"$HTTP_BODY" >/dev/null 2>&1; then
+      fail "rejoined owner returned unexpected HTTP $HTTP_STATUS: $HTTP_BODY"
+    fi
+    sleep 1
+  done
+
+  fail "expired owner did not accept its key within ${timeout_seconds}s after automatic rejoin: $HTTP_STATUS $HTTP_BODY"
+}
+
 search_until() {
   local payload=$1
   local filter=$2
@@ -319,24 +348,40 @@ await_cluster_index_count 1 75
 
 live_owner_doc=
 expired_owner_doc=
-for candidate_number in $(seq 1 64); do
+ownership_probe_deadline=$((SECONDS + 45))
+candidate_number=1
+while ((candidate_number <= 64 && SECONDS < ownership_probe_deadline)); do
   candidate="ownership-probe-$candidate_number"
   payload=$(jq -nc --arg id "$candidate" \
     '{id:$id,partitionId:"tenant-a",fields:{title:"Ownership probe",content:"ownership probe search",category:"probe",year:"2026"}}')
   http_request POST /api/v1/index "$payload"
   if [[ "$HTTP_STATUS" == "200" ]]; then
     live_owner_doc=$candidate
-  elif [[ "$HTTP_STATUS" == "503" ]]; then
+  elif [[ "$HTTP_STATUS" == "503" ]] && jq -e --arg id "$candidate" \
+    '.status == 503
+      and .path == "/api/v1/index"
+      and (.message | type == "string"
+        and contains("Owner node ")
+        and contains("document " + $id + " in partition")
+        and contains(" is not available; the mutation is not rerouted"))' \
+    <<<"$HTTP_BODY" >/dev/null 2>&1; then
     expired_owner_doc=$candidate
+  elif jq -e \
+    '(.status == 504 and .path == "/api/v1/index" and (.message | contains("deadline exceeded")))
+      or (.status == 503 and .path == "/api/v1/index" and (.message | contains("Unable to resolve host dsearch-index-1")))' \
+    <<<"$HTTP_BODY" >/dev/null 2>&1; then
+    sleep 1
+    continue
   else
     fail "ownership probe returned unexpected HTTP $HTTP_STATUS: $HTTP_BODY"
   fi
   if [[ -n "$live_owner_doc" && -n "$expired_owner_doc" ]]; then
     break
   fi
+  candidate_number=$((candidate_number + 1))
 done
 [[ -n "$live_owner_doc" && -n "$expired_owner_doc" ]] \
-  || fail "ownership probes did not find keys for both configured owners"
+  || fail "ownership probes did not find keys for both configured owners within 45s; last status=$HTTP_STATUS body=$HTTP_BODY"
 
 docker update --restart=unless-stopped "$index_one_id" >/dev/null
 "${compose[@]}" start index-node-1
@@ -344,10 +389,7 @@ await_gateway_ready 180
 await_cluster_index_count 2 30
 rejoin_payload=$(jq -nc --arg id "$expired_owner_doc" \
   '{id:$id,partitionId:"tenant-a",fields:{title:"Rejoined owner",content:"rejoined ownership search",category:"probe",year:"2026"}}')
-http_request POST /api/v1/index "$rejoin_payload"
-[[ "$HTTP_STATUS" == "200" ]] || fail "expired owner did not accept its key after automatic rejoin: $HTTP_STATUS $HTTP_BODY"
-assert_json "$HTTP_BODY" ".id == \"$expired_owner_doc\" and .success == true" \
-  'rejoined owner confirms the previously rejected key'
+index_document_after_owner_rejoin "$expired_owner_doc" "$rejoin_payload"
 
 log "Asserting total fan-out failure is explicit rather than an empty success"
 "${compose[@]}" restart query-node-0
