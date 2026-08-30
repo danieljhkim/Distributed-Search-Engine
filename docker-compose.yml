@@ -8,6 +8,7 @@ networks:
 volumes:
   coordinator-state:
   indexnode0-data:
+  indexnode1-data:
 
 services:
   coordinator:
@@ -97,6 +98,28 @@ services:
     volumes:
       - indexnode0-data:/data/index
       - "${DSEARCH_TLS_DIR:?set DSEARCH_TLS_DIR to a directory containing per-service certificates}/index-node-0:/etc/dsearch/tls:ro"
+    depends_on:
+      - coordinator
+    restart: unless-stopped
+
+  index-node-1:
+    build:
+      context: .
+      dockerfile: dk.index-node/Dockerfile
+    container_name: dsearch-index-1
+    networks:
+      dsearch-net:
+        aliases:
+          - dsearch-index-1
+    environment:
+      INDEX_NODE_ID: "in1"
+      INDEX_NODE_PORT: "6000"
+      INDEX_NODE_HEALTH_PORT: "8090"
+      INDEX_NODE_BASE_DIR: "/data/index"
+      APP_CONFIG_PATH: "app-config.docker.yaml"
+    volumes:
+      - indexnode1-data:/data/index
+      - "${DSEARCH_TLS_DIR:?set DSEARCH_TLS_DIR to a directory containing per-service certificates}/index-node-1:/etc/dsearch/tls:ro"
     depends_on:
       - coordinator
     restart: unless-stopped
