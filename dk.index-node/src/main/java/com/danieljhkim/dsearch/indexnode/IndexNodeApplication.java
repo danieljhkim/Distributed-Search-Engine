@@ -17,6 +17,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -40,9 +41,9 @@ public class IndexNodeApplication {
         AtomicReference<IndexManager> indexManagerReference = new AtomicReference<>();
         AtomicReference<HealthHttpServer.Readiness> startupReadiness =
                 new AtomicReference<>(HealthHttpServer.Readiness.notReady("index_initializing"));
+        AtomicBoolean acceptingRequests = new AtomicBoolean();
         HttpServer healthServer = HealthHttpServer.start(healthPort, "index-node", () -> {
-            IndexManager manager = indexManagerReference.get();
-            return manager == null ? startupReadiness.get() : manager.readiness();
+            return readiness(acceptingRequests, indexManagerReference, startupReadiness);
         });
         IndexManager indexManager =
                 waitForIndexManager(baseDir, indexingConfig, fieldConfigs, indexManagerReference, startupReadiness);
@@ -51,6 +52,7 @@ public class IndexNodeApplication {
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             LOGGER.info("Shutting down IndexNode gRPC server...");
+            acceptingRequests.set(false);
             if (membershipAgent != null) {
                 membershipAgent.close();
             }
@@ -73,10 +75,22 @@ public class IndexNodeApplication {
         LOGGER.info(() -> "IndexNode liveness endpoint on port " + healthPort + " at /livez and readiness at /readyz");
 
         indexNodeServer.startAsync();
+        acceptingRequests.set(true);
         if (membershipAgent != null) {
             membershipAgent.start();
         }
         indexNodeServer.awaitTermination();
+    }
+
+    static HealthHttpServer.Readiness readiness(
+            AtomicBoolean acceptingRequests,
+            AtomicReference<IndexManager> indexManagerReference,
+            AtomicReference<HealthHttpServer.Readiness> startupReadiness) {
+        if (!acceptingRequests.get()) {
+            return HealthHttpServer.Readiness.notReady("index_server_not_accepting_requests");
+        }
+        IndexManager manager = indexManagerReference.get();
+        return manager == null ? startupReadiness.get() : manager.readiness();
     }
 
     static NodeMembershipAgent createMembershipAgent(
