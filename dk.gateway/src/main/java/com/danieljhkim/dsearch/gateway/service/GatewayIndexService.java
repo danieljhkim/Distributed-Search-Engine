@@ -1,7 +1,9 @@
 package com.danieljhkim.dsearch.gateway.service;
 
+import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.grpc.NodeClient;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
+import com.danieljhkim.dsearch.common.validation.RequestLimitsValidator;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentRequest;
@@ -13,6 +15,8 @@ import com.danieljhkim.dsearch.proto.index.IndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -28,9 +32,18 @@ public class GatewayIndexService {
     private static final String DEFAULT_PARTITION_ID = "default";
 
     private final NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> indexNodeClientManager;
+    private final AppConfig.RequestLimitsConfig requestLimits;
 
-    public GatewayIndexService(NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> indexNodeClientManager) {
+    @Autowired
+    public GatewayIndexService(
+            NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> indexNodeClientManager, AppConfig appConfig) {
         this.indexNodeClientManager = indexNodeClientManager;
+        this.requestLimits = RequestLimitsValidator.limitsOrDefaults(appConfig.getRequestLimits());
+    }
+
+    GatewayIndexService(NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> indexNodeClientManager) {
+        this.indexNodeClientManager = indexNodeClientManager;
+        this.requestLimits = new AppConfig.RequestLimitsConfig();
     }
 
     public IndexResponseDto index(IndexRequestDto requestDto) {
@@ -40,6 +53,7 @@ public class GatewayIndexService {
         String documentId = requestDto.getId() != null && !requestDto.getId().isBlank()
                 ? requestDto.getId()
                 : UUID.randomUUID().toString();
+        RequestLimitsValidator.validateDocument(documentId, requestDto.getFields(), requestLimits);
 
         NodeClient<IndexServiceGrpc.IndexServiceBlockingStub> owner =
                 indexNodeClientManager.ownerClient(partitionId, documentId);
@@ -60,7 +74,9 @@ public class GatewayIndexService {
                 .setPartitionId(partitionId)
                 .setDocument(docBuilder.build())
                 .build();
-        IndexDocumentResponse resp = owner.getStub().indexDocument(grpcReq);
+        IndexDocumentResponse resp = owner.getStub()
+                .withDeadlineAfter(Math.max(1, requestLimits.getRequestTimeoutMillis()), TimeUnit.MILLISECONDS)
+                .indexDocument(grpcReq);
         if (resp.getSuccess()) {
             owner.incrementDocToShard(partitionId);
         }
@@ -71,6 +87,7 @@ public class GatewayIndexService {
         if (id == null || id.isBlank()) {
             throw new IllegalArgumentException("id must not be blank");
         }
+        RequestLimitsValidator.validateDocument(id, Map.of(), requestLimits);
 
         String resolvedPartitionId = resolvePartitionId(partitionId);
         NodeClient<IndexServiceGrpc.IndexServiceBlockingStub> owner =
@@ -80,7 +97,9 @@ public class GatewayIndexService {
                 .setPartitionId(resolvedPartitionId)
                 .setId(id)
                 .build();
-        DeleteDocumentResponse resp = owner.getStub().deleteDocument(grpcReq);
+        DeleteDocumentResponse resp = owner.getStub()
+                .withDeadlineAfter(Math.max(1, requestLimits.getRequestTimeoutMillis()), TimeUnit.MILLISECONDS)
+                .deleteDocument(grpcReq);
         if (resp.getSuccess()) {
             owner.decrementDocFromShard(resolvedPartitionId);
         }

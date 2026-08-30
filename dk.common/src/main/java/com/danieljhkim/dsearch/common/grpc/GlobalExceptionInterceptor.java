@@ -6,6 +6,7 @@ import com.danieljhkim.dsearch.common.exception.InvalidIndexStateException;
 import com.danieljhkim.dsearch.common.exception.ParseGoneWrongException;
 import com.danieljhkim.dsearch.common.exception.ServiceException;
 import com.danieljhkim.dsearch.common.exception.ShardNotFoundException;
+import com.danieljhkim.dsearch.common.validation.RequestAdmissionException;
 import io.grpc.ForwardingServerCallListener.SimpleForwardingServerCallListener;
 import io.grpc.Metadata;
 import io.grpc.ServerCall;
@@ -77,6 +78,10 @@ public class GlobalExceptionInterceptor implements ServerInterceptor {
         // IllegalArgumentException (e.g., request validation failures)
         if (t instanceof IllegalArgumentException e) {
             return Status.INVALID_ARGUMENT.withDescription(e.getMessage());
+        }
+
+        if (t instanceof RequestAdmissionException e) {
+            return Status.RESOURCE_EXHAUSTED.withDescription(e.getMessage());
         }
 
         // Any other IndexServiceException

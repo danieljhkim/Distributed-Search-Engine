@@ -1,9 +1,12 @@
 package com.danieljhkim.dsearch.indexnode.grpc;
 
+import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.model.SearchDocument;
 import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
 import com.danieljhkim.dsearch.common.validation.PartitionIdValidator;
+import com.danieljhkim.dsearch.common.validation.RequestAdmissionException;
+import com.danieljhkim.dsearch.common.validation.RequestLimitsValidator;
 import com.danieljhkim.dsearch.indexnode.index.IndexManager;
 import com.danieljhkim.dsearch.indexnode.index.ShardIndex;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
@@ -37,9 +40,15 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
     private static final Logger LOGGER = Logger.getLogger(IndexServiceImpl.class.getName());
 
     private final IndexManager indexManager;
+    private final AppConfig.RequestLimitsConfig requestLimits;
 
     public IndexServiceImpl(IndexManager indexManager) {
+        this(indexManager, new AppConfig.RequestLimitsConfig());
+    }
+
+    public IndexServiceImpl(IndexManager indexManager, AppConfig.RequestLimitsConfig requestLimits) {
         this.indexManager = indexManager;
+        this.requestLimits = RequestLimitsValidator.limitsOrDefaults(requestLimits);
     }
 
     @Override
@@ -52,6 +61,8 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
         String docId = protoDoc.getId().isEmpty() ? UUID.randomUUID().toString() : protoDoc.getId();
 
         try {
+            RequestLimitsValidator.validateDocument(
+                    protoDoc.toBuilder().setId(docId).build(), requestLimits);
             SearchDocument searchDoc = toSearchDocument(docId, protoDoc);
             indexManager.indexDocumentDurably(partitionId, searchDoc);
 
@@ -61,6 +72,10 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
                     .build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
+        } catch (IllegalArgumentException e) {
+            invalidArgument(responseObserver, e);
+        } catch (RequestAdmissionException e) {
+            resourceExhausted(responseObserver, e);
         } catch (IOException | RuntimeException e) {
             LOGGER.log(Level.SEVERE, "IndexDocument failed", e);
             responseObserver.onError(Status.INTERNAL
@@ -77,6 +92,12 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
         if (!validatePartition(partitionId, responseObserver)) {
             return;
         }
+        try {
+            RequestLimitsValidator.validateBulkIndexRequest(request, requestLimits);
+        } catch (IllegalArgumentException e) {
+            invalidArgument(responseObserver, e);
+            return;
+        }
         BulkIndexDocumentResponse.Builder respBuilder = BulkIndexDocumentResponse.newBuilder();
         boolean success = true;
         for (int requestIndex = 0; requestIndex < request.getDocumentsCount(); requestIndex++) {
@@ -90,6 +111,9 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
                 indexManager.indexDocumentDurably(partitionId, searchDoc);
                 respBuilder.addIds(docId);
                 result.setSuccess(true);
+            } catch (RequestAdmissionException e) {
+                resourceExhausted(responseObserver, e);
+                return;
             } catch (IOException | RuntimeException e) {
                 LOGGER.log(Level.SEVERE, "BulkIndexDocument failed for request index " + requestIndex, e);
                 success = false;
@@ -111,11 +135,14 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
         }
         String docId = request.getId();
         try {
+            RequestLimitsValidator.validateDocumentId(docId, requestLimits);
             indexManager.deleteDocumentDurably(partitionId, docId);
             DeleteDocumentResponse response =
                     DeleteDocumentResponse.newBuilder().setSuccess(true).build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
+        } catch (IllegalArgumentException e) {
+            invalidArgument(responseObserver, e);
         } catch (IOException e) {
             LOGGER.log(Level.SEVERE, "DeleteDocument failed", e);
             responseObserver.onError(Status.INTERNAL
@@ -142,6 +169,7 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
         List<FacetRequest> facetRequests = request.getFacetsList();
 
         try {
+            RequestLimitsValidator.validateIndexSearchRequest(request, requestLimits);
             SearchResult res = indexManager.searchDocument(
                     partitionId, query, size, from, protoType, filters, highlight, facetRequests);
             IndexSearchResponse.Builder respBuilder =
@@ -157,6 +185,10 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
             IndexSearchResponse response = respBuilder.build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
+        } catch (IllegalArgumentException e) {
+            invalidArgument(responseObserver, e);
+        } catch (RequestAdmissionException e) {
+            resourceExhausted(responseObserver, e);
         } catch (IOException e) {
             LOGGER.log(Level.SEVERE, "searchIndex failed", e);
             responseObserver.onError(Status.INTERNAL
@@ -177,6 +209,20 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
                     .asRuntimeException());
             return false;
         }
+    }
+
+    private static void invalidArgument(StreamObserver<?> responseObserver, IllegalArgumentException error) {
+        responseObserver.onError(Status.INVALID_ARGUMENT
+                .withDescription(error.getMessage())
+                .withCause(error)
+                .asRuntimeException());
+    }
+
+    private static void resourceExhausted(StreamObserver<?> responseObserver, RequestAdmissionException error) {
+        responseObserver.onError(Status.RESOURCE_EXHAUSTED
+                .withDescription(error.getMessage())
+                .withCause(error)
+                .asRuntimeException());
     }
 
     private IndexHit toIndexHit(SearchHit hit) {

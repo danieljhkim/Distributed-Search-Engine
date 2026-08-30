@@ -1,11 +1,16 @@
 package com.danieljhkim.dsearch.querynode.search;
 
+import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.common.validation.RequestAdmissionException;
 import com.danieljhkim.dsearch.proto.common.*;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
 import com.danieljhkim.dsearch.querynode.grpc.BaseIndexService;
+import io.grpc.Context;
+import io.grpc.Deadline;
+import io.grpc.Status;
 import java.io.Closeable;
 import java.io.IOException;
 import java.time.Duration;
@@ -23,8 +28,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -39,24 +46,49 @@ public class SearchExecutor implements Closeable {
     private final ExecutorService shardExecutor;
     private final NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager;
     private final Duration shardTimeout;
+    private final Semaphore fanoutAdmission;
+    private final int maxResultWindow;
+    private final int retryAfterMillis;
 
     public SearchExecutor(
             ExecutorService shardExecutor,
             NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager) {
-        this(shardExecutor, nodeClientManager, Duration.ofSeconds(2));
+        this(shardExecutor, nodeClientManager, Duration.ofSeconds(2), new AppConfig.RequestLimitsConfig());
     }
 
     SearchExecutor(
             ExecutorService shardExecutor,
             NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager,
             Duration shardTimeout) {
+        this(shardExecutor, nodeClientManager, shardTimeout, new AppConfig.RequestLimitsConfig());
+    }
+
+    SearchExecutor(
+            ExecutorService shardExecutor,
+            NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager,
+            Duration shardTimeout,
+            AppConfig.RequestLimitsConfig requestLimits) {
         this.shardExecutor = Objects.requireNonNull(shardExecutor, "shardExecutor must not be null");
         this.nodeClientManager = Objects.requireNonNull(nodeClientManager, "nodeClientManager must not be null");
         this.shardTimeout = Objects.requireNonNull(shardTimeout, "shardTimeout must not be null");
+        AppConfig.RequestLimitsConfig limits = Objects.requireNonNull(requestLimits, "requestLimits must not be null");
+        this.fanoutAdmission = new Semaphore(Math.max(1, limits.getMaxConcurrentFanoutCalls()), true);
+        this.maxResultWindow = Math.max(1, limits.getMaxResultWindow());
+        this.retryAfterMillis = Math.max(1, limits.getRetryAfterMillis());
     }
 
     public SearchExecutor(NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager) {
         this(Executors.newVirtualThreadPerTaskExecutor(), nodeClientManager);
+    }
+
+    public SearchExecutor(
+            NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager,
+            AppConfig.RequestLimitsConfig requestLimits) {
+        this(
+                Executors.newVirtualThreadPerTaskExecutor(),
+                nodeClientManager,
+                Duration.ofMillis(Math.max(1, requestLimits.getRequestTimeoutMillis())),
+                requestLimits);
     }
 
     public SearchResult searchHybrid(
@@ -79,7 +111,7 @@ public class SearchExecutor implements Closeable {
             List<Filter> filters,
             boolean highlight,
             List<FacetRequest> facetRequests) {
-        int fetchSize = size * (page + 1);
+        int fetchSize = requiredForPage(page, size);
         SearchResult bm25Result = search(
                 queryString, shardId, 0, fetchSize, SearchType.BM25, indexService, filters, highlight, facetRequests);
         SearchResult semanticResult = search(
@@ -127,7 +159,6 @@ public class SearchExecutor implements Closeable {
      * Global search across all index nodes for a given shardId with filters,
      * highlighting, and facets.
      */
-    @SuppressWarnings("all")
     public SearchResult search(
             String queryString,
             String shardId,
@@ -143,36 +174,65 @@ public class SearchExecutor implements Closeable {
         size = normalizeSize(size);
 
         String requestId = MDC.get("requestId");
-        int requiredForPage = (page + 1) * size;
-        int perShardLimit = requiredForPage;
+        int perShardLimit = requiredForPage(page, size);
         Map<String, Long> nodeTimingsMs = new ConcurrentHashMap<>();
+        Context requestContext = Context.current();
+        Duration remainingBudget = remainingBudget(requestContext);
 
         // Fan out
         List<NodeSearchTask> futures = new ArrayList<>();
-        for (String nodeId : nodeClientManager.getActiveNodeIds()) {
-            futures.add(new NodeSearchTask(
-                    nodeId,
-                    submitNodeSearch(
-                            requestId,
-                            nodeId,
-                            shardId,
-                            queryString,
-                            perShardLimit,
-                            searchType,
-                            indexService,
-                            filters,
-                            highlight,
-                            facetRequests,
-                            nodeTimingsMs)));
+        List<String> activeNodeIds = nodeClientManager.getActiveNodeIds();
+        int acquiredPermits = activeNodeIds.size();
+        if (acquiredPermits > 0 && !fanoutAdmission.tryAcquire(acquiredPermits)) {
+            throw new RequestAdmissionException("search fan-out", retryAfterMillis);
+        }
+        int submitted = 0;
+        try {
+            for (String nodeId : activeNodeIds) {
+                futures.add(new NodeSearchTask(
+                        nodeId,
+                        submitNodeSearch(
+                                requestContext,
+                                requestId,
+                                nodeId,
+                                shardId,
+                                queryString,
+                                perShardLimit,
+                                searchType,
+                                indexService,
+                                filters,
+                                highlight,
+                                facetRequests,
+                                remainingBudget,
+                                nodeTimingsMs)));
+                submitted++;
+            }
+        } catch (RuntimeException e) {
+            fanoutAdmission.release(acquiredPermits - submitted);
+            cancelOutstanding(futures);
+            throw e;
         }
 
-        long deadlineNanos = System.nanoTime() + shardTimeout.toNanos();
+        long deadlineNanos = saturatedAdd(System.nanoTime(), remainingBudget.toNanos());
+        Context.CancellationListener cancellationListener = ignored -> cancelOutstanding(futures);
+        requestContext.addListener(cancellationListener, Runnable::run);
 
-        // Join + merge
-        MergeAccumulator acc = awaitAndMerge(futures, deadlineNanos, requestId, shardId, searchType);
-
-        // best-effort cancellation of any remaining futures
-        cancelOutstanding(futures);
+        MergeAccumulator acc;
+        try {
+            // Join + merge
+            acc = awaitAndMerge(futures, deadlineNanos, requestId, shardId, searchType);
+        } finally {
+            requestContext.removeListener(cancellationListener);
+            // Cancelling the gRPC context aborts inherited downstream calls as well.
+            cancelOutstanding(futures);
+        }
+        if (requestContext.isCancelled()) {
+            Deadline contextDeadline = requestContext.getDeadline();
+            Status status = contextDeadline != null && contextDeadline.isExpired()
+                    ? Status.DEADLINE_EXCEEDED.withDescription("Search request deadline expired")
+                    : Status.CANCELLED.withDescription("Search request was cancelled");
+            throw status.withCause(requestContext.cancellationCause()).asRuntimeException();
+        }
 
         // Global merge + page
         List<SearchHit> mergedHits = mergeHits(acc.nodeHits, searchType);
@@ -192,6 +252,7 @@ public class SearchExecutor implements Closeable {
     }
 
     private CompletableFuture<SearchResult> submitNodeSearch(
+            Context requestContext,
             String requestId,
             String nodeId,
             String shardId,
@@ -202,10 +263,16 @@ public class SearchExecutor implements Closeable {
             List<Filter> filters,
             boolean highlight,
             List<FacetRequest> facetRequests,
+            Duration deadline,
             Map<String, Long> nodeTimingsMs) {
 
-        return CompletableFuture.supplyAsync(
+        FanoutPermit permit = new FanoutPermit();
+        CompletableFuture<SearchResult> future = CompletableFuture.supplyAsync(
                 () -> {
+                    if (!permit.start()) {
+                        throw new CancellationException("Fan-out call was cancelled before execution");
+                    }
+                    Context previous = requestContext.attach();
                     if (requestId != null) {
                         MDC.put("requestId", requestId);
                     }
@@ -220,7 +287,7 @@ public class SearchExecutor implements Closeable {
                                 filters,
                                 highlight,
                                 facetRequests,
-                                shardTimeout);
+                                deadline);
                     } finally {
                         long tookMs = (System.nanoTime() - startNanos) / 1_000_000L;
                         nodeTimingsMs.put(nodeId, tookMs);
@@ -234,9 +301,13 @@ public class SearchExecutor implements Closeable {
                         if (requestId != null) {
                             MDC.remove("requestId");
                         }
+                        requestContext.detach(previous);
+                        permit.release();
                     }
                 },
                 shardExecutor);
+        future.whenComplete((ignoredResult, ignoredFailure) -> permit.releaseIfNotStarted());
+        return future;
     }
 
     private MergeAccumulator awaitAndMerge(
@@ -450,6 +521,45 @@ public class SearchExecutor implements Closeable {
         return aggregatedFacets;
     }
 
+    private int requiredForPage(int page, int size) {
+        int normalizedPage = normalizePage(page);
+        int normalizedSize = normalizeSize(size);
+        long from = Math.multiplyExact((long) normalizedPage, normalizedSize);
+        long required = Math.addExact(from, normalizedSize);
+        if (required > maxResultWindow || required > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Requested result window (" + required + ") exceeds maximum allowed ("
+                    + maxResultWindow + "); use cursor pagination for deeper results");
+        }
+        return Math.toIntExact(required);
+    }
+
+    private Duration remainingBudget(Context context) {
+        if (context.isCancelled()) {
+            throw Status.CANCELLED
+                    .withDescription("Search request was cancelled")
+                    .asRuntimeException();
+        }
+        Deadline deadline = context.getDeadline();
+        if (deadline == null) {
+            return shardTimeout;
+        }
+        long remainingNanos = deadline.timeRemaining(TimeUnit.NANOSECONDS);
+        if (remainingNanos <= 0) {
+            throw Status.DEADLINE_EXCEEDED
+                    .withDescription("Search request deadline expired")
+                    .asRuntimeException();
+        }
+        return Duration.ofNanos(Math.min(shardTimeout.toNanos(), remainingNanos));
+    }
+
+    private static long saturatedAdd(long left, long right) {
+        try {
+            return Math.addExact(left, right);
+        } catch (ArithmeticException ignored) {
+            return Long.MAX_VALUE;
+        }
+    }
+
     private static int normalizePage(int page) {
         return Math.max(0, page);
     }
@@ -462,11 +572,11 @@ public class SearchExecutor implements Closeable {
         if (hits == null || hits.isEmpty()) {
             return Collections.emptyList();
         }
-        int fromIndex = page * size;
+        int fromIndex = Math.toIntExact(Math.multiplyExact((long) page, size));
         if (fromIndex >= hits.size()) {
             return Collections.emptyList();
         }
-        int toIndex = Math.min(fromIndex + size, hits.size());
+        int toIndex = (int) Math.min(Math.addExact((long) fromIndex, size), hits.size());
         return hits.subList(fromIndex, toIndex);
     }
 
@@ -514,6 +624,30 @@ public class SearchExecutor implements Closeable {
     }
 
     private record NodeSearchTask(String nodeId, CompletableFuture<SearchResult> future) {}
+
+    private final class FanoutPermit {
+        private static final int NOT_STARTED = 0;
+        private static final int RUNNING = 1;
+        private static final int RELEASED = 2;
+
+        private final AtomicInteger state = new AtomicInteger(NOT_STARTED);
+
+        boolean start() {
+            return state.compareAndSet(NOT_STARTED, RUNNING);
+        }
+
+        void releaseIfNotStarted() {
+            if (state.compareAndSet(NOT_STARTED, RELEASED)) {
+                fanoutAdmission.release();
+            }
+        }
+
+        void release() {
+            if (state.getAndSet(RELEASED) != RELEASED) {
+                fanoutAdmission.release();
+            }
+        }
+    }
 
     private record NodeHits(List<SearchHit> hits) {
         private NodeHits {

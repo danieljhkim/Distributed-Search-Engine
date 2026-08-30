@@ -7,6 +7,7 @@ import com.danieljhkim.dsearch.common.exception.NodeUnavailableException;
 import com.danieljhkim.dsearch.common.exception.ParseGoneWrongException;
 import com.danieljhkim.dsearch.common.exception.ServiceException;
 import com.danieljhkim.dsearch.common.exception.ShardNotFoundException;
+import com.danieljhkim.dsearch.common.validation.RequestAdmissionException;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -14,6 +15,7 @@ import jakarta.validation.ConstraintViolationException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -120,8 +122,11 @@ public class GlobalExceptionHandler {
 
         ErrorResponse body =
                 new ErrorResponse(httpStatus.value(), httpStatus.getReasonPhrase(), message, request.getRequestURI());
-
-        return new ResponseEntity<>(body, httpStatus);
+        HttpHeaders headers = new HttpHeaders();
+        if (status.getCode() == Status.Code.RESOURCE_EXHAUSTED) {
+            headers.set(HttpHeaders.RETRY_AFTER, "1");
+        }
+        return new ResponseEntity<>(body, headers, httpStatus);
     }
 
     private HttpStatus mapGrpcStatusToHttp(Status.Code code) {
@@ -191,6 +196,17 @@ public class GlobalExceptionHandler {
         ErrorResponse body =
                 new ErrorResponse(status.value(), status.getReasonPhrase(), ex.getMessage(), request.getRequestURI());
         return new ResponseEntity<>(body, status);
+    }
+
+    @ExceptionHandler(RequestAdmissionException.class)
+    public ResponseEntity<ErrorResponse> handleRequestAdmission(
+            RequestAdmissionException ex, HttpServletRequest request) {
+        HttpStatus status = HttpStatus.TOO_MANY_REQUESTS;
+        ErrorResponse body =
+                new ErrorResponse(status.value(), status.getReasonPhrase(), ex.getMessage(), request.getRequestURI());
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(HttpHeaders.RETRY_AFTER, Long.toString(Math.max(1L, (ex.getRetryAfterMillis() + 999L) / 1000L)));
+        return new ResponseEntity<>(body, headers, status);
     }
 
     // ---------- Fallback ----------

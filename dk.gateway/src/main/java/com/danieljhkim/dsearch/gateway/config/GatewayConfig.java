@@ -13,6 +13,7 @@ import lombok.Getter;
 import lombok.Setter;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -58,6 +59,15 @@ public class GatewayConfig {
     @Bean
     public NodeGroupManager nodeGroupManager(AppConfig appConfig) {
         return new NodeGroupManager(appConfig);
+    }
+
+    @Bean
+    public FilterRegistrationBean<RequestAdmissionFilter> requestAdmissionFilter(AppConfig appConfig) {
+        FilterRegistrationBean<RequestAdmissionFilter> registration = new FilterRegistrationBean<>();
+        registration.setFilter(new RequestAdmissionFilter(appConfig.getRequestLimits()));
+        registration.addUrlPatterns("/api/*");
+        registration.setOrder(1);
+        return registration;
     }
 
     @Bean

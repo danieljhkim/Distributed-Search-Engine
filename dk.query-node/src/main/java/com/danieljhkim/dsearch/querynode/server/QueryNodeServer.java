@@ -35,11 +35,15 @@ public class QueryNodeServer {
             SearchExecutor searchExecutor,
             BaseIndexService indexService,
             AppConfig appConfig) {
-        QueryServiceImpl queryService = new QueryServiceImpl(searchExecutor, indexService);
+        AppConfig.RequestLimitsConfig requestLimits = appConfig.getRequestLimits() != null
+                ? appConfig.getRequestLimits()
+                : new AppConfig.RequestLimitsConfig();
+        QueryServiceImpl queryService = new QueryServiceImpl(searchExecutor, indexService, requestLimits);
         ServerServiceDefinition interceptedService =
                 ServerInterceptors.intercept(queryService, new GlobalExceptionInterceptor());
 
         this.server = NettyServerBuilder.forPort(port)
+                .maxInboundMessageSize(Math.max(1, requestLimits.getMaxGrpcInboundBytes()))
                 .addService(interceptedService)
                 .intercept(new CorrelationIdServerInterceptor())
                 .intercept(new PrometheusGrpcServerInterceptor())

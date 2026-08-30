@@ -1,5 +1,6 @@
 package com.danieljhkim.dsearch.querynode.grpc;
 
+import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.common.model.SearchResult;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
@@ -8,6 +9,8 @@ import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.proto.index.IndexSearchRequest;
 import com.danieljhkim.dsearch.proto.index.IndexSearchResponse;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
+import io.grpc.Context;
+import io.grpc.Deadline;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -17,9 +20,18 @@ public class IndexService implements BaseIndexService {
     private static final Duration DEFAULT_CALL_DEADLINE = Duration.ofSeconds(2);
 
     private final NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager;
+    private final Duration defaultCallDeadline;
 
     public IndexService(NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager) {
         this.nodeClientManager = nodeClientManager;
+        this.defaultCallDeadline = DEFAULT_CALL_DEADLINE;
+    }
+
+    public IndexService(
+            NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager,
+            AppConfig.RequestLimitsConfig requestLimits) {
+        this.nodeClientManager = nodeClientManager;
+        this.defaultCallDeadline = Duration.ofMillis(Math.max(1, requestLimits.getRequestTimeoutMillis()));
     }
 
     @Override
@@ -62,7 +74,7 @@ public class IndexService implements BaseIndexService {
                 filters,
                 highlight,
                 facetRequests,
-                DEFAULT_CALL_DEADLINE);
+                defaultCallDeadline);
     }
 
     @Override
@@ -93,7 +105,7 @@ public class IndexService implements BaseIndexService {
         if (!nodeClientManager.getClientMap().containsKey(nodeId)) {
             throw new IllegalArgumentException("Unknown nodeId: " + nodeId);
         }
-        int from = page * size;
+        int from = Math.toIntExact(Math.multiplyExact((long) page, size));
         IndexSearchRequest.Builder grpcReqBuilder = IndexSearchRequest.newBuilder()
                 .setQuery(queryString)
                 .setFrom(from)
@@ -115,9 +127,14 @@ public class IndexService implements BaseIndexService {
         return mapToSearchResult(grpcResp, page);
     }
 
-    private static IndexServiceGrpc.IndexServiceBlockingStub withDeadline(
+    private IndexServiceGrpc.IndexServiceBlockingStub withDeadline(
             IndexServiceGrpc.IndexServiceBlockingStub stub, Duration deadline) {
-        Duration effectiveDeadline = deadline != null ? deadline : DEFAULT_CALL_DEADLINE;
+        Duration effectiveDeadline = deadline != null ? deadline : defaultCallDeadline;
+        Deadline contextDeadline = Context.current().getDeadline();
+        if (contextDeadline != null) {
+            long contextNanos = Math.max(1L, contextDeadline.timeRemaining(TimeUnit.NANOSECONDS));
+            effectiveDeadline = Duration.ofNanos(Math.min(effectiveDeadline.toNanos(), contextNanos));
+        }
         long timeoutNanos = Math.max(1L, effectiveDeadline.toNanos());
         return stub.withDeadlineAfter(timeoutNanos, TimeUnit.NANOSECONDS);
     }

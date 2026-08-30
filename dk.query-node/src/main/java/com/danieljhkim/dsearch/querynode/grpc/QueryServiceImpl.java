@@ -1,7 +1,9 @@
 package com.danieljhkim.dsearch.querynode.grpc;
 
+import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.exception.ParseGoneWrongException;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.common.validation.RequestAdmissionException;
 import com.danieljhkim.dsearch.common.validation.RequestLimitsValidator;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.Filter;
@@ -15,6 +17,7 @@ import com.danieljhkim.dsearch.proto.query.QueryServiceGrpc;
 import com.danieljhkim.dsearch.proto.query.SearchHit;
 import com.danieljhkim.dsearch.querynode.search.SearchExecutor;
 import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
 import io.grpc.stub.StreamObserver;
 import java.util.List;
 import java.util.logging.Level;
@@ -26,10 +29,17 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
 
     private final SearchExecutor searchExecutor;
     private final BaseIndexService indexService;
+    private final AppConfig.RequestLimitsConfig requestLimits;
 
     public QueryServiceImpl(SearchExecutor searchExecutor, BaseIndexService indexService) {
+        this(searchExecutor, indexService, new AppConfig.RequestLimitsConfig());
+    }
+
+    public QueryServiceImpl(
+            SearchExecutor searchExecutor, BaseIndexService indexService, AppConfig.RequestLimitsConfig requestLimits) {
         this.searchExecutor = searchExecutor;
         this.indexService = indexService;
+        this.requestLimits = RequestLimitsValidator.limitsOrDefaults(requestLimits);
     }
 
     @Override
@@ -43,9 +53,8 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
         boolean highlight = request.getHighlight();
         List<FacetRequest> facetRequests = request.getFacetsList();
 
-        RequestLimitsValidator.validateRequestLimits(queryString, size);
-
         try {
+            RequestLimitsValidator.validateQueryRequest(request, requestLimits);
             SearchResult result;
             if (searchType == SearchType.HYBRID) {
                 FusionStrategy fusionStrategy = request.getFusionStrategy();
@@ -79,6 +88,18 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
             QueryResponse response = buildQueryResponse(result, page, size);
             responseObserver.onNext(response);
             responseObserver.onCompleted();
+        } catch (RequestAdmissionException e) {
+            responseObserver.onError(Status.RESOURCE_EXHAUSTED
+                    .withDescription(e.getMessage())
+                    .withCause(e)
+                    .asRuntimeException());
+        } catch (IllegalArgumentException e) {
+            responseObserver.onError(Status.INVALID_ARGUMENT
+                    .withDescription(e.getMessage())
+                    .withCause(e)
+                    .asRuntimeException());
+        } catch (StatusRuntimeException e) {
+            responseObserver.onError(e);
         } catch (Exception e) {
             LOGGER.log(Level.WARNING, "Failed to parse query: " + queryString, e);
             responseObserver.onError(new ParseGoneWrongException("Failed to parse query: " + queryString, e));
