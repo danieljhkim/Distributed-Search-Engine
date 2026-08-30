@@ -8,7 +8,7 @@
     <parent>
         <groupId>com.danieljhkim.dsearch</groupId>
         <artifactId>dsearch</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>${revision}</version>
     </parent>
 
     <artifactId>dk.query-node</artifactId>

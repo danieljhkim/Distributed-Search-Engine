@@ -14,6 +14,10 @@
 
 `dsearch` is a horizontally scalable, Lucene‑based distributed search engine written in Java 21.
 
+`main` is the authoritative integration and release branch. Development commits use the root Maven
+`revision` with a `-SNAPSHOT` suffix; a release sets that one value to its final version, tags the
+`main` commit as `v<version>`, and publishes images tagged with the same version.
+
 It targets **small to medium‑sized applications** that need:
 - **Lexical search (BM25)**
 - **Semantic search (vector kNN)**
@@ -38,7 +42,10 @@ The system is composed of three primary components:
   Each partition is a Lucene index responsible for a categorical or domain‑specific slice of your data.
 
 - **Coordinator Node**  
-  Optional, in-memory service discovery and health aggregation across the cluster. It accepts node registration/update requests and filters unhealthy nodes from discovery responses. Dynamic removal, coordinator-owned shard maps, and failover orchestration are future work.
+  Optional, durable membership and topology authority. It atomically persists the topology epoch,
+  version, membership, health, and leases to `serviceDiscovery.coordinatorStateFile` (plus a
+  backup), exposes health-aware discovery, and removes expired non-coordinator leases. It does not
+  replicate data or move existing Lucene documents.
 
 ### Sharding & Load Balancing
 
@@ -61,7 +68,11 @@ The system is composed of three primary components:
 
 There is **no replication layer** yet. If an index node goes down, documents stored on that node’s shards are temporarily unavailable until the node comes back up and reloads its Lucene indices.
 
-The coordinator currently exposes the health-aware node registry only. Heartbeat and shard-map gRPC methods are reserved for future runtime semantics and return `UNIMPLEMENTED`.
+The coordinator exposes a versioned, health-aware node registry. `RegisterNode` creates or updates
+membership, `Heartbeat` renews a previously registered node's lease without creating membership,
+and `GetShardMap` returns one logical `index/<nodeId>` placement for each active index node. Those
+RPCs return the durable topology epoch and monotonic version so clients can reject stale state;
+they do not provide replication, automatic rebalancing, or document movement.
 
 This design intentionally keeps the system:
 - **Simple to operate** (few moving parts)
@@ -340,7 +351,13 @@ ml:
 
 - `indexNodes.routingStrategy` currently supports **`LEAST_LOADED`**, using per‑shard, per‑node doc counts.
 - `queryNodes.routingStrategy` currently supports **`ROUND_ROBIN`** for fan‑out queries across multiple query node instances.
-- Coordinator service discovery is an in-memory, health-aware registry. It supports registration/update and cluster-info lookup for configured node groups; heartbeat, shard-map, replication, and dynamic removal semantics are deferred.
+- With discovery enabled, index and query clients require a versioned coordinator response before
+  routing. During a coordinator outage they may use only a previously accepted topology for
+  `maxStalenessSeconds`; they do not silently return to the configured static node list.
+- The coordinator persists its membership/topology state at `coordinatorStateFile` (or the
+  `COORDINATOR_STATE_FILE` override), supports registration, lease heartbeats, health checks,
+  expiry, discovery, and the logical shard-map RPC. The shard map is metadata only: it does not
+  rebalance Lucene data or add replication.
 
 ---
 
@@ -351,9 +368,11 @@ This project is intentionally minimal and educational. Some trade‑offs and pot
 - **No replication layer (yet)**
   - A shard lives on exactly one node; if that node goes down, its data is unavailable until restart.
   - Future direction: coordinator‑driven replication / Raft‑based shard groups.
-- **Coordinator shard map and dynamic removal are deferred**
-  - The coordinator returns `UNIMPLEMENTED` for heartbeat and shard-map RPCs.
-  - Node removal and shard relocation are not automated; update configuration or restart affected components for planned topology changes.
+- **Coordinator membership is not a data rebalancer**
+  - Heartbeat and shard-map RPCs are implemented for durable, versioned membership and logical
+    index-node placement; they do not move or replicate Lucene documents.
+  - Expired node leases are removed from coordinator discovery. Node removal, shard relocation,
+    and data rebalancing remain manual operational work.
 - **No rebalancing when the index-node list changes**
   - Adding or removing an entry under `indexNodes` reassigns part of the document ownership
     ring, and nothing moves the affected documents, so the change requires a reindex.
