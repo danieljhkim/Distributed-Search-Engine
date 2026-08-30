@@ -19,7 +19,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -79,9 +78,18 @@ public class IndexManager implements Closeable {
                 maxBufferedOpsPerShard,
                 maxFlushInterval,
                 fieldConfigs,
-                new TextEmbeddingService(),
+                null,
                 true,
                 DEFAULT_MINIMUM_FREE_DISK_BYTES);
+    }
+
+    public IndexManager(
+            Path baseDir,
+            int maxBufferedOpsPerShard,
+            Duration maxFlushInterval,
+            List<FieldConfig> fieldConfigs,
+            long minimumFreeDiskBytes) {
+        this(baseDir, maxBufferedOpsPerShard, maxFlushInterval, fieldConfigs, null, true, minimumFreeDiskBytes);
     }
 
     public IndexManager(
@@ -117,7 +125,7 @@ public class IndexManager implements Closeable {
                 minimumFreeDiskBytes);
     }
 
-    private IndexManager(
+    IndexManager(
             Path baseDir,
             int maxBufferedOpsPerShard,
             Duration maxFlushInterval,
@@ -138,9 +146,16 @@ public class IndexManager implements Closeable {
         this.maxBufferedOpsPerShard = maxBufferedOpsPerShard;
         this.maxFlushInterval = maxFlushInterval;
         this.minimumFreeDiskBytes = minimumFreeDiskBytes;
-        this.embeddingService = Objects.requireNonNull(embeddingService, "embeddingService");
+        TextEmbedder resolvedEmbedder = embeddingService;
+        if (resolvedEmbedder == null) {
+            if (!ownsEmbeddingService) {
+                throw new NullPointerException("embeddingService");
+            }
+            resolvedEmbedder = new TextEmbeddingService();
+        }
+        this.embeddingService = resolvedEmbedder;
         this.ownedEmbeddingService =
-                ownsEmbeddingService && embeddingService instanceof Closeable closeable ? closeable : null;
+                ownsEmbeddingService && resolvedEmbedder instanceof Closeable closeable ? closeable : null;
 
         // Build field config map
         this.fieldConfigMap = new HashMap<>();
@@ -150,18 +165,28 @@ public class IndexManager implements Closeable {
             }
         }
 
-        loadExistingShards();
+        ScheduledExecutorService scheduler = null;
+        try {
+            loadExistingShards();
 
-        this.flushScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "index-flush-scheduler");
-            t.setDaemon(true);
-            return t;
-        });
+            scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "index-flush-scheduler");
+                t.setDaemon(true);
+                return t;
+            });
 
-        // Periodic flush based on time
-        long intervalMillis = Math.max(1L, maxFlushInterval.toMillis());
-        flushScheduler.scheduleAtFixedRate(
-                this::flushBuffersOnSchedule, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
+            // Periodic flush based on time
+            long intervalMillis = Math.max(1L, maxFlushInterval.toMillis());
+            scheduler.scheduleAtFixedRate(
+                    this::flushBuffersOnSchedule, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
+            this.flushScheduler = scheduler;
+        } catch (RuntimeException e) {
+            if (scheduler != null) {
+                scheduler.shutdownNow();
+            }
+            closeInitializingResources(e);
+            throw e;
+        }
     }
 
     /**
@@ -198,20 +223,42 @@ public class IndexManager implements Closeable {
     private void loadExistingShards() {
         try {
             Files.createDirectories(baseDir);
+            List<String> shardDirectoryNames;
             try (Stream<Path> paths = Files.list(baseDir)) {
-                paths.filter(Files::isDirectory)
+                shardDirectoryNames = paths.filter(Files::isDirectory)
                         .map(Path::getFileName)
                         .map(Path::toString)
                         .filter(name -> name.startsWith(SHARD_PREFIX))
-                        .forEach(dirName -> {
-                            String shardId = dirName.substring(SHARD_PREFIX.length());
-                            ShardIndex shardIndex = new ShardIndex(shardId, baseDir, fieldConfigMap, embeddingService);
-                            shardIndexes.put(shardId, shardIndex);
-                            shardBuffers.put(shardId, new ShardBuffer());
-                        });
+                        .sorted()
+                        .toList();
+            }
+            for (String dirName : shardDirectoryNames) {
+                String shardId = dirName.substring(SHARD_PREFIX.length());
+                ShardIndex shardIndex = new ShardIndex(shardId, baseDir, fieldConfigMap, embeddingService);
+                shardIndexes.put(shardId, shardIndex);
+                shardBuffers.put(shardId, new ShardBuffer());
             }
         } catch (IOException e) {
             throw new RuntimeException("Failed to load existing shard indexes from " + baseDir, e);
+        }
+    }
+
+    private void closeInitializingResources(Throwable cause) {
+        for (ShardIndex shardIndex : shardIndexes.values()) {
+            try {
+                shardIndex.close();
+            } catch (Exception e) {
+                cause.addSuppressed(e);
+            }
+        }
+        shardIndexes.clear();
+        shardBuffers.clear();
+        if (ownedEmbeddingService != null) {
+            try {
+                ownedEmbeddingService.close();
+            } catch (Exception e) {
+                cause.addSuppressed(e);
+            }
         }
     }
 

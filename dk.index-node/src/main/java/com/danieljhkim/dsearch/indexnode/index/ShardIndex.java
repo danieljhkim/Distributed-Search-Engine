@@ -114,6 +114,11 @@ public class ShardIndex implements Closeable {
             Map<String, FieldConfig> fieldConfigMap,
             TextEmbedder embeddingService,
             boolean ownsEmbeddingService) {
+        Directory directory = null;
+        Analyzer analyzer = null;
+        IndexWriter indexWriter = null;
+        SearcherManager searcherManager = null;
+        Closeable ownedEmbeddingService = null;
         try {
             this.shardId = shardId;
             Path normalizedBaseDir = baseDir.normalize();
@@ -125,22 +130,32 @@ public class ShardIndex implements Closeable {
             this.indexPath = resolved;
             Files.createDirectories(indexPath);
 
-            this.directory = FSDirectory.open(indexPath);
-            this.analyzer = new StandardAnalyzer();
+            directory = FSDirectory.open(indexPath);
+            this.directory = directory;
+            analyzer = new StandardAnalyzer();
+            this.analyzer = analyzer;
 
             IndexWriterConfig config = new IndexWriterConfig(analyzer);
             config.setOpenMode(IndexWriterConfig.OpenMode.CREATE_OR_APPEND);
-            this.indexWriter = new IndexWriter(directory, config);
+            indexWriter = new IndexWriter(directory, config);
+            this.indexWriter = indexWriter;
 
             if (!DirectoryReader.indexExists(directory)) {
                 indexWriter.commit();
             }
 
             this.embeddingService = Objects.requireNonNull(embeddingService, "embeddingService");
-            this.ownedEmbeddingService =
+            ownedEmbeddingService =
                     ownsEmbeddingService && embeddingService instanceof Closeable closeable ? closeable : null;
+            this.ownedEmbeddingService = ownedEmbeddingService;
             DirectoryReader initialReader = DirectoryReader.open(directory);
-            this.searcherManager = new SearcherManager(initialReader, null);
+            try {
+                searcherManager = new SearcherManager(initialReader, null);
+            } catch (IOException e) {
+                initialReader.close();
+                throw e;
+            }
+            this.searcherManager = searcherManager;
 
             // Initialize field config and query builders
             this.fieldConfigMap = fieldConfigMap != null ? fieldConfigMap : new HashMap<>();
@@ -148,7 +163,38 @@ public class ShardIndex implements Closeable {
             this.textHighlighter = new TextHighlighter();
             this.facetCalculator = new FacetCalculator();
         } catch (IOException e) {
-            throw new RuntimeException("Failed to initialize ShardIndex for shard " + shardId, e);
+            RuntimeException wrapped = new RuntimeException("Failed to initialize ShardIndex for shard " + shardId, e);
+            closeInitializingResources(
+                    wrapped, searcherManager, indexWriter, directory, analyzer, ownedEmbeddingService);
+            throw wrapped;
+        } catch (RuntimeException e) {
+            closeInitializingResources(e, searcherManager, indexWriter, directory, analyzer, ownedEmbeddingService);
+            throw e;
+        }
+    }
+
+    private static void closeInitializingResources(
+            Throwable cause,
+            SearcherManager searcherManager,
+            IndexWriter indexWriter,
+            Directory directory,
+            Analyzer analyzer,
+            Closeable ownedEmbeddingService) {
+        closeInitializingResource(cause, searcherManager);
+        closeInitializingResource(cause, indexWriter);
+        closeInitializingResource(cause, directory);
+        closeInitializingResource(cause, analyzer);
+        closeInitializingResource(cause, ownedEmbeddingService);
+    }
+
+    private static void closeInitializingResource(Throwable cause, Closeable resource) {
+        if (resource == null) {
+            return;
+        }
+        try {
+            resource.close();
+        } catch (Exception e) {
+            cause.addSuppressed(e);
         }
     }
 

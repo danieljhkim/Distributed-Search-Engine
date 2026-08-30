@@ -110,6 +110,18 @@ class ShardIndexEdgeCaseTest {
         assertThrows(RuntimeException.class, () -> index.commit());
     }
 
+    @Test
+    void failedConstructorReleasesWriteLockBeforeRethrowing() throws IOException {
+        Path base = tempDir.resolve("lock-release");
+        NullPointerException thrown =
+                assertThrows(NullPointerException.class, () -> new ShardIndex("0", base, Map.of(), null));
+        assertEquals("embeddingService", thrown.getMessage());
+
+        try (ShardIndex index = new ShardIndex("0", base, Map.of(), FAKE_EMBEDDER)) {
+            assertEquals("0", index.getShardId());
+        }
+    }
+
     private static FieldConfig fieldConfig(
             String name, FieldType type, boolean filterable, boolean sortable, boolean facetable) {
         FieldConfig config = new FieldConfig();
