@@ -30,6 +30,10 @@ indexNodes:
       host: "dsearch-index-0"
       port: 6000
       healthPort: 8090
+    - id: "in1"
+      host: "dsearch-index-1"
+      port: 6000
+      healthPort: 8090
 
 queryNodes:
   routingStrategy: "ROUND_ROBIN"

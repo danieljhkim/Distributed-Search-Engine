@@ -56,6 +56,7 @@ generate_identity coordinator dsearch-coordinator spiffe://dsearch/node/coordina
 generate_identity gateway dsearch-gateway spiffe://dsearch/admin/gw0
 generate_identity query-node-0 dsearch-query-0 spiffe://dsearch/node/query/qn0
 generate_identity index-node-0 dsearch-index-0 spiffe://dsearch/node/index/in0
+generate_identity index-node-1 dsearch-index-1 spiffe://dsearch/node/index/in1
 
 export DSEARCH_TLS_DIR="$tls_root"
 docker compose -p dsearch-tls-smoke -f "$repo_root/docker-compose.yml" config --quiet
@@ -71,7 +72,7 @@ while ((SECONDS < deadline)); do
 done
 curl --fail --silent --show-error http://localhost:19080/readyz >/dev/null
 
-expected_services=$'coordinator\ngateway\nindex-node-0\nquery-node-0'
+expected_services=$'coordinator\ngateway\nindex-node-0\nindex-node-1\nquery-node-0'
 running_services=$(docker compose -p dsearch-tls-smoke -f "$repo_root/docker-compose.yml" ps --services --status running | sort)
 [[ "$running_services" == "$expected_services" ]]
 
@@ -82,7 +83,9 @@ for unpublished_endpoint in \
   "query-node-0 50052" \
   "query-node-0 8081" \
   "index-node-0 6000" \
-  "index-node-0 8090"; do
+  "index-node-0 8090" \
+  "index-node-1 6000" \
+  "index-node-1 8090"; do
   read -r service port <<<"$unpublished_endpoint"
   [[ -z "$(docker compose -p dsearch-tls-smoke -f "$repo_root/docker-compose.yml" port "$service" "$port")" ]]
 done

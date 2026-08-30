@@ -54,3 +54,24 @@ jobs:
             dk.*/target/site/jacoco/**
             dk.coverage/target/site/jacoco-aggregate/**
           if-no-files-found: error
+
+  docker-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build and test the Docker cluster
+        env:
+          DSEARCH_E2E_DIAGNOSTICS: ${{ runner.temp }}/dsearch-e2e-diagnostics
+        run: scripts/docker-cluster-e2e.sh
+
+      - name: Upload Docker cluster diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-cluster-diagnostics
+          path: ${{ runner.temp }}/dsearch-e2e-diagnostics
+          if-no-files-found: error
