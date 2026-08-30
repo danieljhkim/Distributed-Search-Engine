@@ -21,6 +21,10 @@
 
     <dependencies>
         <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-netty-shaded</artifactId>
+        </dependency>
+        <dependency>
             <groupId>com.danieljhkim.dsearch</groupId>
             <artifactId>dk.proto</artifactId>
             <version>${project.version}</version>

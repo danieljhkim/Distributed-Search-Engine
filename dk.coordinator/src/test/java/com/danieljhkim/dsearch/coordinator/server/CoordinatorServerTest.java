@@ -21,7 +21,8 @@ class CoordinatorServerTest {
 
     @Test
     void startsGrpcServiceOnEphemeralPortAndReleasesItOnShutdown() throws Exception {
-        CoordinatorServer server = new CoordinatorServer(0, new ClusterMembershipService(config()));
+        AppConfig appConfig = config();
+        CoordinatorServer server = new CoordinatorServer(0, new ClusterMembershipService(appConfig), appConfig);
         ManagedChannel channel = null;
         int port = -1;
         try {
@@ -53,12 +54,14 @@ class CoordinatorServerTest {
         int port;
         try (ServerSocket occupied = new ServerSocket(0)) {
             port = occupied.getLocalPort();
-            CoordinatorServer failed = new CoordinatorServer(port, new ClusterMembershipService(config()));
+            AppConfig appConfig = config();
+            CoordinatorServer failed = new CoordinatorServer(port, new ClusterMembershipService(appConfig), appConfig);
             assertThrows(IOException.class, failed::startAsync);
             failed.shutdown();
         }
 
-        CoordinatorServer recovered = new CoordinatorServer(port, new ClusterMembershipService(config()));
+        AppConfig appConfig = config();
+        CoordinatorServer recovered = new CoordinatorServer(port, new ClusterMembershipService(appConfig), appConfig);
         try {
             recovered.startAsync();
             assertEquals(port, recovered.getPort());
@@ -70,6 +73,7 @@ class CoordinatorServerTest {
 
     private static AppConfig config() {
         AppConfig config = new AppConfig();
+        config.getGrpcSecurity().setProfile("local");
         AppConfig.ServiceDiscoveryConfig discovery = new AppConfig.ServiceDiscoveryConfig();
         discovery.setEnabled(false);
         config.setServiceDiscovery(discovery);

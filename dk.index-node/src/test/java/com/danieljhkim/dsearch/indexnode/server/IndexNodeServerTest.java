@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.indexnode.index.IndexManager;
 import com.danieljhkim.dsearch.ml.embedding.TextEmbedder;
 import com.danieljhkim.dsearch.proto.index.Document;
@@ -40,7 +41,7 @@ class IndexNodeServerTest {
     @Test
     void startsGrpcAndMetricsOnEphemeralPortsAndStopsBoth() throws Exception {
         try (IndexManager manager = manager("start-stop")) {
-            IndexNodeServer node = new IndexNodeServer(0, 0, manager);
+            IndexNodeServer node = new IndexNodeServer(0, 0, manager, localConfig());
             AtomicReference<Throwable> failure = new AtomicReference<>();
             Thread runner = new Thread(() -> {
                 try {
@@ -97,7 +98,7 @@ class IndexNodeServerTest {
                 IndexManager firstManager = manager("failed-start")) {
             int grpcPort = occupied.getLocalPort();
             int metricsPort = freePort();
-            IndexNodeServer failed = new IndexNodeServer(grpcPort, metricsPort, firstManager);
+            IndexNodeServer failed = new IndexNodeServer(grpcPort, metricsPort, firstManager, localConfig());
 
             assertThrows(IOException.class, failed::start);
 
@@ -107,7 +108,7 @@ class IndexNodeServerTest {
 
             occupied.close();
             try (IndexManager secondManager = manager("reusable")) {
-                IndexNodeServer reusable = new IndexNodeServer(grpcPort, metricsPort, secondManager);
+                IndexNodeServer reusable = new IndexNodeServer(grpcPort, metricsPort, secondManager, localConfig());
                 AtomicReference<Throwable> failure = new AtomicReference<>();
                 Thread runner = new Thread(() -> {
                     try {
@@ -128,6 +129,12 @@ class IndexNodeServerTest {
 
     private IndexManager manager(String name) {
         return new IndexManager(tempDir.resolve(name), 10, Duration.ofHours(1), null, FAKE_EMBEDDER);
+    }
+
+    private static AppConfig localConfig() {
+        AppConfig config = new AppConfig();
+        config.getGrpcSecurity().setProfile("local");
+        return config;
     }
 
     private static int freePort() throws IOException {

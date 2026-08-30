@@ -28,12 +28,10 @@ services:
       COORDINATOR_HEALTH_PORT: "8080"
       APP_CONFIG_PATH: "app-config.docker.yaml"
       COORDINATOR_STATE_FILE: "/data/coordinator-topology.properties"
-    ports:
-      - "17000:7000"
-      - "18080:8080"
     restart: unless-stopped
     volumes:
       - coordinator-state:/data
+      - "${DSEARCH_TLS_DIR:?set DSEARCH_TLS_DIR to a directory containing per-service certificates}/coordinator:/etc/dsearch/tls:ro"
 
   gateway:
     build:
@@ -53,10 +51,11 @@ services:
       APP_CONFIG_PATH: "app-config.docker.yaml"
     ports:
       - "19080:8080"
-      - "19180:8180"
     depends_on:
       - coordinator
     restart: unless-stopped
+    volumes:
+      - "${DSEARCH_TLS_DIR:?set DSEARCH_TLS_DIR to a directory containing per-service certificates}/gateway:/etc/dsearch/tls:ro"
 
   query-node-0:
     build:
@@ -72,13 +71,12 @@ services:
       QUERY_NODE_PORT: "50052"
       QUERY_NODE_HEALTH_PORT: "8081"
       APP_CONFIG_PATH: "app-config.docker.yaml"
-    ports:
-      - "50052:50052"
-      - "8081:8081"
     depends_on:
       - coordinator
       - gateway
     restart: unless-stopped
+    volumes:
+      - "${DSEARCH_TLS_DIR:?set DSEARCH_TLS_DIR to a directory containing per-service certificates}/query-node-0:/etc/dsearch/tls:ro"
 
   index-node-0:
     build:
@@ -96,11 +94,9 @@ services:
       # Where Lucene shards live (your code uses baseDir; map that to this)
       INDEX_NODE_BASE_DIR: "/data/index"
       APP_CONFIG_PATH: "app-config.docker.yaml"
-    ports:
-      - "6000:6000"
-      - "8090:8090"
     volumes:
       - indexnode0-data:/data/index
+      - "${DSEARCH_TLS_DIR:?set DSEARCH_TLS_DIR to a directory containing per-service certificates}/index-node-0:/etc/dsearch/tls:ro"
     depends_on:
       - coordinator
     restart: unless-stopped

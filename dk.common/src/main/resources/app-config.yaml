@@ -1,3 +1,9 @@
+grpcSecurity:
+  profile: "production"
+  certificateChainPath: "/etc/dsearch/tls/tls.crt"
+  privateKeyPath: "/etc/dsearch/tls/tls.key"
+  trustCertificateCollectionPath: "/etc/dsearch/tls/ca.crt"
+
 serviceDiscovery:
   # Clients fail closed until the first authoritative response, then may use the
   # last accepted topology only for this bounded interval during an outage.

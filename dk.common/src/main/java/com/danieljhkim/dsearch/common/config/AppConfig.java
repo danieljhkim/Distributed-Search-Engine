@@ -10,6 +10,7 @@ import lombok.Setter;
 @Getter
 public class AppConfig {
     private ServiceDiscoveryConfig serviceDiscovery;
+    private GrpcSecurityConfig grpcSecurity = new GrpcSecurityConfig();
     private NodeGroupConfig indexNodes;
     private NodeGroupConfig queryNodes;
     private NodeGroupConfig coordinatorNodes;
@@ -18,6 +19,21 @@ public class AppConfig {
     private MlConfig ml;
     private RequestLimitsConfig requestLimits;
     private List<FieldConfig> fieldConfigs;
+
+    @Setter
+    @Getter
+    public static class GrpcSecurityConfig {
+        /**
+         * {@code production} requires mutually authenticated TLS. {@code local} is the only
+         * plaintext profile and must be selected explicitly by a local-only launcher or
+         * configuration.
+         */
+        private String profile = "production";
+
+        private String certificateChainPath;
+        private String privateKeyPath;
+        private String trustCertificateCollectionPath;
+    }
 
     @Override
     public String toString() {

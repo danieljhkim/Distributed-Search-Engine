@@ -1,6 +1,8 @@
 package com.danieljhkim.dsearch.coordinator.grpc;
 
 import com.danieljhkim.dsearch.common.cluster.NodeGroup;
+import com.danieljhkim.dsearch.common.grpc.GrpcPeerIdentity;
+import com.danieljhkim.dsearch.common.grpc.GrpcPeerIdentityContext;
 import com.danieljhkim.dsearch.coordinator.cluster.ClusterMembershipService;
 import com.danieljhkim.dsearch.proto.cluster.ClusterServiceGrpc;
 import com.danieljhkim.dsearch.proto.cluster.DeregisterNodeRequest;
@@ -17,6 +19,7 @@ import com.danieljhkim.dsearch.proto.cluster.RegisterNodeRequest;
 import com.danieljhkim.dsearch.proto.cluster.RegisterNodeResponse;
 import com.danieljhkim.dsearch.proto.cluster.ShardLocation;
 import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
 import io.grpc.stub.StreamObserver;
 import java.util.NoSuchElementException;
 import java.util.logging.Level;
@@ -40,6 +43,7 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
     public void registerNode(RegisterNodeRequest request, StreamObserver<RegisterNodeResponse> responseObserver) {
         try {
             NodeRole role = validateRegisterNodeRequest(request);
+            authorizeMutation(role, request.getNodeId());
             NodeGroup group = membershipService.resolveGroup(role);
             if (group == null) {
                 responseObserver.onError(noGroupStatus(role).asRuntimeException());
@@ -66,6 +70,8 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
                     .build();
             responseObserver.onNext(resp);
             responseObserver.onCompleted();
+        } catch (StatusRuntimeException e) {
+            responseObserver.onError(e);
         } catch (ClusterMembershipService.StaleTopologyException e) {
             responseObserver.onError(staleTopologyStatus(e).asRuntimeException());
         } catch (IllegalArgumentException e) {
@@ -87,6 +93,7 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
             if (request.getNodeId().isBlank()) {
                 throw new IllegalArgumentException("node_id must not be empty");
             }
+            authorizeMutation(role, request.getNodeId());
             long version = membershipService.heartbeat(
                     request.getNodeId(),
                     role,
@@ -100,6 +107,8 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
                     .setLeaseDurationMillis(membershipService.getLeaseDurationMillis())
                     .build());
             responseObserver.onCompleted();
+        } catch (StatusRuntimeException e) {
+            responseObserver.onError(e);
         } catch (ClusterMembershipService.StaleTopologyException
                 | ClusterMembershipService.StaleTopologyEpochException e) {
             responseObserver.onError(staleTopologyStatus(e).asRuntimeException());
@@ -125,6 +134,7 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
             if (request.getNodeId().isBlank()) {
                 throw new IllegalArgumentException("node_id must not be empty");
             }
+            authorizeMutation(role, request.getNodeId());
             long version = membershipService.deregisterNode(
                     request.getNodeId(),
                     role,
@@ -137,6 +147,8 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
                     .setTopologyVersion(version)
                     .build());
             responseObserver.onCompleted();
+        } catch (StatusRuntimeException e) {
+            responseObserver.onError(e);
         } catch (ClusterMembershipService.StaleTopologyException
                 | ClusterMembershipService.StaleTopologyEpochException e) {
             responseObserver.onError(staleTopologyStatus(e).asRuntimeException());
@@ -244,6 +256,20 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
         validatePort("port", request.getPort());
         validatePort("health_port", request.getHealthPort());
         return role;
+    }
+
+    private void authorizeMutation(NodeRole role, String nodeId) {
+        GrpcPeerIdentity identity = GrpcPeerIdentityContext.current();
+        if (identity == null) {
+            throw Status.UNAUTHENTICATED
+                    .withDescription("Topology mutation requires an authenticated service identity")
+                    .asRuntimeException();
+        }
+        if (!identity.authorizes(role, nodeId)) {
+            throw Status.PERMISSION_DENIED
+                    .withDescription("Authenticated identity is not authorized for this node and role")
+                    .asRuntimeException();
+        }
     }
 
     private NodeRole validateRole(NodeRole role) {

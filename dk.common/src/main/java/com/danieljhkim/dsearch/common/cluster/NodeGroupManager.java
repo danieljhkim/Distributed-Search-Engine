@@ -60,6 +60,10 @@ public class NodeGroupManager {
         return loadStaticNodeGroup(role);
     }
 
+    public AppConfig getDefaultConfig() {
+        return defaultConfig;
+    }
+
     private NodeGroup loadStaticNodeGroup(NodeRole role) {
         AppConfig.NodeGroupConfig config =
                 switch (role) {

@@ -1,3 +1,9 @@
+grpcSecurity:
+  profile: "production"
+  certificateChainPath: "/etc/dsearch/tls/tls.crt"
+  privateKeyPath: "/etc/dsearch/tls/tls.key"
+  trustCertificateCollectionPath: "/etc/dsearch/tls/ca.crt"
+
 serviceDiscovery:
   enabled: true
   refreshIntervalSeconds: 10

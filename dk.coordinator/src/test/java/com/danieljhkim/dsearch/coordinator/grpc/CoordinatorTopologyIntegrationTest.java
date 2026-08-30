@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.danieljhkim.dsearch.common.cluster.NodeMembershipAgent;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.enums.RoutingStrategy;
+import com.danieljhkim.dsearch.common.grpc.GrpcPeerIdentityInterceptor;
+import com.danieljhkim.dsearch.common.grpc.GrpcTransportSecurity;
 import com.danieljhkim.dsearch.coordinator.cluster.ClusterMembershipService;
 import com.danieljhkim.dsearch.proto.cluster.ClusterServiceGrpc;
 import com.danieljhkim.dsearch.proto.cluster.GetShardMapRequest;
@@ -134,8 +136,12 @@ class CoordinatorTopologyIntegrationTest {
     }
 
     private static RunningCoordinator start(ClusterMembershipService membershipService, int port) throws IOException {
+        AppConfig transportConfig = new AppConfig();
+        transportConfig.getGrpcSecurity().setProfile("local");
+        GrpcTransportSecurity transportSecurity = GrpcTransportSecurity.from(transportConfig);
         Server server = ServerBuilder.forPort(port)
                 .addService(new ClusterServiceImpl(membershipService))
+                .intercept(new GrpcPeerIdentityInterceptor(transportSecurity))
                 .build()
                 .start();
         ManagedChannel channel = ManagedChannelBuilder.forAddress("localhost", server.getPort())

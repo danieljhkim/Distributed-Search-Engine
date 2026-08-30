@@ -2,6 +2,7 @@ package com.danieljhkim.dsearch.querynode.server;
 
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.grpc.GlobalExceptionInterceptor;
+import com.danieljhkim.dsearch.common.grpc.GrpcTransportSecurity;
 import com.danieljhkim.dsearch.common.grpc.PrometheusGrpcServerInterceptor;
 import com.danieljhkim.dsearch.common.tracing.CorrelationIdServerInterceptor;
 import com.danieljhkim.dsearch.querynode.grpc.BaseIndexService;
@@ -10,7 +11,6 @@ import com.danieljhkim.dsearch.querynode.search.SearchExecutor;
 import io.grpc.Server;
 import io.grpc.ServerInterceptors;
 import io.grpc.ServerServiceDefinition;
-import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.prometheus.client.exporter.HTTPServer;
 import io.prometheus.client.hotspot.DefaultExports;
 import java.io.IOException;
@@ -42,7 +42,8 @@ public class QueryNodeServer {
         ServerServiceDefinition interceptedService =
                 ServerInterceptors.intercept(queryService, new GlobalExceptionInterceptor());
 
-        this.server = NettyServerBuilder.forPort(port)
+        this.server = GrpcTransportSecurity.from(appConfig)
+                .serverBuilder(port)
                 .maxInboundMessageSize(Math.max(1, requestLimits.getMaxGrpcInboundBytes()))
                 .addService(interceptedService)
                 .intercept(new CorrelationIdServerInterceptor())
