@@ -3,13 +3,16 @@ package com.danieljhkim.dsearch.coordinator.cluster;
 import com.danieljhkim.dsearch.common.cluster.NodeGroup;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -33,6 +36,9 @@ import java.util.UUID;
 public class ClusterMembershipService {
 
     public static final int CONTRACT_VERSION = 1;
+
+    private static final String STATE_FORMAT_VERSION_KEY = "state.format.version";
+    private static final String BACKUP_SUFFIX = ".bak";
 
     private final NodeGroup indexGroup;
     private final NodeGroup queryGroup;
@@ -245,6 +251,7 @@ public class ClusterMembershipService {
         Properties properties = new Properties();
         try (InputStream input = Files.newInputStream(stateFile)) {
             properties.load(input);
+            validateStateFormat(properties);
             this.topologyEpoch = required(properties, "topology.epoch");
             this.topologyVersion = Long.parseLong(required(properties, "topology.version"));
             int memberCount = Integer.parseInt(required(properties, "member.count"));
@@ -276,6 +283,7 @@ public class ClusterMembershipService {
             return;
         }
         Properties properties = new Properties();
+        properties.setProperty(STATE_FORMAT_VERSION_KEY, Integer.toString(CONTRACT_VERSION));
         properties.setProperty("topology.epoch", topologyEpoch);
         properties.setProperty("topology.version", Long.toString(topologyVersion));
         List<MemberKey> members = new ArrayList<>(lastSeenMillis.keySet());
@@ -295,22 +303,50 @@ public class ClusterMembershipService {
             properties.setProperty(prefix + "lastSeenMillis", Long.toString(lastSeenMillis.get(key)));
         }
 
-        Path parent = stateFile.toAbsolutePath().getParent();
-        Path temp = stateFile.resolveSibling(stateFile.getFileName() + ".tmp");
         try {
-            if (parent != null) {
-                Files.createDirectories(parent);
-            }
-            try (OutputStream output = Files.newOutputStream(temp)) {
-                properties.store(output, "dsearch coordinator topology; write via ClusterMembershipService only");
-            }
-            try {
-                Files.move(temp, stateFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-            } catch (AtomicMoveNotSupportedException e) {
-                Files.move(temp, stateFile, StandardCopyOption.REPLACE_EXISTING);
-            }
+            ByteArrayOutputStream serialized = new ByteArrayOutputStream();
+            properties.store(serialized, "dsearch coordinator topology; write via ClusterMembershipService only");
+            byte[] contents = serialized.toByteArray();
+            writeAtomically(stateFile, contents);
+            writeAtomically(stateFile.resolveSibling(stateFile.getFileName() + BACKUP_SUFFIX), contents);
         } catch (IOException e) {
             throw new IllegalStateException("Failed to persist authoritative coordinator state to " + stateFile, e);
+        }
+    }
+
+    private static void writeAtomically(Path target, byte[] contents) throws IOException {
+        Path absoluteTarget = target.toAbsolutePath();
+        Path parent = absoluteTarget.getParent();
+        if (parent == null) {
+            throw new IllegalStateException("Coordinator state target must have a parent directory: " + target);
+        }
+        Files.createDirectories(parent);
+        Path temporary = parent.resolve(absoluteTarget.getFileName() + "." + UUID.randomUUID() + ".tmp");
+        try {
+            try (FileChannel channel =
+                    FileChannel.open(temporary, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
+                ByteBuffer buffer = ByteBuffer.wrap(contents);
+                while (buffer.hasRemaining()) {
+                    channel.write(buffer);
+                }
+                channel.force(true);
+            }
+            try {
+                Files.move(
+                        temporary, absoluteTarget, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                throw new IllegalStateException(
+                        "Coordinator state filesystem does not support atomic replacement for " + absoluteTarget, e);
+            }
+            forceDirectory(parent);
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
+    }
+
+    private static void forceDirectory(Path directory) throws IOException {
+        try (FileChannel channel = FileChannel.open(directory, StandardOpenOption.READ)) {
+            channel.force(true);
         }
     }
 
@@ -341,10 +377,24 @@ public class ClusterMembershipService {
 
     private static String required(Properties properties, String key) {
         String value = properties.getProperty(key);
-        if (value == null) {
+        if (value == null || value.isBlank()) {
             throw new IllegalStateException("Coordinator state is missing " + key);
         }
         return value;
+    }
+
+    private static void validateStateFormat(Properties properties) {
+        String serializedVersion = required(properties, STATE_FORMAT_VERSION_KEY);
+        int stateFormatVersion;
+        try {
+            stateFormatVersion = Integer.parseInt(serializedVersion);
+        } catch (NumberFormatException e) {
+            throw new IllegalStateException("Coordinator state has an invalid format version: " + serializedVersion, e);
+        }
+        if (stateFormatVersion != CONTRACT_VERSION) {
+            throw new IllegalStateException("Coordinator state format version " + stateFormatVersion
+                    + " is incompatible with supported version " + CONTRACT_VERSION);
+        }
     }
 
     private static NodeGroup.NodeInfo copyWithHealth(NodeGroup.NodeInfo node, boolean healthy) {

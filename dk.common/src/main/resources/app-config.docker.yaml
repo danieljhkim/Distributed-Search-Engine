@@ -3,6 +3,8 @@ serviceDiscovery:
   refreshIntervalSeconds: 10
   nodeExpirySeconds: 30
   maxStalenessSeconds: 30
+  # The Compose coordinator-state volume is mounted at /data. The service also
+  # maintains /data/coordinator-topology.properties.bak for manual recovery.
   coordinatorStateFile: "/data/coordinator-topology.properties"
 
 indexNodes:
