@@ -25,7 +25,7 @@ import org.junit.jupiter.api.Test;
 class HealthCheckSchedulerTest {
 
     @Test
-    void probesHealthyAndUnhealthyNodesExpiresStaleMembersAndContainsProbeFailures() throws Exception {
+    void probesAffectHealthButDoNotRenewNodeOwnedMembershipLeases() throws Exception {
         MutableClock clock = new MutableClock(Instant.parse("2026-08-29T00:00:00Z"));
         ClusterMembershipService membership = new ClusterMembershipService(config(true), null, clock);
         HttpServer healthy = healthServer(200);
@@ -46,7 +46,8 @@ class HealthCheckSchedulerTest {
 
             clock.advanceSeconds(6);
             assertDoesNotThrow(scheduler::checkClusterHealth);
-            assertTrue(membership.getIndexGroup().getNode("index-live").isHealthy());
+            assertFalse(membership.getIndexGroup().getAllNodes().stream()
+                    .anyMatch(node -> node.getNodeId().equals("index-live")));
             assertFalse(membership.getQueryGroup().getAllNodes().stream()
                     .anyMatch(node -> node.getNodeId().equals("query-stale")));
             assertFalse(membership.getIndexGroup().getAllNodes().stream()

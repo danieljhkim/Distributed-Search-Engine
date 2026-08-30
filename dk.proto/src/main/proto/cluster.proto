@@ -18,6 +18,8 @@ message RegisterNodeRequest {
   int32 port = 3;
   NodeRole role = 4;
   int32 health_port = 5;
+  string observed_topology_epoch = 6;
+  uint64 observed_topology_version = 7;
 }
 
 message RegisterNodeResponse {
@@ -27,6 +29,7 @@ message RegisterNodeResponse {
   uint32 contract_version = 2;
   string topology_epoch = 3;
   uint64 topology_version = 4;
+  uint64 lease_duration_millis = 5;
 }
 
 message GetClusterInfoRequest {
@@ -56,6 +59,9 @@ message HeartbeatRequest {
   string node_id = 1;
   NodeRole role = 2;
   uint64 observed_topology_version = 3;
+  // Epochs make topology versions comparable. A non-empty stale epoch is
+  // rejected so a client re-registers instead of accepting reset state.
+  string observed_topology_epoch = 4;
 }
 
 message HeartbeatResponse {
@@ -64,6 +70,22 @@ message HeartbeatResponse {
   string topology_epoch = 3;
   uint64 topology_version = 4;
   uint64 lease_duration_millis = 5;
+}
+
+// Graceful deregistration is best-effort. Lease expiry remains authoritative
+// when a process cannot complete this RPC during shutdown.
+message DeregisterNodeRequest {
+  string node_id = 1;
+  NodeRole role = 2;
+  string observed_topology_epoch = 3;
+  uint64 observed_topology_version = 4;
+}
+
+message DeregisterNodeResponse {
+  bool success = 1;
+  uint32 contract_version = 2;
+  string topology_epoch = 3;
+  uint64 topology_version = 4;
 }
 
 // Returns the authoritative logical index-shard placement. Each active index
@@ -100,6 +122,7 @@ message GetShardMapResponse {
 service ClusterService {
   rpc RegisterNode(RegisterNodeRequest) returns (RegisterNodeResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc DeregisterNode(DeregisterNodeRequest) returns (DeregisterNodeResponse);
   rpc GetShardMap(GetShardMapRequest) returns (GetShardMapResponse);
   rpc getClusterInfo(GetClusterInfoRequest) returns (GetClusterInfoResponse);
 }

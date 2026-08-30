@@ -31,6 +31,11 @@ public class AppConfig {
         private int refreshIntervalSeconds = 30;
         private int nodeExpirySeconds = 30;
         private int maxStalenessSeconds = 30;
+        private int heartbeatIntervalSeconds = 10;
+        private int registrationInitialBackoffMillis = 250;
+        private int registrationMaxBackoffSeconds = 10;
+        private int membershipRpcDeadlineMillis = 2000;
+        private int shutdownDeregisterTimeoutMillis = 1000;
         private String coordinatorStateFile;
     }
 

@@ -49,13 +49,21 @@ public class QueryNodeServer {
 
     public void start() throws IOException, InterruptedException {
         try {
-            server.start();
-            startPrometheusMetricsServer(this.prometheusPort);
-            server.awaitTermination();
+            startAsync();
+            awaitTermination();
         } catch (IOException | RuntimeException e) {
             shutdownResources();
             throw e;
         }
+    }
+
+    public void startAsync() throws IOException {
+        server.start();
+        startPrometheusMetricsServer(this.prometheusPort);
+    }
+
+    public void awaitTermination() throws InterruptedException {
+        server.awaitTermination();
     }
 
     private void startPrometheusMetricsServer(int metricsPort) throws IOException {

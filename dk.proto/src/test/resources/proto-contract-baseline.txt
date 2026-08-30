@@ -19,11 +19,14 @@ field|cluster.proto|RegisterNodeRequest|2|host|optional|string
 field|cluster.proto|RegisterNodeRequest|3|port|optional|int32
 field|cluster.proto|RegisterNodeRequest|4|role|optional|dsearch.cluster.NodeRole
 field|cluster.proto|RegisterNodeRequest|5|health_port|optional|int32
+field|cluster.proto|RegisterNodeRequest|6|observed_topology_epoch|optional|string
+field|cluster.proto|RegisterNodeRequest|7|observed_topology_version|optional|uint64
 message|cluster.proto|RegisterNodeResponse
 field|cluster.proto|RegisterNodeResponse|1|success|optional|bool
 field|cluster.proto|RegisterNodeResponse|2|contract_version|optional|uint32
 field|cluster.proto|RegisterNodeResponse|3|topology_epoch|optional|string
 field|cluster.proto|RegisterNodeResponse|4|topology_version|optional|uint64
+field|cluster.proto|RegisterNodeResponse|5|lease_duration_millis|optional|uint64
 message|cluster.proto|GetClusterInfoRequest
 field|cluster.proto|GetClusterInfoRequest|1|role|optional|dsearch.cluster.NodeRole
 field|cluster.proto|GetClusterInfoRequest|2|partition_id|optional|string
@@ -40,12 +43,23 @@ message|cluster.proto|HeartbeatRequest
 field|cluster.proto|HeartbeatRequest|1|node_id|optional|string
 field|cluster.proto|HeartbeatRequest|2|role|optional|dsearch.cluster.NodeRole
 field|cluster.proto|HeartbeatRequest|3|observed_topology_version|optional|uint64
+field|cluster.proto|HeartbeatRequest|4|observed_topology_epoch|optional|string
 message|cluster.proto|HeartbeatResponse
 field|cluster.proto|HeartbeatResponse|1|success|optional|bool
 field|cluster.proto|HeartbeatResponse|2|contract_version|optional|uint32
 field|cluster.proto|HeartbeatResponse|3|topology_epoch|optional|string
 field|cluster.proto|HeartbeatResponse|4|topology_version|optional|uint64
 field|cluster.proto|HeartbeatResponse|5|lease_duration_millis|optional|uint64
+message|cluster.proto|DeregisterNodeRequest
+field|cluster.proto|DeregisterNodeRequest|1|node_id|optional|string
+field|cluster.proto|DeregisterNodeRequest|2|role|optional|dsearch.cluster.NodeRole
+field|cluster.proto|DeregisterNodeRequest|3|observed_topology_epoch|optional|string
+field|cluster.proto|DeregisterNodeRequest|4|observed_topology_version|optional|uint64
+message|cluster.proto|DeregisterNodeResponse
+field|cluster.proto|DeregisterNodeResponse|1|success|optional|bool
+field|cluster.proto|DeregisterNodeResponse|2|contract_version|optional|uint32
+field|cluster.proto|DeregisterNodeResponse|3|topology_epoch|optional|string
+field|cluster.proto|DeregisterNodeResponse|4|topology_version|optional|uint64
 message|cluster.proto|GetShardMapRequest
 field|cluster.proto|GetShardMapRequest|1|min_topology_version|optional|uint64
 message|cluster.proto|ShardLocation
@@ -75,6 +89,7 @@ enum_value|cluster.proto|NodeRole|NODE_ROLE_COORDINATOR|3
 service|cluster.proto|ClusterService
 rpc|cluster.proto|ClusterService|RegisterNode|dsearch.cluster.RegisterNodeRequest|dsearch.cluster.RegisterNodeResponse|false|false
 rpc|cluster.proto|ClusterService|Heartbeat|dsearch.cluster.HeartbeatRequest|dsearch.cluster.HeartbeatResponse|false|false
+rpc|cluster.proto|ClusterService|DeregisterNode|dsearch.cluster.DeregisterNodeRequest|dsearch.cluster.DeregisterNodeResponse|false|false
 rpc|cluster.proto|ClusterService|GetShardMap|dsearch.cluster.GetShardMapRequest|dsearch.cluster.GetShardMapResponse|false|false
 rpc|cluster.proto|ClusterService|getClusterInfo|dsearch.cluster.GetClusterInfoRequest|dsearch.cluster.GetClusterInfoResponse|false|false
 

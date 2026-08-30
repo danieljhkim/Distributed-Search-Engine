@@ -4,11 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.danieljhkim.dsearch.common.cluster.NodeMembershipAgent;
 import com.danieljhkim.dsearch.proto.cluster.ClusterServiceGrpc;
 import com.danieljhkim.dsearch.proto.cluster.GetShardMapRequest;
 import com.danieljhkim.dsearch.proto.cluster.GetShardMapResponse;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
-import com.danieljhkim.dsearch.proto.cluster.RegisterNodeRequest;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Status;
@@ -44,45 +44,62 @@ class CoordinatorProcessIntegrationTest {
 
         Process first = null;
         Process recovered = null;
+        NodeMembershipAgent firstNode = null;
+        NodeMembershipAgent restartedNode = null;
         try {
             first = startCoordinator(grpcPort, healthPort, stateFile, logFile);
             waitFor(client, response -> true, Duration.ofSeconds(10));
-            long registeredVersion = client.registerNode(registerRequest()).getTopologyVersion();
-            GetShardMapResponse beforeRestart = client.getShardMap(GetShardMapRequest.getDefaultInstance());
-            assertEquals(registeredVersion, beforeRestart.getTopologyVersion());
+            firstNode = membershipAgent(grpcPort);
+            firstNode.start();
+            GetShardMapResponse beforeRestart =
+                    waitFor(client, response -> response.getShardLocationsCount() == 1, Duration.ofSeconds(10));
+            waitForRegistration(firstNode, Duration.ofSeconds(5));
             assertEquals(
                     "index/process-index-0", beforeRestart.getShardLocations(0).getShardId());
 
             stop(first);
             first = null;
+            firstNode.close();
+            firstNode = null;
             StatusRuntimeException unavailable = assertThrows(
                     StatusRuntimeException.class, () -> client.withDeadlineAfter(250, TimeUnit.MILLISECONDS)
                             .getShardMap(GetShardMapRequest.getDefaultInstance()));
             assertEquals(Status.Code.UNAVAILABLE, unavailable.getStatus().getCode());
 
-            recovered = startCoordinator(grpcPort, healthPort, stateFile, logFile);
-            GetShardMapResponse afterRestart = waitFor(
-                    client,
-                    response -> response.getTopologyVersion() == beforeRestart.getTopologyVersion(),
-                    Duration.ofSeconds(10));
-            assertEquals(beforeRestart.getTopologyEpoch(), afterRestart.getTopologyEpoch());
-            assertEquals(beforeRestart.getShardLocationsList(), afterRestart.getShardLocationsList());
+            Thread.sleep(1200);
 
+            recovered = startCoordinator(grpcPort, healthPort, stateFile, logFile);
             GetShardMapResponse afterExpiry = waitFor(
                     client,
                     response -> response.getShardLocationsCount() == 0
-                            && response.getTopologyVersion() >= afterRestart.getTopologyVersion() + 2,
+                            && response.getTopologyVersion() > beforeRestart.getTopologyVersion(),
                     Duration.ofSeconds(10));
-            long reregisteredVersion = client.registerNode(registerRequest()).getTopologyVersion();
-            assertTrue(reregisteredVersion > afterExpiry.getTopologyVersion());
+            assertEquals(beforeRestart.getTopologyEpoch(), afterExpiry.getTopologyEpoch());
+
+            restartedNode = membershipAgent(grpcPort);
+            restartedNode.start();
+            GetShardMapResponse afterRejoin = waitFor(
+                    client,
+                    response -> response.getShardLocationsCount() == 1
+                            && response.getTopologyVersion() > afterExpiry.getTopologyVersion(),
+                    Duration.ofSeconds(10));
+            waitForRegistration(restartedNode, Duration.ofSeconds(5));
+            assertEquals(
+                    "index/process-index-0", afterRejoin.getShardLocations(0).getShardId());
 
             StatusRuntimeException stale = assertThrows(
                     StatusRuntimeException.class,
                     () -> client.getShardMap(GetShardMapRequest.newBuilder()
-                            .setMinTopologyVersion(reregisteredVersion + 1)
+                            .setMinTopologyVersion(afterRejoin.getTopologyVersion() + 1)
                             .build()));
             assertEquals(Status.Code.FAILED_PRECONDITION, stale.getStatus().getCode());
         } finally {
+            if (firstNode != null) {
+                firstNode.close();
+            }
+            if (restartedNode != null) {
+                restartedNode.close();
+            }
             if (first != null) {
                 stop(first);
             }
@@ -131,14 +148,32 @@ class CoordinatorProcessIntegrationTest {
         throw new AssertionError("Coordinator did not reach expected topology before timeout", lastFailure);
     }
 
-    private static RegisterNodeRequest registerRequest() {
-        return RegisterNodeRequest.newBuilder()
-                .setNodeId("process-index-0")
-                .setHost("localhost")
-                .setPort(5000)
-                .setHealthPort(5100)
-                .setRole(NodeRole.NODE_ROLE_INDEX)
+    private static NodeMembershipAgent membershipAgent(int coordinatorPort) {
+        ManagedChannel channel = ManagedChannelBuilder.forAddress("localhost", coordinatorPort)
+                .usePlaintext()
                 .build();
+        NodeMembershipAgent.Settings settings = new NodeMembershipAgent.Settings(
+                "localhost",
+                coordinatorPort,
+                Duration.ofMillis(100),
+                Duration.ofMillis(25),
+                Duration.ofMillis(250),
+                Duration.ofMillis(250),
+                Duration.ofMillis(100));
+        NodeMembershipAgent.NodeIdentity identity = new NodeMembershipAgent.NodeIdentity(
+                "process-index-0", "localhost", 5000, 5100, NodeRole.NODE_ROLE_INDEX);
+        return new NodeMembershipAgent(identity, settings, ClusterServiceGrpc.newBlockingStub(channel), channel);
+    }
+
+    private static void waitForRegistration(NodeMembershipAgent agent, Duration timeout) throws InterruptedException {
+        Instant deadline = Instant.now().plus(timeout);
+        while (Instant.now().isBefore(deadline)) {
+            if (agent.isRegistered()) {
+                return;
+            }
+            Thread.sleep(10);
+        }
+        throw new AssertionError("Membership agent did not observe registration before timeout");
     }
 
     private static int freePort() throws IOException {

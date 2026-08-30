@@ -5,6 +5,11 @@ serviceDiscovery:
   refreshIntervalSeconds: 10
   nodeExpirySeconds: 30
   maxStalenessSeconds: 30
+  heartbeatIntervalSeconds: 10
+  registrationInitialBackoffMillis: 250
+  registrationMaxBackoffSeconds: 10
+  membershipRpcDeadlineMillis: 2000
+  shutdownDeregisterTimeoutMillis: 1000
   coordinatorStateFile: "data/coordinator-topology.properties"
 
 indexNodes:

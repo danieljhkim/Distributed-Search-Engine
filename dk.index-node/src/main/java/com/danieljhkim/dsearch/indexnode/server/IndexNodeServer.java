@@ -43,9 +43,8 @@ public class IndexNodeServer {
 
     public void start() throws IOException, InterruptedException {
         try {
-            server.start();
-            grpcServerStarted = true;
-            server.awaitTermination();
+            startAsync();
+            awaitTermination();
         } catch (IOException | RuntimeException e) {
             rollbackStartup();
             throw e;
@@ -54,6 +53,15 @@ public class IndexNodeServer {
             Thread.currentThread().interrupt();
             throw e;
         }
+    }
+
+    public void startAsync() throws IOException {
+        server.start();
+        grpcServerStarted = true;
+    }
+
+    public void awaitTermination() throws InterruptedException {
+        server.awaitTermination();
     }
 
     private void startPrometheusMetricsServer(int metricsPort) {

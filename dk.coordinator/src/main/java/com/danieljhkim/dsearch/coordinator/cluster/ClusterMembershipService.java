@@ -99,8 +99,21 @@ public class ClusterMembershipService {
         persistMutation(topologyChanged);
     }
 
+    /**
+     * Registration may cross into a new epoch, where versions are intentionally incomparable. In
+     * the same epoch, reject a coordinator whose available topology is older than the registering
+     * node has already observed before mutating membership.
+     */
+    public synchronized void assertRegistrationTopology(String observedEpoch, long observedVersion) {
+        if (observedEpoch != null && !observedEpoch.isBlank() && topologyEpoch.equals(observedEpoch)) {
+            assertVersionAvailable(observedVersion);
+        }
+    }
+
     /** Renew a registered node's lease; heartbeats never create membership. */
-    public synchronized long heartbeat(String nodeId, NodeRole role, long observedTopologyVersion) {
+    public synchronized long heartbeat(
+            String nodeId, NodeRole role, String observedTopologyEpoch, long observedTopologyVersion) {
+        assertEpochAvailable(observedTopologyEpoch);
         assertVersionAvailable(observedTopologyVersion);
         NodeGroup group = requireGroup(role);
         NodeGroup.NodeInfo existing = group.getNode(nodeId);
@@ -138,8 +151,8 @@ public class ClusterMembershipService {
     }
 
     /**
-     * Record the coordinator's active HTTP probe. A successful probe renews the lease; a failed
-     * probe marks the node unhealthy immediately and lets expiry remove it after the lease window.
+     * Record the coordinator's active HTTP probe. Probes affect routability but never renew the
+     * node-owned membership lease; only registration and heartbeat do that.
      */
     public synchronized void recordHealthCheck(String nodeId, NodeRole role, boolean healthy) {
         NodeGroup group = requireGroup(role);
@@ -150,9 +163,6 @@ public class ClusterMembershipService {
         boolean topologyChanged = existing.isHealthy() != healthy;
         if (topologyChanged) {
             group.addOrUpdateNode(copyWithHealth(existing, healthy));
-        }
-        if (healthy) {
-            lastSeenMillis.put(new MemberKey(role, nodeId), clock.millis());
         }
         persistMutation(topologyChanged);
     }
@@ -170,6 +180,18 @@ public class ClusterMembershipService {
         group.removeNode(nodeId);
         lastSeenMillis.remove(new MemberKey(role, nodeId));
         persistMutation(true);
+    }
+
+    /**
+     * Best-effort graceful removal guarded by the topology observed by the caller. Missing members
+     * are treated as already deregistered so shutdown remains idempotent.
+     */
+    public synchronized long deregisterNode(
+            String nodeId, NodeRole role, String observedTopologyEpoch, long observedTopologyVersion) {
+        assertEpochAvailable(observedTopologyEpoch);
+        assertVersionAvailable(observedTopologyVersion);
+        removeNode(nodeId, role);
+        return topologyVersion;
     }
 
     public synchronized AppConfig.NodeGroupConfig getNodeGroupConfig(NodeRole role) {
@@ -208,6 +230,12 @@ public class ClusterMembershipService {
     public synchronized void assertVersionAvailable(long minimumVersion) {
         if (minimumVersion > topologyVersion) {
             throw new StaleTopologyException(minimumVersion, topologyVersion);
+        }
+    }
+
+    public synchronized void assertEpochAvailable(String observedEpoch) {
+        if (observedEpoch != null && !observedEpoch.isBlank() && !topologyEpoch.equals(observedEpoch)) {
+            throw new StaleTopologyEpochException(observedEpoch, topologyEpoch);
         }
     }
 
@@ -428,6 +456,25 @@ public class ClusterMembershipService {
 
         public long getAvailableVersion() {
             return availableVersion;
+        }
+    }
+
+    public static final class StaleTopologyEpochException extends IllegalStateException {
+        private final String observedEpoch;
+        private final String availableEpoch;
+
+        public StaleTopologyEpochException(String observedEpoch, String availableEpoch) {
+            super("Observed topology epoch " + observedEpoch + " but coordinator has " + availableEpoch);
+            this.observedEpoch = observedEpoch;
+            this.availableEpoch = availableEpoch;
+        }
+
+        public String getObservedEpoch() {
+            return observedEpoch;
+        }
+
+        public String getAvailableEpoch() {
+            return availableEpoch;
         }
     }
 }

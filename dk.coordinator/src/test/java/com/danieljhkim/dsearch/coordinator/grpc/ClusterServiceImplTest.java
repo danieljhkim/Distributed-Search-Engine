@@ -11,6 +11,8 @@ import com.danieljhkim.dsearch.common.cluster.NodeGroup;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.enums.RoutingStrategy;
 import com.danieljhkim.dsearch.coordinator.cluster.ClusterMembershipService;
+import com.danieljhkim.dsearch.proto.cluster.DeregisterNodeRequest;
+import com.danieljhkim.dsearch.proto.cluster.DeregisterNodeResponse;
 import com.danieljhkim.dsearch.proto.cluster.GetClusterInfoRequest;
 import com.danieljhkim.dsearch.proto.cluster.GetClusterInfoResponse;
 import com.danieljhkim.dsearch.proto.cluster.GetShardMapRequest;
@@ -37,6 +39,7 @@ class ClusterServiceImplTest {
                 service, registerRequest("index-live-0", "index-live.local", 5011, 5111, NodeRole.NODE_ROLE_INDEX));
 
         assertTrue(registerResponse.getSuccess());
+        assertTrue(registerResponse.getLeaseDurationMillis() > 0);
         GetClusterInfoResponse clusterInfo = getClusterInfo(service, NodeRole.NODE_ROLE_INDEX);
         assertEquals("index-nodes", clusterInfo.getComponentLabel());
         assertEquals(RoutingStrategy.ROUND_ROBIN.name(), clusterInfo.getRoutingStrategy());
@@ -92,6 +95,29 @@ class ClusterServiceImplTest {
                 5022,
                 5122,
                 NodeRole.NODE_ROLE_INDEX);
+    }
+
+    @Test
+    void registrationRejectsOlderCoordinatorStateWithinSameEpochBeforeMutation() {
+        ClusterMembershipService membershipService = new ClusterMembershipService(appConfig());
+        ClusterServiceImpl service = new ClusterServiceImpl(membershipService);
+        RegisterNodeResponse first =
+                registerNode(service, validRegisterRequest().build());
+        CapturingObserver<RegisterNodeResponse> observer = new CapturingObserver<>();
+
+        service.registerNode(
+                registerRequest("node-b", "localhost", 5001, 5101, NodeRole.NODE_ROLE_INDEX).toBuilder()
+                        .setObservedTopologyEpoch(first.getTopologyEpoch())
+                        .setObservedTopologyVersion(first.getTopologyVersion() + 1)
+                        .build(),
+                observer);
+
+        assertStatus(
+                observer.error,
+                Status.Code.FAILED_PRECONDITION,
+                "Requested topology version " + (first.getTopologyVersion() + 1) + " but coordinator has "
+                        + first.getTopologyVersion());
+        assertNull(membershipService.getIndexGroup().getNode("node-b"));
     }
 
     @Test
@@ -219,6 +245,58 @@ class ClusterServiceImplTest {
     }
 
     @Test
+    void heartbeatRejectsStaleCoordinatorEpoch() {
+        ClusterMembershipService membershipService = new ClusterMembershipService(appConfig());
+        ClusterServiceImpl service = new ClusterServiceImpl(membershipService);
+        CapturingObserver<HeartbeatResponse> observer = new CapturingObserver<>();
+        registerNode(service, validRegisterRequest().build());
+
+        service.heartbeat(
+                HeartbeatRequest.newBuilder()
+                        .setNodeId("node-a")
+                        .setRole(NodeRole.NODE_ROLE_INDEX)
+                        .setObservedTopologyEpoch("stale-epoch")
+                        .setObservedTopologyVersion(membershipService.getTopologyVersion())
+                        .build(),
+                observer);
+
+        assertStatus(
+                observer.error,
+                Status.Code.FAILED_PRECONDITION,
+                "Observed topology epoch stale-epoch but coordinator has " + membershipService.getTopologyEpoch());
+    }
+
+    @Test
+    void gracefulDeregistrationIsIdempotentAndRemovesNodeImmediately() {
+        ClusterMembershipService membershipService = new ClusterMembershipService(appConfig());
+        ClusterServiceImpl service = new ClusterServiceImpl(membershipService);
+        RegisterNodeResponse registration =
+                registerNode(service, validRegisterRequest().build());
+
+        DeregisterNodeResponse first = deregisterNode(
+                service,
+                DeregisterNodeRequest.newBuilder()
+                        .setNodeId("node-a")
+                        .setRole(NodeRole.NODE_ROLE_INDEX)
+                        .setObservedTopologyEpoch(registration.getTopologyEpoch())
+                        .setObservedTopologyVersion(registration.getTopologyVersion())
+                        .build());
+        DeregisterNodeResponse second = deregisterNode(
+                service,
+                DeregisterNodeRequest.newBuilder()
+                        .setNodeId("node-a")
+                        .setRole(NodeRole.NODE_ROLE_INDEX)
+                        .setObservedTopologyEpoch(first.getTopologyEpoch())
+                        .setObservedTopologyVersion(first.getTopologyVersion())
+                        .build());
+
+        assertTrue(first.getSuccess());
+        assertTrue(second.getSuccess());
+        assertNull(membershipService.getIndexGroup().getNode("node-a"));
+        assertEquals(first.getTopologyVersion(), second.getTopologyVersion());
+    }
+
+    @Test
     void shardMapReturnsDeterministicVersionedIndexPlacement() {
         ClusterMembershipService membershipService = new ClusterMembershipService(appConfig());
         ClusterServiceImpl service = new ClusterServiceImpl(membershipService);
@@ -274,6 +352,17 @@ class ClusterServiceImplTest {
         CapturingObserver<GetClusterInfoResponse> observer = new CapturingObserver<>();
 
         service.getClusterInfo(GetClusterInfoRequest.newBuilder().setRole(role).build(), observer);
+
+        assertNull(observer.error);
+        assertTrue(observer.completed);
+        assertNotNull(observer.value);
+        return observer.value;
+    }
+
+    private static DeregisterNodeResponse deregisterNode(ClusterServiceImpl service, DeregisterNodeRequest request) {
+        CapturingObserver<DeregisterNodeResponse> observer = new CapturingObserver<>();
+
+        service.deregisterNode(request, observer);
 
         assertNull(observer.error);
         assertTrue(observer.completed);

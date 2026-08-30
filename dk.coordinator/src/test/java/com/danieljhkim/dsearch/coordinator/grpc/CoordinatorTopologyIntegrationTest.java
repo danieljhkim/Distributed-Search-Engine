@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.danieljhkim.dsearch.common.cluster.NodeMembershipAgent;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.enums.RoutingStrategy;
 import com.danieljhkim.dsearch.coordinator.cluster.ClusterMembershipService;
@@ -21,6 +22,7 @@ import io.grpc.StatusRuntimeException;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
@@ -87,8 +89,52 @@ class CoordinatorTopologyIntegrationTest {
         recovered.closeChannel();
     }
 
+    @Test
+    void runningNodeAutomaticallyRejoinsSameIdentityAfterCoordinatorDowntimeExceedsLease() throws Exception {
+        Path stateFile = tempDir.resolve("membership-agent-coordinator.properties");
+        MutableClock clock = new MutableClock(Instant.parse("2026-08-29T00:00:00Z"));
+        AppConfig config = appConfig();
+        ClusterMembershipService firstMembership = new ClusterMembershipService(config, stateFile, clock);
+        RunningCoordinator first = start(firstMembership);
+        int coordinatorPort = first.server().getPort();
+        NodeMembershipAgent agent = membershipAgent(coordinatorPort);
+        RunningCoordinator recovered = null;
+        try {
+            agent.start();
+            awaitMember(firstMembership, "index-agent-0", Duration.ofSeconds(5));
+            long firstRegistrationVersion = firstMembership.getTopologyVersion();
+
+            first.close();
+            clock.advanceSeconds(6);
+            ClusterMembershipService recoveredMembership = new ClusterMembershipService(config, stateFile, clock);
+            assertEquals(List.of("NODE_ROLE_INDEX/index-agent-0"), recoveredMembership.expireNodes());
+            long expiredVersion = recoveredMembership.getTopologyVersion();
+
+            recovered = start(recoveredMembership, coordinatorPort);
+            awaitMember(recoveredMembership, "index-agent-0", Duration.ofSeconds(5));
+
+            assertTrue(expiredVersion > firstRegistrationVersion);
+            assertTrue(recoveredMembership.getTopologyVersion() > expiredVersion);
+            assertEquals(
+                    "localhost",
+                    recoveredMembership.getIndexGroup().getNode("index-agent-0").getHost());
+        } finally {
+            agent.close();
+            if (!first.server().isShutdown()) {
+                first.close();
+            }
+            if (recovered != null) {
+                recovered.close();
+            }
+        }
+    }
+
     private static RunningCoordinator start(ClusterMembershipService membershipService) throws IOException {
-        Server server = ServerBuilder.forPort(0)
+        return start(membershipService, 0);
+    }
+
+    private static RunningCoordinator start(ClusterMembershipService membershipService, int port) throws IOException {
+        Server server = ServerBuilder.forPort(port)
                 .addService(new ClusterServiceImpl(membershipService))
                 .build()
                 .start();
@@ -96,6 +142,35 @@ class CoordinatorTopologyIntegrationTest {
                 .usePlaintext()
                 .build();
         return new RunningCoordinator(server, channel);
+    }
+
+    private static NodeMembershipAgent membershipAgent(int coordinatorPort) {
+        ManagedChannel channel = ManagedChannelBuilder.forAddress("localhost", coordinatorPort)
+                .usePlaintext()
+                .build();
+        NodeMembershipAgent.Settings settings = new NodeMembershipAgent.Settings(
+                "localhost",
+                coordinatorPort,
+                Duration.ofMillis(25),
+                Duration.ofMillis(10),
+                Duration.ofMillis(100),
+                Duration.ofMillis(250),
+                Duration.ofMillis(100));
+        NodeMembershipAgent.NodeIdentity identity = new NodeMembershipAgent.NodeIdentity(
+                "index-agent-0", "localhost", 5000, 5100, NodeRole.NODE_ROLE_INDEX);
+        return new NodeMembershipAgent(identity, settings, ClusterServiceGrpc.newBlockingStub(channel), channel);
+    }
+
+    private static void awaitMember(ClusterMembershipService membershipService, String nodeId, Duration timeout)
+            throws InterruptedException {
+        Instant deadline = Instant.now().plus(timeout);
+        while (Instant.now().isBefore(deadline)) {
+            if (membershipService.getIndexGroup().getNode(nodeId) != null) {
+                return;
+            }
+            Thread.sleep(10);
+        }
+        throw new AssertionError("Node did not register before timeout: " + nodeId);
     }
 
     private static RegisterNodeRequest registerRequest() {

@@ -115,6 +115,12 @@ class ProtoWireContractTest {
         assertRpc(
                 files.get("cluster.proto"),
                 "ClusterService",
+                "DeregisterNode",
+                "dsearch.cluster.DeregisterNodeRequest",
+                "dsearch.cluster.DeregisterNodeResponse");
+        assertRpc(
+                files.get("cluster.proto"),
+                "ClusterService",
                 "GetShardMap",
                 "dsearch.cluster.GetShardMapRequest",
                 "dsearch.cluster.GetShardMapResponse");
