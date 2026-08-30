@@ -2,9 +2,9 @@ package com.danieljhkim.dsearch.querynode.grpc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -181,9 +181,11 @@ class QueryServiceImplTest {
                 request(SearchType.BM25).toBuilder().setSize(1001).build();
         RecordingObserver observer = new RecordingObserver();
 
-        assertThrows(IllegalArgumentException.class, () -> queryService.search(oversized, observer));
+        queryService.search(oversized, observer);
+        StatusRuntimeException error = assertInstanceOf(StatusRuntimeException.class, observer.error);
+        assertEquals(Status.Code.INVALID_ARGUMENT, error.getStatus().getCode());
+        assertTrue(error.getStatus().getDescription().contains("Requested pageSize"));
         assertNull(observer.response);
-        assertNull(observer.error);
         assertFalse(observer.completed);
         verifyNoInteractions(searchExecutor, indexService);
     }
