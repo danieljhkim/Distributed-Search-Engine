@@ -129,7 +129,6 @@ public class IndexNodeApplication {
                         indexingConfig.maxBufferedOpsPerShard(),
                         indexingConfig.maxFlushInterval(),
                         fieldConfigs,
-                        new com.danieljhkim.dsearch.ml.embedding.TextEmbeddingService(),
                         indexingConfig.minimumFreeDiskBytes());
                 indexManagerReference.set(manager);
                 return manager;
