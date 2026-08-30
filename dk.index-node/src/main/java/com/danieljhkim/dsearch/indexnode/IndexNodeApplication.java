@@ -4,6 +4,7 @@ import com.danieljhkim.dsearch.common.cluster.NodeMembershipAgent;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.config.AppConfig.FieldConfig;
 import com.danieljhkim.dsearch.common.config.ConfigLoader;
+import com.danieljhkim.dsearch.common.grpc.GrpcTransportSecurity;
 import com.danieljhkim.dsearch.common.health.HealthHttpServer;
 import com.danieljhkim.dsearch.indexnode.index.IndexManager;
 import com.danieljhkim.dsearch.indexnode.server.IndexNodeServer;
@@ -11,7 +12,6 @@ import com.danieljhkim.dsearch.proto.cluster.ClusterServiceGrpc;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import com.sun.net.httpserver.HttpServer;
 import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -86,11 +86,10 @@ public class IndexNodeApplication {
         if (resolved == null) {
             return null;
         }
-        ManagedChannel channel = ManagedChannelBuilder.forAddress(
+        ManagedChannel channel = GrpcTransportSecurity.from(appConfig)
+                .newChannel(
                         resolved.settings().coordinatorHost(),
-                        resolved.settings().coordinatorPort())
-                .usePlaintext()
-                .build();
+                        resolved.settings().coordinatorPort());
         return new NodeMembershipAgent(
                 resolved.identity(), resolved.settings(), ClusterServiceGrpc.newBlockingStub(channel), channel);
     }

@@ -18,6 +18,9 @@ DATA_DIR="$BASE_DIR/data"
 
 JAVA_OPTS="--add-modules jdk.incubator.vector"
 
+# Local launchers opt in to plaintext explicitly. Packaged/default configuration remains mTLS.
+export DSEARCH_GRPC_PROFILE=local
+
 mkdir -p "$LOG_DIR"
 mkdir -p "$DATA_DIR"
 

@@ -2,6 +2,7 @@ package com.danieljhkim.dsearch.indexnode.server;
 
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.grpc.GlobalExceptionInterceptor;
+import com.danieljhkim.dsearch.common.grpc.GrpcTransportSecurity;
 import com.danieljhkim.dsearch.common.grpc.PrometheusGrpcServerInterceptor;
 import com.danieljhkim.dsearch.common.tracing.CorrelationIdServerInterceptor;
 import com.danieljhkim.dsearch.indexnode.grpc.IndexServiceImpl;
@@ -9,7 +10,6 @@ import com.danieljhkim.dsearch.indexnode.index.IndexManager;
 import io.grpc.Server;
 import io.grpc.ServerInterceptors;
 import io.grpc.ServerServiceDefinition;
-import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.prometheus.client.exporter.HTTPServer;
 import io.prometheus.client.hotspot.DefaultExports;
 import java.io.IOException;
@@ -25,7 +25,7 @@ public class IndexNodeServer {
     private HTTPServer metricsServer;
 
     public IndexNodeServer(int port, IndexManager indexManager) {
-        this(port, port + 4000, indexManager, new AppConfig.RequestLimitsConfig());
+        this(port, port + 4000, indexManager, new AppConfig(), new AppConfig.RequestLimitsConfig());
     }
 
     public IndexNodeServer(int port, IndexManager indexManager, AppConfig appConfig) {
@@ -33,21 +33,43 @@ public class IndexNodeServer {
                 port,
                 port + 4000,
                 indexManager,
+                appConfig,
                 appConfig.getRequestLimits() != null
                         ? appConfig.getRequestLimits()
                         : new AppConfig.RequestLimitsConfig());
     }
 
     IndexNodeServer(int port, int metricsPort, IndexManager indexManager) {
-        this(port, metricsPort, indexManager, new AppConfig.RequestLimitsConfig());
+        this(port, metricsPort, indexManager, new AppConfig(), new AppConfig.RequestLimitsConfig());
     }
 
     IndexNodeServer(int port, int metricsPort, IndexManager indexManager, AppConfig.RequestLimitsConfig requestLimits) {
+        this(port, metricsPort, indexManager, new AppConfig(), requestLimits);
+    }
+
+    IndexNodeServer(int port, int metricsPort, IndexManager indexManager, AppConfig appConfig) {
+        this(
+                port,
+                metricsPort,
+                indexManager,
+                appConfig,
+                appConfig.getRequestLimits() != null
+                        ? appConfig.getRequestLimits()
+                        : new AppConfig.RequestLimitsConfig());
+    }
+
+    IndexNodeServer(
+            int port,
+            int metricsPort,
+            IndexManager indexManager,
+            AppConfig appConfig,
+            AppConfig.RequestLimitsConfig requestLimits) {
         IndexServiceImpl indexService = new IndexServiceImpl(indexManager, requestLimits);
         ServerServiceDefinition interceptedService =
                 ServerInterceptors.intercept(indexService, new GlobalExceptionInterceptor());
 
-        this.server = NettyServerBuilder.forPort(port)
+        this.server = GrpcTransportSecurity.from(appConfig)
+                .serverBuilder(port)
                 .maxInboundMessageSize(Math.max(1, requestLimits.getMaxGrpcInboundBytes()))
                 .addService(interceptedService)
                 .intercept(new CorrelationIdServerInterceptor())

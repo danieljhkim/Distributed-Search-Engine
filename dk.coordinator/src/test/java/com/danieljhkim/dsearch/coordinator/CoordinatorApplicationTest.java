@@ -78,6 +78,7 @@ class CoordinatorApplicationTest {
 
     private static AppConfig config() {
         AppConfig config = new AppConfig();
+        config.getGrpcSecurity().setProfile("local");
         AppConfig.ServiceDiscoveryConfig discovery = new AppConfig.ServiceDiscoveryConfig();
         discovery.setEnabled(false);
         config.setServiceDiscovery(discovery);

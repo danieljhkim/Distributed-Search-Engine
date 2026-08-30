@@ -39,7 +39,7 @@ public class CoordinatorApplication {
     static CoordinatorRuntime start(AppConfig appConfig, int port, int healthPort) throws IOException {
         Objects.requireNonNull(appConfig, "appConfig must not be null");
         ClusterMembershipService membershipService = new ClusterMembershipService(appConfig);
-        CoordinatorServer server = new CoordinatorServer(port, membershipService);
+        CoordinatorServer server = new CoordinatorServer(port, membershipService, appConfig);
         HealthCheckScheduler healthCheckScheduler = new HealthCheckScheduler(membershipService, appConfig);
         AtomicBoolean acceptingRequests = new AtomicBoolean();
         HttpServer healthServer = HealthHttpServer.start(

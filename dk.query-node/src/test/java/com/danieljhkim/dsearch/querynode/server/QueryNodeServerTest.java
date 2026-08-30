@@ -75,8 +75,10 @@ class QueryNodeServerTest {
     }
 
     private static QueryNodeServer newServer(int grpcPort, int metricsPort) {
+        AppConfig appConfig = new AppConfig();
+        appConfig.getGrpcSecurity().setProfile("local");
         return new QueryNodeServer(
-                grpcPort, metricsPort, mock(SearchExecutor.class), mock(BaseIndexService.class), new AppConfig());
+                grpcPort, metricsPort, mock(SearchExecutor.class), mock(BaseIndexService.class), appConfig);
     }
 
     private static void startAndStop(QueryNodeServer server, int grpcPort) throws Exception {

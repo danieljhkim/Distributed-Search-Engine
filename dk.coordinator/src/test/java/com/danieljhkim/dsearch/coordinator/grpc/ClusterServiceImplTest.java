@@ -10,6 +10,8 @@ import static org.junit.jupiter.api.Assertions.fail;
 import com.danieljhkim.dsearch.common.cluster.NodeGroup;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.enums.RoutingStrategy;
+import com.danieljhkim.dsearch.common.grpc.GrpcPeerIdentity;
+import com.danieljhkim.dsearch.common.grpc.GrpcPeerIdentityContext;
 import com.danieljhkim.dsearch.coordinator.cluster.ClusterMembershipService;
 import com.danieljhkim.dsearch.proto.cluster.DeregisterNodeRequest;
 import com.danieljhkim.dsearch.proto.cluster.DeregisterNodeResponse;
@@ -105,12 +107,12 @@ class ClusterServiceImplTest {
                 registerNode(service, validRegisterRequest().build());
         CapturingObserver<RegisterNodeResponse> observer = new CapturingObserver<>();
 
-        service.registerNode(
+        asAdmin(() -> service.registerNode(
                 registerRequest("node-b", "localhost", 5001, 5101, NodeRole.NODE_ROLE_INDEX).toBuilder()
                         .setObservedTopologyEpoch(first.getTopologyEpoch())
                         .setObservedTopologyVersion(first.getTopologyVersion() + 1)
                         .build(),
-                observer);
+                observer));
 
         assertStatus(
                 observer.error,
@@ -126,12 +128,77 @@ class ClusterServiceImplTest {
         ClusterServiceImpl service = new ClusterServiceImpl(membershipService);
         CapturingObserver<RegisterNodeResponse> observer = new CapturingObserver<>();
 
-        service.registerNode(validRegisterRequest().build(), observer);
+        asAdmin(() -> service.registerNode(validRegisterRequest().build(), observer));
 
         assertNull(observer.error);
         assertTrue(observer.completed);
         assertTrue(observer.value.getSuccess());
         assertNotNull(membershipService.getIndexGroup().getNode("node-a"));
+    }
+
+    @Test
+    void topologyMutationRejectsUnauthenticatedCaller() {
+        ClusterServiceImpl service = new ClusterServiceImpl(new ClusterMembershipService(appConfig()));
+        CapturingObserver<RegisterNodeResponse> observer = new CapturingObserver<>();
+
+        service.registerNode(validRegisterRequest().build(), observer);
+
+        assertStatus(
+                observer.error,
+                Status.Code.UNAUTHENTICATED,
+                "Topology mutation requires an authenticated service identity");
+    }
+
+    @Test
+    void registrationRejectsAuthenticatedIdentityWithWrongRole() {
+        ClusterServiceImpl service = new ClusterServiceImpl(new ClusterMembershipService(appConfig()));
+        CapturingObserver<RegisterNodeResponse> observer = new CapturingObserver<>();
+
+        GrpcPeerIdentityContext.runAs(
+                GrpcPeerIdentity.node(NodeRole.NODE_ROLE_QUERY, "node-a"),
+                () -> service.registerNode(validRegisterRequest().build(), observer));
+
+        assertStatus(
+                observer.error,
+                Status.Code.PERMISSION_DENIED,
+                "Authenticated identity is not authorized for this node and role");
+    }
+
+    @Test
+    void matchingNodeIdentityCanMutateOnlyItsOwnLease() {
+        ClusterMembershipService membershipService = new ClusterMembershipService(appConfig());
+        ClusterServiceImpl service = new ClusterServiceImpl(membershipService);
+        RegisterNodeRequest registration = validRegisterRequest().build();
+        CapturingObserver<RegisterNodeResponse> registrationObserver = new CapturingObserver<>();
+        GrpcPeerIdentity nodeIdentity = GrpcPeerIdentity.node(NodeRole.NODE_ROLE_INDEX, "node-a");
+        GrpcPeerIdentityContext.runAs(nodeIdentity, () -> service.registerNode(registration, registrationObserver));
+        assertNull(registrationObserver.error);
+
+        CapturingObserver<HeartbeatResponse> unauthorizedHeartbeat = new CapturingObserver<>();
+        GrpcPeerIdentityContext.runAs(
+                GrpcPeerIdentity.node(NodeRole.NODE_ROLE_INDEX, "node-b"),
+                () -> service.heartbeat(
+                        HeartbeatRequest.newBuilder()
+                                .setNodeId("node-a")
+                                .setRole(NodeRole.NODE_ROLE_INDEX)
+                                .build(),
+                        unauthorizedHeartbeat));
+        assertStatus(
+                unauthorizedHeartbeat.error,
+                Status.Code.PERMISSION_DENIED,
+                "Authenticated identity is not authorized for this node and role");
+
+        CapturingObserver<DeregisterNodeResponse> deregistrationObserver = new CapturingObserver<>();
+        GrpcPeerIdentityContext.runAs(
+                nodeIdentity,
+                () -> service.deregisterNode(
+                        DeregisterNodeRequest.newBuilder()
+                                .setNodeId("node-a")
+                                .setRole(NodeRole.NODE_ROLE_INDEX)
+                                .build(),
+                        deregistrationObserver));
+        assertNull(deregistrationObserver.error);
+        assertNull(membershipService.getIndexGroup().getNode("node-a"));
     }
 
     @Test
@@ -187,7 +254,7 @@ class ClusterServiceImplTest {
         ClusterServiceImpl service = new ClusterServiceImpl(membershipService);
         CapturingObserver<RegisterNodeResponse> observer = new CapturingObserver<>();
 
-        service.registerNode(validRegisterRequest().build(), observer);
+        asAdmin(() -> service.registerNode(validRegisterRequest().build(), observer));
 
         assertStatus(observer.error, Status.Code.NOT_FOUND, "No node group registered for role: NODE_ROLE_INDEX");
     }
@@ -227,13 +294,13 @@ class ClusterServiceImplTest {
         registerNode(service, validRegisterRequest().build());
         long registeredVersion = membershipService.getTopologyVersion();
 
-        service.heartbeat(
+        asAdmin(() -> service.heartbeat(
                 HeartbeatRequest.newBuilder()
                         .setNodeId("node-a")
                         .setRole(NodeRole.NODE_ROLE_INDEX)
                         .setObservedTopologyVersion(membershipService.getTopologyVersion())
                         .build(),
-                observer);
+                observer));
 
         assertNull(observer.error);
         assertTrue(observer.completed);
@@ -251,14 +318,14 @@ class ClusterServiceImplTest {
         CapturingObserver<HeartbeatResponse> observer = new CapturingObserver<>();
         registerNode(service, validRegisterRequest().build());
 
-        service.heartbeat(
+        asAdmin(() -> service.heartbeat(
                 HeartbeatRequest.newBuilder()
                         .setNodeId("node-a")
                         .setRole(NodeRole.NODE_ROLE_INDEX)
                         .setObservedTopologyEpoch("stale-epoch")
                         .setObservedTopologyVersion(membershipService.getTopologyVersion())
                         .build(),
-                observer);
+                observer));
 
         assertStatus(
                 observer.error,
@@ -340,7 +407,7 @@ class ClusterServiceImplTest {
     private static RegisterNodeResponse registerNode(ClusterServiceImpl service, RegisterNodeRequest request) {
         CapturingObserver<RegisterNodeResponse> observer = new CapturingObserver<>();
 
-        service.registerNode(request, observer);
+        asAdmin(() -> service.registerNode(request, observer));
 
         assertNull(observer.error);
         assertTrue(observer.completed);
@@ -362,7 +429,7 @@ class ClusterServiceImplTest {
     private static DeregisterNodeResponse deregisterNode(ClusterServiceImpl service, DeregisterNodeRequest request) {
         CapturingObserver<DeregisterNodeResponse> observer = new CapturingObserver<>();
 
-        service.deregisterNode(request, observer);
+        asAdmin(() -> service.deregisterNode(request, observer));
 
         assertNull(observer.error);
         assertTrue(observer.completed);
@@ -390,7 +457,7 @@ class ClusterServiceImplTest {
         ClusterServiceImpl service = new ClusterServiceImpl(new ClusterMembershipService(appConfig()));
         CapturingObserver<RegisterNodeResponse> observer = new CapturingObserver<>();
 
-        service.registerNode(request, observer);
+        asAdmin(() -> service.registerNode(request, observer));
 
         assertStatus(observer.error, expectedCode, expectedDescription);
     }
@@ -400,6 +467,10 @@ class ClusterServiceImplTest {
         Status status = Status.fromThrowable(error);
         assertEquals(expectedCode, status.getCode());
         assertEquals(expectedDescription, status.getDescription());
+    }
+
+    private static void asAdmin(Runnable action) {
+        GrpcPeerIdentityContext.runAs(GrpcPeerIdentity.admin("coordinator-test"), action);
     }
 
     private static RegisterNodeRequest registerRequest(

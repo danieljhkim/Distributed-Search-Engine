@@ -113,6 +113,7 @@ class QueryNodeApplicationTest {
 
     private static AppConfig validConfig() {
         AppConfig config = new AppConfig();
+        config.getGrpcSecurity().setProfile("local");
         AppConfig.ServiceDiscoveryConfig discovery = new AppConfig.ServiceDiscoveryConfig();
         discovery.setEnabled(false);
         config.setServiceDiscovery(discovery);

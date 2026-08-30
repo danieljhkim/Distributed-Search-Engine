@@ -118,6 +118,7 @@ class CoordinatorProcessIntegrationTest {
                 classPath,
                 "com.danieljhkim.dsearch.coordinator.CoordinatorApplication");
         builder.environment().put("APP_CONFIG_PATH", "process-app-config.yaml");
+        builder.environment().put("DSEARCH_GRPC_PROFILE", "local");
         builder.environment().put("COORDINATOR_PORT", Integer.toString(grpcPort));
         builder.environment().put("COORDINATOR_HEALTH_PORT", Integer.toString(healthPort));
         builder.environment().put("COORDINATOR_STATE_FILE", stateFile.toString());

@@ -119,6 +119,8 @@ class CoordinatorContainerRestartIntegrationTest {
                 "--env",
                 "APP_CONFIG_PATH=app-config.docker.yaml",
                 "--env",
+                "DSEARCH_GRPC_PROFILE=local",
+                "--env",
                 "COORDINATOR_STATE_FILE=" + STATE_PATH,
                 image));
     }

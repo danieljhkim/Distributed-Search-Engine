@@ -16,7 +16,6 @@ import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import io.grpc.Channel;
 import io.grpc.ClientInterceptors;
 import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
 import java.io.IOException;
 import java.util.Collection;
 import java.util.Comparator;
@@ -183,9 +182,10 @@ public class NodeClientManager<T> {
 
         PrometheusGrpcClientInterceptor metricsInterceptor =
                 new PrometheusGrpcClientInterceptor(componentLabel(nodeGroup));
+        GrpcTransportSecurity transportSecurity = GrpcTransportSecurity.from(nodeGroupManager.getDefaultConfig());
         Map<String, NodeClient<T>> clientMap = new HashMap<>();
         for (NodeGroup.NodeInfo node : nodeGroup.getAllNodes()) {
-            NodeClient<T> client = createNodeClient(node, clientFactory, metricsInterceptor);
+            NodeClient<T> client = createNodeClient(node, clientFactory, metricsInterceptor, transportSecurity);
             client.setActive(authoritativeTopologyAvailable);
             clientMap.put(node.getNodeId(), client);
         }
@@ -193,7 +193,7 @@ public class NodeClientManager<T> {
         // so keep a client for it; it stays inactive until discovery reports it healthy.
         for (NodeGroup.NodeInfo node : configuredNodeGroup.getAllNodes()) {
             clientMap.computeIfAbsent(node.getNodeId(), id -> {
-                NodeClient<T> client = createNodeClient(node, clientFactory, metricsInterceptor);
+                NodeClient<T> client = createNodeClient(node, clientFactory, metricsInterceptor, transportSecurity);
                 client.setActive(false);
                 return client;
             });
@@ -214,7 +214,7 @@ public class NodeClientManager<T> {
                 role,
                 nodeGroupManager::getNodeGroup,
                 serviceDiscoveryConfig,
-                node -> createNodeClient(node, clientFactory, metricsInterceptor),
+                node -> createNodeClient(node, clientFactory, metricsInterceptor, transportSecurity),
                 ownershipNodeIds);
     }
 
@@ -225,10 +225,9 @@ public class NodeClientManager<T> {
     private static <T> NodeClient<T> createNodeClient(
             NodeGroup.NodeInfo node,
             Function<Channel, T> clientFactory,
-            PrometheusGrpcClientInterceptor metricsInterceptor) {
-        ManagedChannel channel = ManagedChannelBuilder.forAddress(node.getHost(), node.getPort())
-                .usePlaintext()
-                .build();
+            PrometheusGrpcClientInterceptor metricsInterceptor,
+            GrpcTransportSecurity transportSecurity) {
+        ManagedChannel channel = transportSecurity.newChannel(node.getHost(), node.getPort());
         Channel interceptedChannel = ClientInterceptors.intercept(channel, TRACING_INTERCEPTOR, metricsInterceptor);
         T stub = clientFactory.apply(interceptedChannel);
         return new NodeClient<>(node.getNodeId(), stub, channel, node.getHost(), node.getHealthPort());
