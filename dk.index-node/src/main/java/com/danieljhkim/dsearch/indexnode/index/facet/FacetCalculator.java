@@ -133,7 +133,7 @@ public class FacetCalculator {
             if (state != null && key.equals(cachedKey)) {
                 return state;
             }
-            SortedSetDocValuesReaderState newState = new DefaultSortedSetDocValuesReaderState(reader);
+            SortedSetDocValuesReaderState newState = new DefaultSortedSetDocValuesReaderState(reader, facetsConfig);
             cachedReaderKey = key;
             cachedState = newState;
             return newState;
