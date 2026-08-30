@@ -68,7 +68,12 @@ class RequestAdmissionFilterTest {
                 MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/index");
                 filter.doFilter(request, new MockHttpServletResponse(), (ignoredRequest, ignoredResponse) -> {
                     admitted.countDown();
-                    release.await(5, TimeUnit.SECONDS);
+                    try {
+                        release.await(5, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new AssertionError("Interrupted while waiting for request release", e);
+                    }
                 });
                 return null;
             });
