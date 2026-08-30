@@ -35,6 +35,22 @@ class QueryNodeApplicationTest {
             HttpResponse<String> health = awaitHealth(healthPort);
             assertEquals(200, health.statusCode());
             assertTrue(health.body().contains("\"service\":\"query-node\""));
+            assertEquals(200, awaitEndpoint(healthPort, "/readyz").statusCode());
+
+            Field managerField = QueryNodeRuntime.class.getDeclaredField("nodeClientManager");
+            managerField.setAccessible(true);
+            var manager = (com.danieljhkim.dsearch.common.grpc.NodeClientManager<?>) managerField.get(runtime);
+            Field activeClients = manager.getClass().getDeclaredField("activeClients");
+            activeClients.setAccessible(true);
+            activeClients.set(manager, List.of());
+
+            HttpResponse<String> dependencyLoss = awaitEndpoint(healthPort, "/readyz");
+            assertEquals(503, dependencyLoss.statusCode());
+            assertTrue(dependencyLoss.body().contains("index_model_or_topology_not_ready"));
+            assertEquals(200, awaitEndpoint(healthPort, "/livez").statusCode());
+
+            activeClients.set(manager, List.copyOf(manager.getClientMap().values()));
+            assertEquals(200, awaitEndpoint(healthPort, "/readyz").statusCode());
         } finally {
             runtime.close();
             started.get(5, TimeUnit.SECONDS);
@@ -127,13 +143,17 @@ class QueryNodeApplicationTest {
     }
 
     private static HttpResponse<String> awaitHealth(int port) throws Exception {
+        return awaitEndpoint(port, "/health");
+    }
+
+    private static HttpResponse<String> awaitEndpoint(int port, String path) throws Exception {
         HttpClient client = HttpClient.newHttpClient();
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         IOException lastFailure = null;
         while (System.nanoTime() < deadline) {
             try {
                 return client.send(
-                        HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/health"))
+                        HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
                                 .GET()
                                 .build(),
                         HttpResponse.BodyHandlers.ofString());

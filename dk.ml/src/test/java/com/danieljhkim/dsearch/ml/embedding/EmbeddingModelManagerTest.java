@@ -1,6 +1,7 @@
 package com.danieljhkim.dsearch.ml.embedding;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -11,7 +12,6 @@ import static org.mockito.Mockito.verify;
 import ai.djl.repository.zoo.ZooModel;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -154,16 +154,45 @@ class EmbeddingModelManagerTest {
     }
 
     @Test
-    void initSetsTheDefaultModelWithoutUsingAProductionLoader() throws Exception {
+    void initializationSetsTheDefaultModelWithoutUsingAProductionLoader() throws Exception {
         ZooModel<String, float[]> model = mockModel();
         EmbeddingModelManager manager = new EmbeddingModelManager(config(), (modelUrl, engine) -> model);
-        Method init = EmbeddingModelManager.class.getDeclaredMethod("init");
-        init.setAccessible(true);
-
-        init.invoke(manager);
+        manager.initializeDefaultModel();
 
         assertSame(model, manager.getDefaultModel());
         assertSame(model, manager.getModelCache().get("default-model"));
+    }
+
+    @Test
+    void readinessIsFalseDuringModelDelayAndCanRecoverAfterALoadFailure() throws Exception {
+        ZooModel<String, float[]> model = mockModel();
+        AtomicInteger attempts = new AtomicInteger();
+        CountDownLatch loadStarted = new CountDownLatch(1);
+        CountDownLatch allowLoad = new CountDownLatch(1);
+        EmbeddingModelManager manager = new EmbeddingModelManager(config(), (modelUrl, engine) -> {
+            if (attempts.getAndIncrement() == 0) {
+                throw new IllegalStateException("model repository unavailable");
+            }
+            loadStarted.countDown();
+            await(allowLoad);
+            return model;
+        });
+
+        assertFalse(manager.isDefaultModelReady());
+        assertThrows(IllegalStateException.class, manager::initializeDefaultModel);
+        assertFalse(manager.isDefaultModelReady());
+
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> retry = executor.submit(manager::initializeDefaultModel);
+            assertTrue(loadStarted.await(5, TimeUnit.SECONDS));
+            assertFalse(manager.isDefaultModelReady());
+            allowLoad.countDown();
+            retry.get(5, TimeUnit.SECONDS);
+            assertTrue(manager.isDefaultModelReady());
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     @Test

@@ -23,6 +23,11 @@ public class ClusterHealthResponse {
     @AllArgsConstructor
     public static class ServiceHealth {
         private String status;
+        private String reason;
+
+        public ServiceHealth(String status) {
+            this(status, null);
+        }
     }
 
     @Data

@@ -79,7 +79,7 @@ public class NodeGroupManager {
      * silently revives the operator's static node list.
      */
     public NodeGroup getNodeGroup(NodeRole role) {
-        if (role == NodeRole.NODE_ROLE_COORDINATOR || !isServiceDiscoveryEnabled()) {
+        if (!isServiceDiscoveryEnabled()) {
             return getStaticNodeGroupConfig(role);
         }
         AcceptedTopology previous = acceptedTopologies.get(role);

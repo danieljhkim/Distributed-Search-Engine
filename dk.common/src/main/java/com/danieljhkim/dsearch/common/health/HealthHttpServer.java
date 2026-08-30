@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Supplier;
 import java.util.logging.Logger;
 
 public final class HealthHttpServer {
@@ -18,9 +19,28 @@ public final class HealthHttpServer {
 
     private HealthHttpServer() {}
 
+    /**
+     * Starts the conventional health server. {@code /health} remains a liveness alias for
+     * compatibility; callers that need traffic admission must use {@code /readyz}.
+     */
     public static HttpServer start(int port, String serviceName) throws IOException {
+        return start(port, serviceName, Readiness::up);
+    }
+
+    /**
+     * Starts liveness and readiness endpoints.
+     *
+     * <p>{@code GET /health} and {@code GET /livez} return {@code 200} while this HTTP server is
+     * running and never invoke the readiness supplier. {@code GET /readyz} returns {@code 200}
+     * only when the supplied check is ready; it returns {@code 503} with a machine-readable
+     * {@code reason} otherwise. Any non-GET request returns {@code 405}.
+     */
+    public static HttpServer start(int port, String serviceName, Supplier<Readiness> readiness) throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
-        server.createContext("/health", new HealthHandler(serviceName));
+        HealthHandler livenessHandler = new HealthHandler(serviceName, null);
+        server.createContext("/health", livenessHandler);
+        server.createContext("/livez", livenessHandler);
+        server.createContext("/readyz", new HealthHandler(serviceName, readiness));
         ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, serviceName + "-health-http");
             t.setDaemon(true);
@@ -32,12 +52,30 @@ public final class HealthHttpServer {
         return server;
     }
 
+    public record Readiness(boolean ready, String reason) {
+        public Readiness {
+            if (!ready && (reason == null || reason.isBlank())) {
+                throw new IllegalArgumentException("A not-ready response must include a reason");
+            }
+        }
+
+        public static Readiness up() {
+            return new Readiness(true, null);
+        }
+
+        public static Readiness notReady(String reason) {
+            return new Readiness(false, reason);
+        }
+    }
+
     private static class HealthHandler implements HttpHandler {
 
         private final String serviceName;
+        private final Supplier<Readiness> readiness;
 
-        private HealthHandler(String serviceName) {
+        private HealthHandler(String serviceName, Supplier<Readiness> readiness) {
             this.serviceName = serviceName;
+            this.readiness = readiness;
         }
 
         @Override
@@ -47,15 +85,34 @@ public final class HealthHttpServer {
                 exchange.close();
                 return;
             }
+            Readiness result = readiness == null ? Readiness.up() : safelyCheckReadiness();
             String body = String.format(
-                    "{\"status\":\"UP\",\"service\":\"%s\",\"timestamp\":\"%s\"}",
-                    serviceName, Instant.now().toString());
+                    "{\"status\":\"%s\",\"service\":\"%s\",\"timestamp\":\"%s\"%s}",
+                    result.ready() ? "UP" : "DOWN",
+                    serviceName,
+                    Instant.now(),
+                    result.ready() ? "" : ",\"reason\":\"" + escapeJson(result.reason()) + "\"");
             byte[] responseBytes = body.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "application/json");
-            exchange.sendResponseHeaders(200, responseBytes.length);
+            exchange.sendResponseHeaders(result.ready() ? 200 : 503, responseBytes.length);
             try (OutputStream os = exchange.getResponseBody()) {
                 os.write(responseBytes);
             }
+        }
+
+        private Readiness safelyCheckReadiness() {
+            try {
+                Readiness result = readiness.get();
+                return result == null ? Readiness.notReady("readiness_check_returned_null") : result;
+            } catch (RuntimeException e) {
+                LOGGER.warning(() -> "Readiness check failed for " + serviceName + ": " + e);
+                return Readiness.notReady(
+                        "readiness_check_failed:" + e.getClass().getSimpleName());
+            }
+        }
+
+        private static String escapeJson(String value) {
+            return value.replace("\\", "\\\\").replace("\"", "\\\"");
         }
     }
 }

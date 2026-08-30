@@ -1,6 +1,7 @@
 package com.danieljhkim.dsearch.indexnode.index;
 
 import com.danieljhkim.dsearch.common.config.AppConfig.FieldConfig;
+import com.danieljhkim.dsearch.common.health.HealthHttpServer;
 import com.danieljhkim.dsearch.common.model.SearchDocument;
 import com.danieljhkim.dsearch.common.model.SearchResult;
 import com.danieljhkim.dsearch.ml.embedding.TextEmbedder;
@@ -10,6 +11,7 @@ import com.danieljhkim.dsearch.proto.common.Filter;
 import com.danieljhkim.dsearch.proto.common.SearchType;
 import java.io.Closeable;
 import java.io.IOException;
+import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -33,6 +35,7 @@ public class IndexManager implements Closeable {
     private static final String SHARD_PREFIX = "shard-";
     public static final int DEFAULT_MAX_BUFFERED_OPS_PER_SHARD = 100;
     public static final Duration DEFAULT_MAX_FLUSH_INTERVAL = Duration.ofSeconds(5);
+    public static final long DEFAULT_MINIMUM_FREE_DISK_BYTES = 104857600L;
 
     /**
      * How many index/delete operations to buffer per shard before forcing a commit.
@@ -44,6 +47,8 @@ public class IndexManager implements Closeable {
      * thread.
      */
     private final Duration maxFlushInterval;
+
+    private final long minimumFreeDiskBytes;
 
     private final Path baseDir;
     private final TextEmbedder embeddingService;
@@ -57,6 +62,7 @@ public class IndexManager implements Closeable {
 
     // Field configurations for filtering, sorting, and highlighting
     private final Map<String, FieldConfig> fieldConfigMap;
+    private volatile boolean closed;
 
     public IndexManager(Path baseDir) {
         this(baseDir, DEFAULT_MAX_BUFFERED_OPS_PER_SHARD, DEFAULT_MAX_FLUSH_INTERVAL, null);
@@ -68,7 +74,14 @@ public class IndexManager implements Closeable {
 
     public IndexManager(
             Path baseDir, int maxBufferedOpsPerShard, Duration maxFlushInterval, List<FieldConfig> fieldConfigs) {
-        this(baseDir, maxBufferedOpsPerShard, maxFlushInterval, fieldConfigs, new TextEmbeddingService(), true);
+        this(
+                baseDir,
+                maxBufferedOpsPerShard,
+                maxFlushInterval,
+                fieldConfigs,
+                new TextEmbeddingService(),
+                true,
+                DEFAULT_MINIMUM_FREE_DISK_BYTES);
     }
 
     public IndexManager(
@@ -77,7 +90,31 @@ public class IndexManager implements Closeable {
             Duration maxFlushInterval,
             List<FieldConfig> fieldConfigs,
             TextEmbedder embeddingService) {
-        this(baseDir, maxBufferedOpsPerShard, maxFlushInterval, fieldConfigs, embeddingService, false);
+        this(
+                baseDir,
+                maxBufferedOpsPerShard,
+                maxFlushInterval,
+                fieldConfigs,
+                embeddingService,
+                false,
+                DEFAULT_MINIMUM_FREE_DISK_BYTES);
+    }
+
+    public IndexManager(
+            Path baseDir,
+            int maxBufferedOpsPerShard,
+            Duration maxFlushInterval,
+            List<FieldConfig> fieldConfigs,
+            TextEmbedder embeddingService,
+            long minimumFreeDiskBytes) {
+        this(
+                baseDir,
+                maxBufferedOpsPerShard,
+                maxFlushInterval,
+                fieldConfigs,
+                embeddingService,
+                false,
+                minimumFreeDiskBytes);
     }
 
     private IndexManager(
@@ -86,16 +123,21 @@ public class IndexManager implements Closeable {
             Duration maxFlushInterval,
             List<FieldConfig> fieldConfigs,
             TextEmbedder embeddingService,
-            boolean ownsEmbeddingService) {
+            boolean ownsEmbeddingService,
+            long minimumFreeDiskBytes) {
         if (maxBufferedOpsPerShard < 1) {
             throw new IllegalArgumentException("maxBufferedOpsPerShard must be greater than 0");
         }
         if (maxFlushInterval == null || maxFlushInterval.compareTo(Duration.ZERO) <= 0) {
             throw new IllegalArgumentException("maxFlushInterval must be greater than zero");
         }
+        if (minimumFreeDiskBytes < 0) {
+            throw new IllegalArgumentException("minimumFreeDiskBytes must not be negative");
+        }
         this.baseDir = baseDir;
         this.maxBufferedOpsPerShard = maxBufferedOpsPerShard;
         this.maxFlushInterval = maxFlushInterval;
+        this.minimumFreeDiskBytes = minimumFreeDiskBytes;
         this.embeddingService = Objects.requireNonNull(embeddingService, "embeddingService");
         this.ownedEmbeddingService =
                 ownsEmbeddingService && embeddingService instanceof Closeable closeable ? closeable : null;
@@ -120,6 +162,33 @@ public class IndexManager implements Closeable {
         long intervalMillis = Math.max(1L, maxFlushInterval.toMillis());
         flushScheduler.scheduleAtFixedRate(
                 this::flushBuffersOnSchedule, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Reports whether this manager can safely serve Lucene traffic now. It deliberately does not
+     * flush or write during a probe: opening the manager already validated Lucene state, while the
+     * probe verifies that its volume remains writable and has enough room for future commits.
+     */
+    public HealthHttpServer.Readiness readiness() {
+        if (closed) {
+            return HealthHttpServer.Readiness.notReady("index_manager_closed");
+        }
+        if (embeddingService instanceof TextEmbeddingService textEmbeddingService && !textEmbeddingService.isReady()) {
+            return HealthHttpServer.Readiness.notReady("embedding_model_not_ready");
+        }
+        try {
+            if (!Files.isDirectory(baseDir) || !Files.isWritable(baseDir)) {
+                return HealthHttpServer.Readiness.notReady("lucene_directory_not_writable");
+            }
+            FileStore store = Files.getFileStore(baseDir);
+            if (store.getUsableSpace() < minimumFreeDiskBytes) {
+                return HealthHttpServer.Readiness.notReady("disk_space_below_threshold");
+            }
+            return HealthHttpServer.Readiness.up();
+        } catch (IOException e) {
+            return HealthHttpServer.Readiness.notReady(
+                    "lucene_storage_unavailable:" + e.getClass().getSimpleName());
+        }
     }
 
     /**
@@ -360,6 +429,7 @@ public class IndexManager implements Closeable {
 
     @Override
     public void close() throws IOException {
+        closed = true;
         flushScheduler.shutdown();
         try {
             if (!flushScheduler.awaitTermination(5, TimeUnit.SECONDS)) {

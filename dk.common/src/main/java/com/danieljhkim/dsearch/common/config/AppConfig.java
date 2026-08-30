@@ -120,12 +120,15 @@ public class AppConfig {
     public static class IndexingConfig {
         private int maxBufferedOpsPerShard = 100;
         private int maxFlushIntervalSeconds = 5;
+        /** Minimum usable bytes required on the Lucene volume before this node is ready. */
+        private long minimumFreeDiskBytes = 104857600L;
 
         @Override
         public String toString() {
             return "IndexingConfig{" + "maxBufferedOpsPerShard="
                     + maxBufferedOpsPerShard + ", maxFlushIntervalSeconds="
-                    + maxFlushIntervalSeconds + '}';
+                    + maxFlushIntervalSeconds + ", minimumFreeDiskBytes="
+                    + minimumFreeDiskBytes + '}';
         }
     }
 

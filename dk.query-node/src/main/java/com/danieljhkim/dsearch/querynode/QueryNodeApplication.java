@@ -18,6 +18,7 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import java.io.IOException;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
 
 public class QueryNodeApplication {
@@ -102,6 +103,7 @@ public class QueryNodeApplication {
         private final NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> nodeClientManager;
         private final NodeClientManager<ClusterServiceGrpc.ClusterServiceBlockingStub> coordinatorClientManager;
         private final NodeMembershipAgent membershipAgent;
+        private final AtomicBoolean acceptingRequests = new AtomicBoolean();
         private HttpServer healthServer;
 
         private QueryNodeRuntime(
@@ -121,8 +123,9 @@ public class QueryNodeApplication {
 
         void start() throws IOException, InterruptedException {
             try {
-                healthServer = HealthHttpServer.start(healthPort, "query-node");
+                healthServer = HealthHttpServer.start(healthPort, "query-node", this::readiness);
                 queryNodeServer.startAsync();
+                acceptingRequests.set(true);
                 if (membershipAgent != null) {
                     membershipAgent.start();
                 }
@@ -139,6 +142,7 @@ public class QueryNodeApplication {
         @Override
         public void close() {
             LOGGER.info("Shutting down QueryNode gRPC server...");
+            acceptingRequests.set(false);
             if (membershipAgent != null) {
                 membershipAgent.close();
             }
@@ -162,6 +166,18 @@ public class QueryNodeApplication {
                     healthServer = null;
                 }
             }
+        }
+
+        private HealthHttpServer.Readiness readiness() {
+            if (!acceptingRequests.get()) {
+                return HealthHttpServer.Readiness.notReady("query_server_starting");
+            }
+            if (nodeClientManager.getActiveNodeIds().isEmpty()) {
+                // The coordinator marks an index node active only after its /readyz check passes,
+                // which includes model initialization as well as Lucene/disk admission.
+                return HealthHttpServer.Readiness.notReady("index_model_or_topology_not_ready");
+            }
+            return HealthHttpServer.Readiness.up();
         }
     }
 }

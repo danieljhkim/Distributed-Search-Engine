@@ -80,7 +80,9 @@ public class HealthCheckScheduler {
     }
 
     private boolean checkNodeHealth(NodeGroup.NodeInfo nodeInfo) {
-        String healthCheckUrl = String.format("http://%s:%d/health", nodeInfo.getHost(), nodeInfo.getHealthPort());
+        // Membership is a routing decision, so it follows dependency-aware readiness rather than
+        // process liveness. A process may stay live while it repairs its model, disk, or topology.
+        String healthCheckUrl = String.format("http://%s:%d/readyz", nodeInfo.getHost(), nodeInfo.getHealthPort());
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(healthCheckUrl))
                 .timeout(Duration.ofMillis(500))

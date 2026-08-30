@@ -63,6 +63,15 @@ class NodeGroupManagerTest {
         assertThrows(IllegalStateException.class, () -> manager.getNodeGroup(NodeRole.NODE_ROLE_INDEX));
     }
 
+    @Test
+    void coordinatorRoleAlsoUsesAuthoritativeTopologyWhenDiscoveryIsEnabled() {
+        MutableClock clock = new MutableClock();
+        NodeGroupManager manager = managerWithResponses(clock, 5, topology("epoch-a", 2, "authoritative-coordinator"));
+
+        assertEquals(
+                List.of("authoritative-coordinator"), nodeIds(manager.getNodeGroup(NodeRole.NODE_ROLE_COORDINATOR)));
+    }
+
     @SafeVarargs
     private static NodeGroupManager managerWithResponses(
             MutableClock clock, int maxStalenessSeconds, Object... responses) {

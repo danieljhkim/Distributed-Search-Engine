@@ -88,7 +88,7 @@ class HealthCheckSchedulerTest {
 
     private static HttpServer healthServer(int status) throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
-        server.createContext("/health", exchange -> {
+        server.createContext("/readyz", exchange -> {
             exchange.sendResponseHeaders(status, -1);
             exchange.close();
         });

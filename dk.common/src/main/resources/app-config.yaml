@@ -56,6 +56,8 @@ coordinatorNodes:
 indexing:
   maxBufferedOpsPerShard: 100
   maxFlushIntervalSeconds: 5
+  # Admission control: leave room for Lucene merges and durable commits.
+  minimumFreeDiskBytes: 104857600
 
 ml:
   models:
