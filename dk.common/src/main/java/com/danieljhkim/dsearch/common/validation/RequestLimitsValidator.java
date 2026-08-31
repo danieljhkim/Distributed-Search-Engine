@@ -183,10 +183,9 @@ public final class RequestLimitsValidator {
                 throw new IllegalArgumentException("Facet depth (" + current.depth() + ") exceeds maximum allowed ("
                         + limits.getMaxFacetDepth() + ")");
             }
-            filterClauses += validateFilters(current.facet().getFiltersList(), limits);
-            if (filterClauses > limits.getMaxFilterClauses()) {
+            if (current.facet().getFiltersCount() > 0) {
                 throw new IllegalArgumentException(
-                        "Filter clause count exceeds maximum allowed (" + limits.getMaxFilterClauses() + ")");
+                        "Facet-level filters are not supported; use top-level search filters instead");
             }
             current.facet()
                     .getNestedList()

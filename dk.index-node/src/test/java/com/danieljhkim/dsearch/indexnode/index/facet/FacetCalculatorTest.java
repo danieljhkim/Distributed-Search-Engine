@@ -108,6 +108,67 @@ class FacetCalculatorTest {
     }
 
     @Test
+    void computeFacetsScopesNestedBucketsToTheirParentAndOrdersEqualCountsByValue() throws IOException {
+        buildIndex(List.of(
+                Map.of("category", "books", "author", "ada", "year", "2024"),
+                Map.of("category", "books", "author", "bert", "year", "2024"),
+                Map.of("category", "books", "author", "ada", "year", "2023"),
+                Map.of("category", "books"),
+                Map.of("category", "movies", "author", "ada", "year", "2022"),
+                Map.of("category", "movies", "author", "cora", "year", "2022")));
+
+        FacetRequest request = FacetRequest.newBuilder()
+                .setField("category")
+                .setSize(2)
+                .addNested(FacetRequest.newBuilder()
+                        .setField("author")
+                        .setSize(2)
+                        .addNested(FacetRequest.newBuilder().setField("year").setSize(2)))
+                .build();
+
+        FacetResponse response = facetCalculator
+                .computeFacets(searcher, new MatchAllDocsQuery(), List.of(request))
+                .getFirst();
+
+        assertEquals(
+                List.of("books", "movies"),
+                response.getBucketsList().stream()
+                        .map(bucket -> bucket.getValue())
+                        .toList());
+        assertEquals(4L, response.getBuckets(0).getCount());
+        assertEquals(
+                List.of("ada", "bert"),
+                response.getBuckets(0).getNested(0).getBucketsList().stream()
+                        .map(bucket -> bucket.getValue())
+                        .toList());
+        assertEquals(
+                List.of("2023", "2024"),
+                response.getBuckets(0).getNested(0).getBuckets(0).getNested(0).getBucketsList().stream()
+                        .map(bucket -> bucket.getValue())
+                        .toList());
+        assertEquals(
+                List.of("ada", "cora"),
+                response.getBuckets(1).getNested(0).getBucketsList().stream()
+                        .map(bucket -> bucket.getValue())
+                        .toList());
+    }
+
+    @Test
+    void computeFacetsRejectsUnsupportedFacetLocalFilters() throws IOException {
+        buildIndex(List.of(Map.of("category", "books")));
+
+        FacetRequest request = FacetRequest.newBuilder()
+                .setField("category")
+                .addFilters(com.danieljhkim.dsearch.proto.common.Filter.getDefaultInstance())
+                .build();
+
+        IllegalArgumentException exception = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalArgumentException.class,
+                () -> facetCalculator.computeFacets(searcher, new MatchAllDocsQuery(), List.of(request)));
+        assertTrue(exception.getMessage().contains("Facet-level filters are not supported"));
+    }
+
+    @Test
     void computeFacetsOnIndexWithNoFacetFieldsDoesNotThrow() throws IOException {
         directory = new ByteBuffersDirectory();
         IndexWriterConfig config = new IndexWriterConfig();

@@ -9,6 +9,15 @@ import "common/filter.proto";
 
 /**
  * Request for computing facets on a field.
+ *
+ * The request forms a tree: every nested request is evaluated only against
+ * documents in its parent's bucket. Each level returns at most {@code size}
+ * buckets (or the service default when it is zero), ordered by descending
+ * count and then ascending value. Documents without a value for a requested
+ * field are omitted; there is no synthetic missing-value bucket. Request
+ * limits reject oversized or over-deep trees before calculation. Facet-local
+ * filters are reserved and rejected by the service; callers must use the
+ * search request's top-level filters until that contract is implemented.
  */
 message FacetRequest {
   string field = 1;
@@ -18,7 +27,9 @@ message FacetRequest {
 }
 
 /**
- * Response containing facet results for a field.
+ * Response containing facet results for a field. The response mirrors the
+ * request tree through {@link FacetBucket#nested}; an empty bucket list is a
+ * successful result with no values, not a partial result.
  */
 message FacetResponse {
   string field = 1;
@@ -26,11 +37,11 @@ message FacetResponse {
 }
 
 /**
- * A single facet bucket with value, count, and optional nested facets.
+ * A single facet bucket with value, count, and nested responses evaluated in
+ * the bucket's document scope.
  */
 message FacetBucket {
   string value = 1;
   int64 count = 2;
   repeated FacetResponse nested = 3;
 }
-

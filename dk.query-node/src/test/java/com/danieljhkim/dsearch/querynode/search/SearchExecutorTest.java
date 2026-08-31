@@ -328,6 +328,53 @@ class SearchExecutorTest {
     }
 
     @Test
+    void nestedFacetsAggregateRecursivelyAcrossSuccessfulNodesAndIgnoreFailedNodes() {
+        RecordingIndexService indexService = new RecordingIndexService()
+                .success(
+                        "1",
+                        result(
+                                List.of(hit("doc-1", 3.0f)),
+                                List.of(facet(
+                                        "category",
+                                        bucket("books", 2, facet("author", bucket("ada", 1), bucket("bert", 1))),
+                                        bucket("movies", 1, facet("author", bucket("ada", 1)))))))
+                .success(
+                        "2",
+                        result(
+                                List.of(hit("doc-2", 4.0f)),
+                                List.of(facet(
+                                        "category",
+                                        bucket("books", 3, facet("author", bucket("ada", 2), bucket("cora", 1))),
+                                        bucket("movies", 1, facet("author", bucket("bert", 1)))))))
+                .failure("3", new IllegalStateException("node down"));
+
+        FacetRequest categoryFacet = FacetRequest.newBuilder()
+                .setField("category")
+                .setSize(2)
+                .addNested(FacetRequest.newBuilder().setField("author").setSize(2))
+                .build();
+        SearchResult result = searchExecutor(node("1", true), node("2", true), node("3", true))
+                .search("coffee", "shard-a", 0, 10, SearchType.BM25, indexService, null, false, List.of(categoryFacet));
+
+        assertEquals(
+                SearchResult.FanoutStatus.PARTIAL_FAILURE,
+                result.getFanoutMetadata().status());
+        FacetResponse category = result.getFacets().getFirst();
+        assertEquals(
+                List.of("books", "movies"),
+                category.getBucketsList().stream().map(FacetBucket::getValue).toList());
+        assertEquals(5L, category.getBuckets(0).getCount());
+        assertEquals(
+                Map.of("ada", 3L, "bert", 1L),
+                bucketCounts(category.getBuckets(0).getNested(0)));
+        assertEquals(
+                List.of("ada", "bert"),
+                category.getBuckets(1).getNested(0).getBucketsList().stream()
+                        .map(FacetBucket::getValue)
+                        .toList());
+    }
+
+    @Test
     void hybridSearchFusesBm25AndSemanticResultsWithDeterministicScoreOrdering() {
         RecordingIndexService indexService = new RecordingIndexService()
                 .success(
@@ -591,16 +638,20 @@ class SearchExecutorTest {
     private static FacetResponse facet(String field, Bucket... buckets) {
         FacetResponse.Builder builder = FacetResponse.newBuilder().setField(field);
         for (Bucket bucket : buckets) {
-            builder.addBuckets(FacetBucket.newBuilder()
-                    .setValue(bucket.value())
-                    .setCount(bucket.count())
-                    .build());
+            FacetBucket.Builder facetBucket =
+                    FacetBucket.newBuilder().setValue(bucket.value()).setCount(bucket.count());
+            facetBucket.addAllNested(bucket.nested());
+            builder.addBuckets(facetBucket.build());
         }
         return builder.build();
     }
 
     private static Bucket bucket(String value, long count) {
-        return new Bucket(value, count);
+        return new Bucket(value, count, List.of());
+    }
+
+    private static Bucket bucket(String value, long count, FacetResponse... nested) {
+        return new Bucket(value, count, List.of(nested));
     }
 
     private static Map<String, Long> bucketCounts(FacetResponse response) {
@@ -617,7 +668,7 @@ class SearchExecutorTest {
 
     private record NodeSpec(String nodeId, boolean active) {}
 
-    private record Bucket(String value, long count) {}
+    private record Bucket(String value, long count, List<FacetResponse> nested) {}
 
     private record CorpusDocument(String id, String content) {}
 

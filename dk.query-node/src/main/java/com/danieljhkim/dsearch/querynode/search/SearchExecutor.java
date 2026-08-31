@@ -473,22 +473,25 @@ public class SearchExecutor implements Closeable {
         }
     }
 
-    private void aggregateFacets(Map<String, Map<String, Long>> facetAggregation, List<FacetResponse> facets) {
+    private void aggregateFacets(Map<String, FacetAggregation> facetAggregation, List<FacetResponse> facets) {
         if (facets == null || facets.isEmpty()) {
             return;
         }
         for (FacetResponse facetResp : facets) {
             String field = facetResp.getField();
-            facetAggregation.putIfAbsent(field, new HashMap<>());
-            Map<String, Long> fieldCounts = facetAggregation.get(field);
+            FacetAggregation fieldAggregation =
+                    facetAggregation.computeIfAbsent(field, ignored -> new FacetAggregation());
             for (FacetBucket bucket : facetResp.getBucketsList()) {
-                fieldCounts.merge(bucket.getValue(), bucket.getCount(), Long::sum);
+                BucketAggregation bucketAggregation =
+                        fieldAggregation.buckets.computeIfAbsent(bucket.getValue(), ignored -> new BucketAggregation());
+                bucketAggregation.count += bucket.getCount();
+                aggregateFacets(bucketAggregation.nested, bucket.getNestedList());
             }
         }
     }
 
     private List<FacetResponse> buildAggregatedFacets(
-            List<FacetRequest> facetRequests, Map<String, Map<String, Long>> facetAggregation) {
+            List<FacetRequest> facetRequests, Map<String, FacetAggregation> facetAggregation) {
 
         if (facetRequests == null || facetRequests.isEmpty()) {
             return Collections.emptyList();
@@ -500,19 +503,23 @@ public class SearchExecutor implements Closeable {
             String field = facetReq.getField();
             int topN = facetReq.getSize() > 0 ? facetReq.getSize() : 10;
 
-            Map<String, Long> fieldCounts = facetAggregation.get(field);
+            FacetAggregation fieldAggregation = facetAggregation.get(field);
             FacetResponse.Builder facetBuilder = FacetResponse.newBuilder().setField(field);
 
-            if (fieldCounts != null && !fieldCounts.isEmpty()) {
-                fieldCounts.entrySet().stream()
-                        .sorted(Map.Entry.<String, Long>comparingByValue()
+            if (fieldAggregation != null && !fieldAggregation.buckets.isEmpty()) {
+                fieldAggregation.buckets.entrySet().stream()
+                        .sorted(Map.Entry.<String, BucketAggregation>comparingByValue(
+                                        Comparator.comparingLong(bucket -> bucket.count))
                                 .reversed()
                                 .thenComparing(Map.Entry.comparingByKey()))
                         .limit(topN)
-                        .forEach(e -> facetBuilder.addBuckets(FacetBucket.newBuilder()
-                                .setValue(e.getKey())
-                                .setCount(e.getValue())
-                                .build()));
+                        .forEach(e -> {
+                            FacetBucket.Builder bucket = FacetBucket.newBuilder()
+                                    .setValue(e.getKey())
+                                    .setCount(e.getValue().count);
+                            bucket.addAllNested(buildAggregatedFacets(facetReq.getNestedList(), e.getValue().nested));
+                            facetBuilder.addBuckets(bucket.build());
+                        });
             }
 
             aggregatedFacets.add(facetBuilder.build());
@@ -583,10 +590,19 @@ public class SearchExecutor implements Closeable {
     private static final class MergeAccumulator {
         final List<NodeHits> nodeHits = new ArrayList<>();
         long totalHits = 0L;
-        final Map<String, Map<String, Long>> facetAggregation = new HashMap<>();
+        final Map<String, FacetAggregation> facetAggregation = new HashMap<>();
         int successfulNodes = 0;
         int failedNodes = 0;
         int timedOutNodes = 0;
+    }
+
+    private static final class FacetAggregation {
+        final Map<String, BucketAggregation> buckets = new HashMap<>();
+    }
+
+    private static final class BucketAggregation {
+        long count;
+        final Map<String, FacetAggregation> nested = new HashMap<>();
     }
 
     private void logFanoutSummary(

@@ -10,6 +10,7 @@ import java.util.Objects;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import lombok.Getter;
+import org.apache.lucene.facet.DrillDownQuery;
 import org.apache.lucene.facet.FacetResult;
 import org.apache.lucene.facet.Facets;
 import org.apache.lucene.facet.FacetsCollector;
@@ -59,15 +60,13 @@ public class FacetCalculator {
      * @return list of facet responses
      */
     public List<FacetResponse> computeFacets(IndexSearcher searcher, Query query, List<FacetRequest> facetRequests) {
-        List<FacetResponse> responses = new ArrayList<>();
         if (facetRequests == null || facetRequests.isEmpty()) {
-            return responses;
+            return List.of();
         }
+        validateSupportedRequests(facetRequests);
 
         try {
-            FacetsCollector fc = new FacetsCollector();
-            searcher.search(query, fc);
-            responses.addAll(computeFacets(searcher, fc, facetRequests));
+            return computeFacetResponses(searcher, query, facetRequests);
         } catch (IOException e) {
             LOGGER.log(Level.WARNING, "Failed to compute facets", e);
         } catch (IllegalStateException | IllegalArgumentException e) {
@@ -75,7 +74,7 @@ public class FacetCalculator {
             LOGGER.log(Level.FINE, "No facet fields found in index", e);
         }
 
-        return responses;
+        return List.of();
     }
 
     /**
@@ -89,6 +88,10 @@ public class FacetCalculator {
         if (facetRequests == null || facetRequests.isEmpty()) {
             return responses;
         }
+        validateSupportedRequests(facetRequests);
+        if (containsNestedRequest(facetRequests)) {
+            throw new IllegalArgumentException("Nested facets require query-backed computation");
+        }
 
         try {
             IndexReader reader = searcher.getIndexReader();
@@ -96,7 +99,7 @@ public class FacetCalculator {
             Facets facets = new SortedSetDocValuesFacetCounts(state, fc);
 
             for (FacetRequest request : facetRequests) {
-                responses.add(computeSingleFacet(facets, request));
+                responses.add(computeSingleFacet(searcher, null, facets, request));
             }
         } catch (IOException e) {
             LOGGER.log(Level.WARNING, "Failed to compute facets", e);
@@ -105,6 +108,18 @@ public class FacetCalculator {
             LOGGER.log(Level.FINE, "No facet fields found in index", e);
         }
 
+        return responses;
+    }
+
+    private List<FacetResponse> computeFacetResponses(
+            IndexSearcher searcher, Query query, List<FacetRequest> facetRequests) throws IOException {
+        FacetsCollector collector = new FacetsCollector();
+        searcher.search(query, collector);
+        Facets facets = new SortedSetDocValuesFacetCounts(getOrCreateState(searcher.getIndexReader()), collector);
+        List<FacetResponse> responses = new ArrayList<>(facetRequests.size());
+        for (FacetRequest request : facetRequests) {
+            responses.add(computeSingleFacet(searcher, query, facets, request));
+        }
         return responses;
     }
 
@@ -143,7 +158,7 @@ public class FacetCalculator {
     /**
      * Computes a single facet.
      */
-    private FacetResponse computeSingleFacet(Facets facets, FacetRequest request) {
+    private FacetResponse computeSingleFacet(IndexSearcher searcher, Query query, Facets facets, FacetRequest request) {
         String field = request.getField();
         int topN = request.getSize() > 0 ? request.getSize() : DEFAULT_TOP_N;
 
@@ -156,9 +171,14 @@ public class FacetCalculator {
                     FacetBucket.Builder bucketBuilder =
                             FacetBucket.newBuilder().setValue(lv.label).setCount(lv.value.longValue());
 
-                    // Handle nested facets if requested
                     if (request.getNestedCount() > 0) {
-                        LOGGER.log(Level.FINE, "Nested facets not yet fully implemented");
+                        if (query == null) {
+                            throw new IllegalArgumentException("Nested facets require query-backed computation");
+                        }
+                        DrillDownQuery bucketQuery = new DrillDownQuery(facetsConfig, query);
+                        bucketQuery.add(field, lv.label);
+                        bucketBuilder.addAllNested(
+                                computeFacetResponses(searcher, bucketQuery, request.getNestedList()));
                     }
 
                     responseBuilder.addBuckets(bucketBuilder.build());
@@ -170,5 +190,19 @@ public class FacetCalculator {
             // Return empty facet response instead of null
             return FacetResponse.newBuilder().setField(field).build();
         }
+    }
+
+    private static void validateSupportedRequests(List<FacetRequest> facetRequests) {
+        for (FacetRequest request : facetRequests) {
+            if (request.getFiltersCount() > 0) {
+                throw new IllegalArgumentException(
+                        "Facet-level filters are not supported; use top-level search filters instead");
+            }
+            validateSupportedRequests(request.getNestedList());
+        }
+    }
+
+    private static boolean containsNestedRequest(List<FacetRequest> facetRequests) {
+        return facetRequests.stream().anyMatch(request -> request.getNestedCount() > 0);
     }
 }
