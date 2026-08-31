@@ -1,6 +1,7 @@
 package com.danieljhkim.dsearch.gateway.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.verify;
@@ -47,11 +48,11 @@ class GatewaySearchServiceTest {
     @BeforeEach
     void setUp() {
         service = new GatewaySearchService(qnClientManager, new QueryResponseMapper(), new QueryRequestMapper());
-        when(queryStub.withDeadlineAfter(anyLong(), any(TimeUnit.class))).thenReturn(queryStub);
     }
 
     @Test
     void searchMapsDtoOptionsToGrpcRequestWithoutNetworkCalls() {
+        when(queryStub.withDeadlineAfter(anyLong(), any(TimeUnit.class))).thenReturn(queryStub);
         SearchRequestDto request = new SearchRequestDto();
         request.setQuery("lucene vector");
         request.setPartitionId("tenant-a");
@@ -61,11 +62,7 @@ class GatewaySearchServiceTest {
         request.setFusionStrategy(FusionStrategy.WEIGHTED);
         request.setHighlight(false);
         request.setFilters(List.of(new FilterDto("category", FilterOperator.IN, List.of("docs", "guides"))));
-        request.setFacets(List.of(new FacetRequestDto(
-                "author",
-                5,
-                List.of(new FilterDto("year", FilterOperator.GTE, List.of("2024"))),
-                List.of(new FacetRequestDto("tag", 3)))));
+        request.setFacets(List.of(new FacetRequestDto("author", 5, null, List.of(new FacetRequestDto("tag", 3)))));
 
         when(qnClientManager.nextClient()).thenReturn(queryStub);
         when(queryStub.search(any(QueryRequest.class))).thenReturn(queryResponse());
@@ -104,10 +101,21 @@ class GatewaySearchServiceTest {
         assertThat(grpcRequest.getFacetsCount()).isEqualTo(1);
         assertThat(grpcRequest.getFacets(0).getField()).isEqualTo("author");
         assertThat(grpcRequest.getFacets(0).getSize()).isEqualTo(5);
-        assertThat(grpcRequest.getFacets(0).getFilters(0).getField()).isEqualTo("year");
-        assertThat(grpcRequest.getFacets(0).getFilters(0).getOperator()).isEqualTo(FilterOperator.GTE);
         assertThat(grpcRequest.getFacets(0).getNested(0).getField()).isEqualTo("tag");
         assertThat(grpcRequest.getFacets(0).getNested(0).getSize()).isEqualTo(3);
+    }
+
+    @Test
+    void searchRejectsFacetLocalFiltersBeforeCallingTheQueryNode() {
+        SearchRequestDto request = new SearchRequestDto();
+        request.setQuery("lucene vector");
+        request.setPageSize(10);
+        request.setFacets(List.of(new FacetRequestDto(
+                "author", 5, List.of(new FilterDto("year", FilterOperator.GTE, List.of("2024"))), null)));
+
+        assertThatThrownBy(() -> service.search(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Facet-level filters are not supported");
     }
 
     private static QueryResponse queryResponse() {

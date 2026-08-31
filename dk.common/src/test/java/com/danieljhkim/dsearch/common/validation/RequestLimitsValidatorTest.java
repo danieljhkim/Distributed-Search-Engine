@@ -99,6 +99,23 @@ class RequestLimitsValidatorTest {
     }
 
     @Test
+    void facetLocalFiltersAreRejectedAtTheGrpcBoundary() {
+        QueryRequest request = QueryRequest.newBuilder()
+                .setQueryString("query")
+                .setSize(10)
+                .addFacets(FacetRequest.newBuilder()
+                        .setField("category")
+                        .addFilters(com.danieljhkim.dsearch.proto.common.Filter.getDefaultInstance()))
+                .build();
+
+        IllegalArgumentException exception = assertThrows(
+                IllegalArgumentException.class,
+                () -> RequestLimitsValidator.validateQueryRequest(request, new AppConfig.RequestLimitsConfig()));
+
+        assertTrue(exception.getMessage().contains("Facet-level filters are not supported"));
+    }
+
+    @Test
     void oversizedDocumentFieldsAndAggregatePayloadAreRejected() {
         AppConfig.RequestLimitsConfig fieldLimits = new AppConfig.RequestLimitsConfig();
         fieldLimits.setMaxFieldsPerDocument(1);

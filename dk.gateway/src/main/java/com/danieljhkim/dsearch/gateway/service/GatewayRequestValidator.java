@@ -41,12 +41,10 @@ final class GatewayRequestValidator {
             if (facetSize != null && (facetSize < 1 || facetSize > limits.getMaxSize())) {
                 throw new IllegalArgumentException("Facet size must be between 1 and " + limits.getMaxSize());
             }
-            filterClauses += current.facet().getFilters() == null
-                    ? 0
-                    : current.facet().getFilters().size();
-            if (filterClauses > limits.getMaxFilterClauses()) {
+            if (current.facet().getFilters() != null
+                    && !current.facet().getFilters().isEmpty()) {
                 throw new IllegalArgumentException(
-                        "Filter clause count exceeds maximum allowed (" + limits.getMaxFilterClauses() + ")");
+                        "Facet-level filters are not supported; use top-level search filters instead");
             }
             if (current.facet().getNested() != null) {
                 current.facet()
