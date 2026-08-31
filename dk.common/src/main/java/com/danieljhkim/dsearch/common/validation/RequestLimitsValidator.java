@@ -120,8 +120,8 @@ public final class RequestLimitsValidator {
         long payloadBytes = utf8Length(documentId);
         if (fields != null) {
             for (Map.Entry<String, String> field : fields.entrySet()) {
-                validateUtf8Bytes("field name", field.getKey(), effective.getMaxFieldValueBytes());
-                validateUtf8Bytes("field value", field.getValue(), effective.getMaxFieldValueBytes());
+                validateRequiredUtf8Bytes("field name", field.getKey(), effective.getMaxFieldValueBytes());
+                validateRequiredUtf8Bytes("field value", field.getValue(), effective.getMaxFieldValueBytes());
                 payloadBytes = Math.addExact(payloadBytes, utf8Length(field.getKey()));
                 payloadBytes = Math.addExact(payloadBytes, utf8Length(field.getValue()));
             }
@@ -230,6 +230,13 @@ public final class RequestLimitsValidator {
             throw new IllegalArgumentException(
                     label + " bytes (" + bytes + ") exceeds maximum allowed (" + maximum + ")");
         }
+    }
+
+    private static void validateRequiredUtf8Bytes(String label, String value, int maximum) {
+        if (value == null) {
+            throw new IllegalArgumentException(label + " must not be null");
+        }
+        validateUtf8Bytes(label, value, maximum);
     }
 
     private static int utf8Length(String value) {
