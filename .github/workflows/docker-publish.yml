@@ -67,7 +67,7 @@ jobs:
           fi
 
           is_rc=false
-          if [[ "$version" =~ (^|[-.])[Rr][Cc]([0-9].*)?$ ]]; then
+          if [[ "$version" =~ (^|[-.])[Rr][Cc]([.-]?[0-9].*)?$ ]]; then
             is_rc=true
           fi
           {
@@ -197,6 +197,11 @@ jobs:
       - verify-release
       - build
     runs-on: ubuntu-latest
+    concurrency:
+      # Versioned tags can build concurrently, but latest is a shared mutable
+      # manifest and must be evaluated and changed by one release at a time.
+      group: docker-latest-promotion-${{ github.repository }}
+      cancel-in-progress: false
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       VERSION: ${{ needs.verify-release.outputs.version }}
@@ -300,6 +305,15 @@ jobs:
         run: |
           set -euo pipefail
           source release-evidence/images.env
+          source scripts/docker-publish-latest-guard.sh
+          newest_eligible_tag=$(git ls-remote --tags --refs origin 'v*.*.*' | \
+            awk '{sub("refs/tags/", "", $2); print $2}' | \
+            latest_eligible_release_tag)
+          may_promote_latest=false
+          if [[ "$IS_RC" != "true" ]] && release_tag_may_promote_latest "$GITHUB_REF_NAME" "$newest_eligible_tag"; then
+            may_promote_latest=true
+          fi
+
           for service in dk.index-node dk.query-node dk.coordinator dk.gateway; do
             variable=$(printf 'DSEARCH_%s_IMAGE' "${service#dk.}" | tr '[:lower:].-' '[:upper:]__')
             reference=${!variable}
@@ -385,10 +399,12 @@ jobs:
               exit 1
             }
 
-            if [[ "$IS_RC" != "true" ]]; then
+            if [[ "$may_promote_latest" == "true" ]]; then
               docker buildx imagetools create \
                 --tag "$REGISTRY/$GITHUB_REPOSITORY/$service:latest" \
                 "$source_reference"
+            elif [[ "$IS_RC" != "true" ]]; then
+              echo "Not moving $service:latest: $GITHUB_REF_NAME is older than eligible release $newest_eligible_tag"
             fi
           done
 
