@@ -52,8 +52,11 @@ class IndexSchemaAndAliasTest {
                     1,
                     reopened.searchDocument("catalog", "rolling", 10, 0, SearchType.BM25)
                             .getTotalHits());
-            assertEquals("standard", reopened.inspectSchema("catalog").schema().analyzer().name());
-            assertEquals(3, reopened.inspectSchema("catalog").schema().embedding().dimension());
+            assertEquals(
+                    "standard",
+                    reopened.inspectSchema("catalog").schema().analyzer().name());
+            assertEquals(
+                    3, reopened.inspectSchema("catalog").schema().embedding().dimension());
         }
     }
 
@@ -64,9 +67,9 @@ class IndexSchemaAndAliasTest {
             manager.indexDocumentDurably("catalog", document("doc-1", "analyzer contract"));
         }
         try (IndexManager reopened = manager(base, DIM3, schema("keyword", "unspecified", 3))) {
-            SchemaMismatchException mismatch =
-                    assertThrows(SchemaMismatchException.class, () -> reopened.searchDocument(
-                            "catalog", "analyzer", 10, 0, SearchType.BM25));
+            SchemaMismatchException mismatch = assertThrows(
+                    SchemaMismatchException.class,
+                    () -> reopened.searchDocument("catalog", "analyzer", 10, 0, SearchType.BM25));
             assertEquals("analyzer.name", mismatch.getProperty());
             assertTrue(mismatch.getMessage().contains("analyzer.name"));
         }

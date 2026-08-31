@@ -18,6 +18,7 @@ public class AppConfig {
     private IndexingConfig indexing;
     private MlConfig ml;
     private RequestLimitsConfig requestLimits;
+    private PaginationConfig pagination = new PaginationConfig();
     private List<FieldConfig> fieldConfigs;
 
     @Setter
@@ -195,6 +196,28 @@ public class AppConfig {
                     + ", maxFacetExpandedBuckets=" + maxFacetExpandedBuckets
                     + ", maxConcurrentHttpRequests=" + maxConcurrentHttpRequests + ", maxConcurrentFanoutCalls="
                     + maxConcurrentFanoutCalls + ", retryAfterMillis=" + retryAfterMillis + '}';
+        }
+    }
+
+    @Setter
+    @Getter
+    public static class PaginationConfig {
+        /**
+         * Shared HMAC key for opaque pagination cursors. Every query node must use the same value:
+         * a gateway load-balances pages of one traversal across nodes, so a per-node key makes page
+         * two fail signature verification. Blank generates a process-local key, which is fine for a
+         * single-node development cluster and logs a warning everywhere else.
+         */
+        private String cursorSigningKey = "";
+
+        /** Upper bound on sort components in one request, before the id tie-breaker is appended. */
+        private int maxSortFields = 8;
+
+        @Override
+        public String toString() {
+            return "PaginationConfig{" + "cursorSigningKey="
+                    + (cursorSigningKey == null || cursorSigningKey.isBlank() ? "<generated>" : "<configured>")
+                    + ", maxSortFields=" + maxSortFields + '}';
         }
     }
 

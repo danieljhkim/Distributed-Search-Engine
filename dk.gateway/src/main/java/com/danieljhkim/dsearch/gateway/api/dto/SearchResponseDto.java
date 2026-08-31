@@ -16,6 +16,11 @@ public class SearchResponseDto {
     private int pageSize;
     private List<FacetResponseDto> facets;
     private FanoutMetadataDto fanout;
+    /**
+     * Opaque cursor for the next page. Null when the result set is exhausted, or when the request
+     * shape does not support cursor traversal.
+     */
+    private String nextCursor;
 
     public SearchResponseDto() {}
 

@@ -8,6 +8,7 @@ import "common/search_type.proto";
 import "common/fusion_strategy.proto";
 import "common/filter.proto";
 import "common/facet.proto";
+import "common/sort.proto";
 
 message QueryRequest {
   string query_string = 1;
@@ -20,6 +21,12 @@ message QueryRequest {
   repeated dsearch.common.Filter filters = 8;
   repeated dsearch.common.FacetRequest facets = 9;
   bool highlight = 10;
+  // Total ordering for the result set. Empty means relevance order. `_id ASC` is
+  // always appended so the effective ordering is total and unique.
+  repeated dsearch.common.SortField sort = 11;
+  // Opaque cursor from a previous QueryResponse.next_cursor. Mutually exclusive
+  // with a non-zero `page`.
+  string cursor = 12;
 }
 
 message SearchHit {
@@ -29,6 +36,9 @@ message SearchHit {
   string title = 4;
   map<string, string> highlighted_fields = 5;
   map<string, string> fields = 6;
+  // Sort tuple for this hit, positionally matched to QueryRequest.sort plus the
+  // appended `_id` tie-breaker. Populated only when a sort was requested.
+  repeated dsearch.common.SortValue sort_values = 7;
 }
 
 enum FanoutStatus {
@@ -53,6 +63,9 @@ message QueryResponse {
   int32 size = 4;
   repeated dsearch.common.FacetResponse facets = 5;
   FanoutMetadata fanout = 6;
+  // Opaque cursor for the next page. Empty when the result set is exhausted or
+  // when the request used legacy offset paging.
+  string next_cursor = 7;
 }
 
 service QueryService {

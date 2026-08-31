@@ -22,7 +22,7 @@ public class SchemaMismatchException extends InvalidIndexStateException {
     public static SchemaMismatchException of(String property, String persisted, String runtime) {
         return new SchemaMismatchException(
                 property,
-                "Incompatible index metadata: " + property + " does not match (persisted="
-                        + persisted + ", runtime=" + runtime + ")");
+                "Incompatible index metadata: " + property + " does not match (persisted=" + persisted + ", runtime="
+                        + runtime + ")");
     }
 }

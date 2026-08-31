@@ -6,6 +6,8 @@ import com.danieljhkim.dsearch.common.exception.ShardNotFoundException;
 import com.danieljhkim.dsearch.common.model.SearchDocument;
 import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.common.pagination.SortOptions;
+import com.danieljhkim.dsearch.common.pagination.SortSpec;
 import com.danieljhkim.dsearch.common.schema.IndexAlias;
 import com.danieljhkim.dsearch.common.schema.IndexSchema;
 import com.danieljhkim.dsearch.common.schema.SchemaProtoMapper;
@@ -17,15 +19,16 @@ import com.danieljhkim.dsearch.indexnode.index.ShardIndex;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.Filter;
 import com.danieljhkim.dsearch.proto.common.SearchType;
+import com.danieljhkim.dsearch.proto.common.SortValue;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResult;
+import com.danieljhkim.dsearch.proto.index.CreateIndexRequest;
+import com.danieljhkim.dsearch.proto.index.CreateIndexResponse;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.Document;
 import com.danieljhkim.dsearch.proto.index.Field;
-import com.danieljhkim.dsearch.proto.index.CreateIndexRequest;
-import com.danieljhkim.dsearch.proto.index.CreateIndexResponse;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexHit;
@@ -192,8 +195,9 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
 
         try {
             RequestLimitsValidator.validateIndexSearchRequest(request, requestLimits);
+            SortOptions sortOptions = toSortOptions(request);
             SearchResult res = indexManager.searchDocument(
-                    partitionId, query, size, from, protoType, filters, highlight, facetRequests);
+                    partitionId, query, size, from, protoType, filters, highlight, facetRequests, sortOptions);
             IndexSearchResponse.Builder respBuilder =
                     IndexSearchResponse.newBuilder().setTotalHits(res.getTotalHits());
             for (SearchHit hit : res.getHits()) {
@@ -256,6 +260,7 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
                     .setIndexName(inspected.indexName())
                     .setAlias(inspected.alias())
                     .setSchema(SchemaProtoMapper.toProto(inspected.schema()))
+                    .setGeneration(inspected.generation())
                     .build());
             responseObserver.onCompleted();
         } catch (IllegalArgumentException e) {
@@ -281,10 +286,7 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
         try {
             IndexSchema schema = SchemaProtoMapper.fromProto(request.getSchema());
             IndexManager.ReindexResult result = indexManager.reindex(
-                    request.getSourceAlias(),
-                    request.getTargetIndex(),
-                    schema,
-                    request.getVerificationQueriesList());
+                    request.getSourceAlias(), request.getTargetIndex(), schema, request.getVerificationQueriesList());
             responseObserver.onNext(ReindexResponse.newBuilder()
                     .setSuccess(result.success())
                     .setSourceIndex(result.sourceIndex())
@@ -373,6 +375,26 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
         }
     }
 
+    /**
+     * Reads the ordering off the wire.
+     *
+     * <p>The sort arrives already tie-broken from the query node, so it is taken verbatim rather
+     * than re-normalized: every shard must collect under exactly the ordering the merge assumes,
+     * and re-deriving it here would risk the two drifting apart.
+     */
+    private static SortOptions toSortOptions(IndexSearchRequest request) {
+        if (request.getSortCount() == 0) {
+            return SortOptions.NONE;
+        }
+        SortSpec spec = new SortSpec(request.getSortList().stream()
+                .map(field -> new SortSpec.SortComponent(
+                        field.getField(),
+                        field.getOrder() == com.danieljhkim.dsearch.proto.common.SortOrder.SORT_ORDER_DESC))
+                .toList());
+        List<SortValue> searchAfter = request.getHasSearchAfter() ? request.getSearchAfterList() : null;
+        return new SortOptions(spec, searchAfter);
+    }
+
     private boolean validatePartition(String partitionId, StreamObserver<?> responseObserver) {
         try {
             PartitionIdValidator.validate(partitionId);
@@ -425,6 +447,9 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
         }
         if (hit.getFields() != null && !hit.getFields().isEmpty()) {
             builder.putAllFields(hit.getFields());
+        }
+        if (hit.getSortValues() != null && !hit.getSortValues().isEmpty()) {
+            builder.addAllSortValues(hit.getSortValues());
         }
         return builder.build();
     }

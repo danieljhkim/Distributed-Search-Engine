@@ -3,8 +3,11 @@ package com.danieljhkim.dsearch.gateway.mapper;
 import com.danieljhkim.dsearch.gateway.api.dto.FacetRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.FilterDto;
 import com.danieljhkim.dsearch.gateway.api.dto.SearchRequestDto;
+import com.danieljhkim.dsearch.gateway.api.dto.SortDto;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.Filter;
+import com.danieljhkim.dsearch.proto.common.SortField;
+import com.danieljhkim.dsearch.proto.common.SortOrder;
 import com.danieljhkim.dsearch.proto.query.QueryRequest;
 import org.springframework.stereotype.Component;
 
@@ -24,6 +27,13 @@ public class QueryRequestMapper {
                 .setFusionStrategy(fusionStrategy)
                 .setHighlight(Boolean.TRUE.equals(request.getHighlight()));
 
+        if (request.getCursor() != null && !request.getCursor().isBlank()) {
+            b.setCursor(request.getCursor());
+        }
+        if (request.getSort() != null) {
+            request.getSort().forEach(sort -> b.addSort(mapSort(sort)));
+        }
+
         // Collections: treat null as empty
         if (request.getFilters() != null) {
             request.getFilters().forEach(f -> b.addFilters(mapFilter(f)));
@@ -33,6 +43,13 @@ public class QueryRequestMapper {
         }
 
         return b.build();
+    }
+
+    private SortField mapSort(SortDto dto) {
+        return SortField.newBuilder()
+                .setField(dto.getField() == null ? "" : dto.getField().trim())
+                .setOrder(dto.isDescending() ? SortOrder.SORT_ORDER_DESC : SortOrder.SORT_ORDER_ASC)
+                .build();
     }
 
     private Filter mapFilter(FilterDto dto) {

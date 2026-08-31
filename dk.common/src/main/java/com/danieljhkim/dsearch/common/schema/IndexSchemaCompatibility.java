@@ -27,7 +27,9 @@ public final class IndexSchemaCompatibility {
         }
         if (!persisted.analyzer().name().equals(runtime.analyzer().name())) {
             return SchemaMismatchException.of(
-                    "analyzer.name", persisted.analyzer().name(), runtime.analyzer().name());
+                    "analyzer.name",
+                    persisted.analyzer().name(),
+                    runtime.analyzer().name());
         }
         Map<String, FieldSchema> persistedFields = byName(persisted);
         Map<String, FieldSchema> runtimeFields = byName(runtime);
@@ -72,11 +74,14 @@ public final class IndexSchemaCompatibility {
     private static SchemaMismatchException fieldMismatch(FieldSchema persisted, FieldSchema runtime) {
         String prefix = "fields." + runtime.name() + ".";
         if (persisted.type() != runtime.type()) {
-            return SchemaMismatchException.of(prefix + "type", String.valueOf(persisted.type()), String.valueOf(runtime.type()));
+            return SchemaMismatchException.of(
+                    prefix + "type", String.valueOf(persisted.type()), String.valueOf(runtime.type()));
         }
         if (persisted.filterable() != runtime.filterable()) {
             return SchemaMismatchException.of(
-                    prefix + "filterable", String.valueOf(persisted.filterable()), String.valueOf(runtime.filterable()));
+                    prefix + "filterable",
+                    String.valueOf(persisted.filterable()),
+                    String.valueOf(runtime.filterable()));
         }
         if (persisted.sortable() != runtime.sortable()) {
             return SchemaMismatchException.of(

@@ -97,6 +97,13 @@ requestLimits:
   maxConcurrentFanoutCalls: 64
   retryAfterMillis: 100
 
+pagination:
+  # Shared across every query node: a gateway spreads the pages of one traversal
+  # across nodes, so a per-node key would reject page two. Blank generates a
+  # process-local key and logs a warning, which is fine only for a single node.
+  cursorSigningKey: ""
+  maxSortFields: 8
+
 # Field configurations for filtering, sorting, faceting, and highlighting
 fieldConfigs:
   - name: "title"

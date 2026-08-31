@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package dsearch.common;
+
+option java_package = "com.danieljhkim.dsearch.proto.common";
+option java_multiple_files = true;
+
+enum SortOrder {
+  SORT_ORDER_UNSPECIFIED = 0;
+  SORT_ORDER_ASC = 1;
+  SORT_ORDER_DESC = 2;
+}
+
+// One component of a total ordering. `field` is either a sortable DocValues field
+// or one of the pseudo-fields `_score` and `_id`. `_id` is always appended as the
+// final component so the effective ordering is total and unique.
+message SortField {
+  string field = 1;
+  SortOrder order = 2;
+}
+
+// One typed sort value, positionally matched to a SortField. `missing` marks a
+// document that has no value for that field; it is never combined with a payload
+// and always orders last regardless of direction.
+message SortValue {
+  bool missing = 1;
+  oneof value {
+    string string_value = 2;
+    int64 long_value = 3;
+    double double_value = 4;
+    float float_value = 5;
+  }
+}

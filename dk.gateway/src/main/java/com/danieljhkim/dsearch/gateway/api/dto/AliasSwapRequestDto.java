@@ -9,13 +9,7 @@ import lombok.Setter;
 @Getter
 @Setter
 public class AliasSwapRequestDto {
-    @NotBlank
-    @Size(max = 64)
-    @Pattern(regexp = "[A-Za-z0-9_-]+")
-    private String alias;
+    @NotBlank @Size(max = 64) @Pattern(regexp = "[A-Za-z0-9_-]+") private String alias;
 
-    @NotBlank
-    @Size(max = 64)
-    @Pattern(regexp = "[A-Za-z0-9_-]+")
-    private String targetIndex;
+    @NotBlank @Size(max = 64) @Pattern(regexp = "[A-Za-z0-9_-]+") private String targetIndex;
 }

@@ -6,6 +6,7 @@ import com.danieljhkim.dsearch.common.exception.ShardNotFoundException;
 import com.danieljhkim.dsearch.common.health.HealthHttpServer;
 import com.danieljhkim.dsearch.common.model.SearchDocument;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.common.pagination.SortOptions;
 import com.danieljhkim.dsearch.common.schema.IndexAlias;
 import com.danieljhkim.dsearch.common.schema.IndexAliasStore;
 import com.danieljhkim.dsearch.common.schema.IndexSchema;
@@ -237,7 +238,8 @@ public class IndexManager implements Closeable {
                 this.fieldConfigMap.put(fc.getName(), fc);
             }
         }
-        this.expectedSchema = ShardIndex.resolveRuntimeSchema(expectedSchema, this.fieldConfigMap, this.embeddingService);
+        this.expectedSchema =
+                ShardIndex.resolveRuntimeSchema(expectedSchema, this.fieldConfigMap, this.embeddingService);
         this.aliasStore = new IndexAliasStore(this.baseDir);
 
         ScheduledExecutorService scheduler = null;
@@ -328,7 +330,8 @@ public class IndexManager implements Closeable {
 
     private void openExistingShard(String shardId) {
         try {
-            ShardIndex shardIndex = new ShardIndex(shardId, baseDir, fieldConfigMap, embeddingService, expectedSchema, true);
+            ShardIndex shardIndex =
+                    new ShardIndex(shardId, baseDir, fieldConfigMap, embeddingService, expectedSchema, true);
             shardIndexes.put(shardId, shardIndex);
             shardBuffers.put(shardId, new ShardBuffer());
             unservableIndexes.remove(shardId);
@@ -340,7 +343,8 @@ public class IndexManager implements Closeable {
         } catch (SchemaMismatchException e) {
             LOGGER.log(Level.SEVERE, "Refusing to serve incompatible index " + shardId + ": " + e.getMessage());
             unservableIndexes.put(shardId, e);
-            ShardIndex readable = new ShardIndex(shardId, baseDir, fieldConfigMap, embeddingService, expectedSchema, false);
+            ShardIndex readable =
+                    new ShardIndex(shardId, baseDir, fieldConfigMap, embeddingService, expectedSchema, false);
             shardIndexes.put(shardId, readable);
             shardBuffers.put(shardId, new ShardBuffer());
         }
@@ -519,17 +523,42 @@ public class IndexManager implements Closeable {
             boolean highlight,
             List<FacetRequest> facetRequests)
             throws IOException {
+        return searchDocument(
+                partitionId, query, limit, from, searchType, filters, highlight, facetRequests, SortOptions.NONE);
+    }
+
+    /**
+     * Search with filters, highlighting, facets, and an explicit ordering.
+     *
+     * <p>Sort eligibility is checked here against this node's field configuration. The query node
+     * pre-checks against the schema it knows, but this is the authoritative check: the index node
+     * is the only component that knows whether the DocValues an ordering needs actually exist.
+     */
+    public SearchResult searchDocument(
+            String partitionId,
+            String query,
+            int limit,
+            int from,
+            SearchType searchType,
+            List<Filter> filters,
+            boolean highlight,
+            List<FacetRequest> facetRequests,
+            SortOptions sortOptions)
+            throws IOException {
         String physicalIndex = resolvePhysicalIndex(partitionId);
         ensureServable(physicalIndex);
         ShardIndex shardIndex = shardIndexes.get(physicalIndex);
         if (shardIndex == null) {
             return new SearchResult(new ArrayList<>(), 0);
         }
+        SortOptions effectiveSort = sortOptions == null ? SortOptions.NONE : sortOptions;
+        if (effectiveSort.isSorted()) {
+            effectiveSort.spec().validateAgainst(fieldConfigMap);
+        }
         return switch (searchType) {
             case SearchType.SEMANTIC ->
-                shardIndex.semanticSearch(query, limit, from, filters, highlight, facetRequests);
-            case SearchType.BM25 -> shardIndex.search(query, limit, from, filters, highlight, facetRequests);
-            default -> shardIndex.search(query, limit, from, filters, highlight, facetRequests);
+                shardIndex.semanticSearch(query, limit, from, filters, highlight, facetRequests, effectiveSort);
+            default -> shardIndex.search(query, limit, from, filters, highlight, facetRequests, effectiveSort);
         };
     }
 
@@ -537,13 +566,16 @@ public class IndexManager implements Closeable {
         PartitionIdValidator.validate(indexName);
         String resolvedAlias = alias == null || alias.isBlank() ? indexName : alias;
         PartitionIdValidator.validate(resolvedAlias);
-        IndexSchema toPersist = schema == null ? expectedSchema : ShardIndex.resolveRuntimeSchema(schema, fieldConfigMap, embeddingService);
+        IndexSchema toPersist = schema == null
+                ? expectedSchema
+                : ShardIndex.resolveRuntimeSchema(schema, fieldConfigMap, embeddingService);
         if (schema != null) {
             IndexSchemaCompatibility.requireCompatible(toPersist, expectedSchema);
         }
         IndexAlias existing = aliasStore.getAlias(resolvedAlias);
         if (existing != null && shardIndexes.containsKey(existing.getIndexName())) {
-            throw new IllegalArgumentException("Alias '" + resolvedAlias + "' already points to index " + existing.getIndexName());
+            throw new IllegalArgumentException(
+                    "Alias '" + resolvedAlias + "' already points to index " + existing.getIndexName());
         }
         if (shardIndexes.containsKey(indexName)) {
             throw new IllegalArgumentException("Index '" + indexName + "' already exists");
@@ -565,8 +597,10 @@ public class IndexManager implements Closeable {
             throw new ShardNotFoundException(physicalIndex);
         }
         IndexAlias alias = aliasStore.getAlias(indexOrAlias);
-        String aliasName = alias != null ? alias.getAlias() : indexOrAlias.equals(physicalIndex) ? physicalIndex : indexOrAlias;
-        return new InspectedSchema(physicalIndex, aliasName, shardIndex.getSchema());
+        String aliasName =
+                alias != null ? alias.getAlias() : indexOrAlias.equals(physicalIndex) ? physicalIndex : indexOrAlias;
+        long generation = alias != null ? alias.getGeneration() : 1L;
+        return new InspectedSchema(physicalIndex, aliasName, shardIndex.getSchema(), generation);
     }
 
     public ReindexResult reindex(
@@ -578,15 +612,15 @@ public class IndexManager implements Closeable {
         if (source == null) {
             throw new ShardNotFoundException(sourceIndex);
         }
-        String resolvedTarget = targetIndex == null || targetIndex.isBlank()
-                ? nextPhysicalIndex(sourceAlias)
-                : targetIndex;
+        String resolvedTarget =
+                targetIndex == null || targetIndex.isBlank() ? nextPhysicalIndex(sourceAlias) : targetIndex;
         PartitionIdValidator.validate(resolvedTarget);
         if (resolvedTarget.equals(sourceIndex)) {
             throw new IllegalArgumentException("Reindex target must be distinct from source index " + sourceIndex);
         }
-        IndexSchema targetSchema =
-                schema == null ? expectedSchema : ShardIndex.resolveRuntimeSchema(schema, fieldConfigMap, embeddingService);
+        IndexSchema targetSchema = schema == null
+                ? expectedSchema
+                : ShardIndex.resolveRuntimeSchema(schema, fieldConfigMap, embeddingService);
         ReindexJob job = new ReindexJob();
         job.setJobId(UUID.randomUUID().toString());
         job.setSourceAlias(sourceAlias);
@@ -604,8 +638,8 @@ public class IndexManager implements Closeable {
             target.commit();
             long targetCount = target.countDocuments();
             job.setTargetCount(targetCount);
-            boolean verified = targetCount == job.getSourceCount()
-                    && verifyQueries(source, target, verificationQueries);
+            boolean verified =
+                    targetCount == job.getSourceCount() && verifyQueries(source, target, verificationQueries);
             job.setVerificationPassed(verified);
             job.setStatus(verified ? ReindexJob.STATUS_VERIFIED : ReindexJob.STATUS_FAILED);
             if (!verified) {
@@ -613,13 +647,7 @@ public class IndexManager implements Closeable {
             }
             aliasStore.saveJob(job);
             return new ReindexResult(
-                    verified,
-                    sourceIndex,
-                    resolvedTarget,
-                    job.getSourceCount(),
-                    targetCount,
-                    verified,
-                    job.getError());
+                    verified, sourceIndex, resolvedTarget, job.getSourceCount(), targetCount, verified, job.getError());
         } catch (RuntimeException | IOException e) {
             job.setStatus(ReindexJob.STATUS_INTERRUPTED);
             job.setError(e.getMessage());
@@ -645,8 +673,8 @@ public class IndexManager implements Closeable {
                     .findFirst()
                     .orElse(null);
             if (verified != null && !verified.isComplete()) {
-                throw new IllegalArgumentException("Cannot swap alias '" + alias + "' until reindex of "
-                        + targetIndex + " is verified");
+                throw new IllegalArgumentException(
+                        "Cannot swap alias '" + alias + "' until reindex of " + targetIndex + " is verified");
             }
         }
         return aliasStore.swap(alias, targetIndex);
@@ -688,8 +716,9 @@ public class IndexManager implements Closeable {
         }
         for (RepresentativeQuery query : verificationQueries) {
             int size = query.getSize() > 0 ? query.getSize() : 10;
-            SearchType searchType =
-                    query.getSearchType() == SearchType.SEARCH_TYPE_UNSPECIFIED ? SearchType.BM25 : query.getSearchType();
+            SearchType searchType = query.getSearchType() == SearchType.SEARCH_TYPE_UNSPECIFIED
+                    ? SearchType.BM25
+                    : query.getSearchType();
             SearchResult sourceResult = searchOn(source, query.getQuery(), size, searchType);
             SearchResult targetResult = searchOn(target, query.getQuery(), size, searchType);
             if (sourceResult.getTotalHits() != targetResult.getTotalHits()) {
@@ -708,7 +737,12 @@ public class IndexManager implements Closeable {
 
     public record CreatedIndex(String indexName, String alias, IndexSchema schema) {}
 
-    public record InspectedSchema(String indexName, String alias, IndexSchema schema) {}
+    /**
+     * @param generation alias generation currently serving the index; pagination cursors bind to
+     *     it so an alias swap or rollback invalidates them rather than silently resuming against a
+     *     different physical index
+     */
+    public record InspectedSchema(String indexName, String alias, IndexSchema schema, long generation) {}
 
     public record ReindexResult(
             boolean success,

@@ -66,10 +66,12 @@ class ProtoWireContractTest {
         assertEquals(
                 Set.of(
                         "cluster.proto",
+                        "common/cursor.proto",
                         "common/facet.proto",
                         "common/filter.proto",
                         "common/fusion_strategy.proto",
                         "common/search_type.proto",
+                        "common/sort.proto",
                         "index.proto",
                         "query.proto"),
                 files.keySet());
@@ -99,6 +101,10 @@ class ProtoWireContractTest {
                 files.get("common/search_type.proto"),
                 "SearchType",
                 Map.of("SEARCH_TYPE_UNSPECIFIED", 0, "BM25", 1, "SEMANTIC", 2, "HYBRID", 3));
+        assertEnumValues(
+                files.get("common/sort.proto"),
+                "SortOrder",
+                Map.of("SORT_ORDER_UNSPECIFIED", 0, "SORT_ORDER_ASC", 1, "SORT_ORDER_DESC", 2));
 
         assertRpc(
                 files.get("cluster.proto"),
