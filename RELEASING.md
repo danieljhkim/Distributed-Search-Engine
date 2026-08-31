@@ -82,13 +82,26 @@ approves the resulting release task before any version or changelog edit.
    ```
 
    Push the branch before the tag. Never force-move a published release tag.
-5. Watch the tag-triggered `docker-publish.yml` workflow. It rejects tags not
-   reachable from `main`, snapshot Maven versions, and Maven/tag mismatches.
-   It publishes `dk.index-node`, `dk.query-node`, `dk.coordinator`, and
-   `dk.gateway` to GHCR for `linux/amd64` and `linux/arm64`, always with an
-   immutable version tag and, except for RC-tag patterns, a `latest` tag.
-   Confirm every matrix image publishes successfully with the expected
-   versioned tag before declaring the release complete.
+5. Watch the tag-triggered `docker-publish.yml` workflow. It first rejects tags
+   not reachable from `main`, snapshot Maven versions, and Maven/tag mismatches,
+   then runs the full Maven verification once. Each of `dk.index-node`,
+   `dk.query-node`, `dk.coordinator`, and `dk.gateway` is built once for
+   `linux/amd64` and `linux/arm64` under a unique candidate tag. The workflow
+   records that manifest digest and never uses the candidate tag as subsequent
+   authority.
+6. The release gate verifies the exact digests' source/version labels, SPDX
+   SBOM and build-provenance attestations, applies the vulnerability policy in
+   `SECURITY.md`, and runs `scripts/docker-cluster-e2e.sh` with all four digest
+   references injected. The smoke test covers startup/readiness, model-backed
+   semantic search, writable data and cache mounts, the non-root/read-only/
+   capability-free profile, and graceful shutdown. It then creates and verifies
+   a keyless Cosign signature for each digest.
+7. Only after every gate passes does the workflow promote those same manifests
+   to the immutable version tag and, except for RC-tag patterns, `latest`.
+   Promotion is rejected if an existing version tag names another digest. Keep
+   the retained `release-evidence-v<X.Y.Z>` artifact for the source identity,
+   Maven result, per-image digests, SPDX documents, and release manifest. A
+   workflow success is not sufficient if any expected evidence file is absent.
 
 ## Approval boundary
 

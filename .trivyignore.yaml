@@ -1,0 +1,4 @@
+# Vulnerability exceptions are empty by default. Any entry must include an
+# owner and justification in `statement`, a linked advisory in the approving
+# pull request, and an `expired_at` date no more than 30 days in the future.
+vulnerabilities: []

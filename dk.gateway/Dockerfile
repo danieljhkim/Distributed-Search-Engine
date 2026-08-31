@@ -1,16 +1,16 @@
-# Build stage
-FROM maven:3-eclipse-temurin-26 AS build
+# Multi-architecture index digest for maven:3.9.11-eclipse-temurin-21.
+FROM --platform=$BUILDPLATFORM maven:3.9.11-eclipse-temurin-21@sha256:6fdc855a6ed81d288ca7ca37ac6ff5e9308b612485c0801d70b25a858c83d237 AS build
 WORKDIR /app
 COPY . .
-RUN mvn -q -DskipTests clean package -pl dk.gateway -am
+RUN --mount=type=cache,target=/root/.m2 mvn -B -ntp clean package -pl dk.gateway -am
 
-# Runtime stage
-FROM eclipse-temurin:21-jre
+# Multi-architecture index digest for eclipse-temurin:21-jre-jammy.
+FROM eclipse-temurin:21-jre-jammy@sha256:eebd356ad7358b7094758e5787a6726f332917cfd56feab6457c56dab895cdbf
+RUN groupadd --gid 10001 dsearch \
+    && useradd --uid 10001 --gid 10001 --home-dir /nonexistent --shell /usr/sbin/nologin dsearch
 WORKDIR /app
-
-# Update the jar path/name to match your module output
-COPY --from=build /app/dk.gateway/target/dk-gateway.jar app.jar
+COPY --from=build --chown=10001:10001 /app/dk.gateway/target/dk-gateway.jar app.jar
 
 EXPOSE 8080
-ENTRYPOINT ["java","-jar","app.jar"]
-
+USER 10001:10001
+ENTRYPOINT ["java", "-jar", "app.jar"]
