@@ -7,6 +7,8 @@ import ai.djl.repository.zoo.ZooModel;
 import ai.djl.training.util.ProgressBar;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.config.ConfigLoader;
+import io.prometheus.client.Counter;
+import io.prometheus.client.Gauge;
 import java.io.IOException;
 import java.util.Map;
 import java.util.Objects;
@@ -19,6 +21,15 @@ import lombok.Getter;
 public class EmbeddingModelManager {
 
     private static final Logger LOGGER = Logger.getLogger(EmbeddingModelManager.class.getName());
+    private static final Gauge DEFAULT_MODEL_READY = Gauge.build()
+            .name("dsearch_embedding_model_ready")
+            .help("Whether the configured embedding model is ready")
+            .register();
+    private static final Counter MODEL_LOAD_OUTCOMES = Counter.build()
+            .name("dsearch_embedding_model_load_outcomes_total")
+            .help("Embedding model load attempts by bounded outcome")
+            .labelNames("outcome")
+            .register();
     private static volatile EmbeddingModelManager INSTANCE;
     private final AppConfig appConfig;
     private final String DEFAULT_MODEL_URL;
@@ -60,7 +71,15 @@ public class EmbeddingModelManager {
     synchronized void initializeDefaultModel() {
         ensureOpen();
         LOGGER.info(() -> "Loading default embedding model: " + DEFAULT_MODEL_URL);
-        this.defaultModel = loadAndCache(DEFAULT_MODEL_URL, DEFAULT_ENGINE);
+        try {
+            this.defaultModel = loadAndCache(DEFAULT_MODEL_URL, DEFAULT_ENGINE);
+            MODEL_LOAD_OUTCOMES.labels("success").inc();
+            DEFAULT_MODEL_READY.set(1);
+        } catch (RuntimeException e) {
+            MODEL_LOAD_OUTCOMES.labels("failure").inc();
+            DEFAULT_MODEL_READY.set(0);
+            throw e;
+        }
         LOGGER.info(() -> "Default embedding model loaded successfully: " + DEFAULT_MODEL_URL);
     }
 
@@ -93,7 +112,9 @@ public class EmbeddingModelManager {
 
     /** True only after the configured default embedding model has loaded and before shutdown. */
     public boolean isDefaultModelReady() {
-        return !closed && defaultModel != null;
+        boolean ready = !closed && defaultModel != null;
+        DEFAULT_MODEL_READY.set(ready ? 1 : 0);
+        return ready;
     }
 
     public synchronized void close() {
@@ -104,6 +125,7 @@ public class EmbeddingModelManager {
         modelCache.values().stream().distinct().forEach(ZooModel::close);
         modelCache.clear();
         defaultModel = null;
+        DEFAULT_MODEL_READY.set(0);
     }
 
     private ZooModel<String, float[]> loadAndCache(String modelUrl, String engine) {

@@ -11,6 +11,8 @@ import com.danieljhkim.dsearch.querynode.grpc.BaseIndexService;
 import io.grpc.Context;
 import io.grpc.Deadline;
 import io.grpc.Status;
+import io.prometheus.client.Counter;
+import io.prometheus.client.Gauge;
 import java.io.Closeable;
 import java.io.IOException;
 import java.time.Duration;
@@ -39,6 +41,15 @@ import org.slf4j.MDC;
 public class SearchExecutor implements Closeable {
 
     private static final Logger LOG = LoggerFactory.getLogger(SearchExecutor.class);
+    private static final Counter FANOUT_OUTCOMES = Counter.build()
+            .name("dsearch_search_fanout_outcomes_total")
+            .help("Completed search fan-outs by bounded outcome")
+            .labelNames("outcome")
+            .register();
+    private static final Gauge FANOUT_ADMISSION_AVAILABLE = Gauge.build()
+            .name("dsearch_search_fanout_admission_available")
+            .help("Available fan-out admission permits")
+            .register();
     private static final Comparator<SearchHit> COMPARABLE_SCORE_ORDER = Comparator.comparingDouble(SearchHit::getScore)
             .reversed()
             .thenComparing(SearchHit::getDocId, Comparator.nullsLast(Comparator.naturalOrder()));
@@ -73,6 +84,7 @@ public class SearchExecutor implements Closeable {
         this.shardTimeout = Objects.requireNonNull(shardTimeout, "shardTimeout must not be null");
         AppConfig.RequestLimitsConfig limits = Objects.requireNonNull(requestLimits, "requestLimits must not be null");
         this.fanoutAdmission = new Semaphore(Math.max(1, limits.getMaxConcurrentFanoutCalls()), true);
+        FANOUT_ADMISSION_AVAILABLE.set(this.fanoutAdmission.availablePermits());
         this.maxResultWindow = Math.max(1, limits.getMaxResultWindow());
         this.retryAfterMillis = Math.max(1, limits.getRetryAfterMillis());
     }
@@ -184,8 +196,10 @@ public class SearchExecutor implements Closeable {
         List<String> activeNodeIds = nodeClientManager.getActiveNodeIds();
         int acquiredPermits = activeNodeIds.size();
         if (acquiredPermits > 0 && !fanoutAdmission.tryAcquire(acquiredPermits)) {
+            FANOUT_OUTCOMES.labels("rejected").inc();
             throw new RequestAdmissionException("search fan-out", retryAfterMillis);
         }
+        FANOUT_ADMISSION_AVAILABLE.set(fanoutAdmission.availablePermits());
         int submitted = 0;
         try {
             for (String nodeId : activeNodeIds) {
@@ -209,6 +223,7 @@ public class SearchExecutor implements Closeable {
             }
         } catch (RuntimeException e) {
             fanoutAdmission.release(acquiredPermits - submitted);
+            FANOUT_ADMISSION_AVAILABLE.set(fanoutAdmission.availablePermits());
             cancelOutstanding(futures);
             throw e;
         }
@@ -244,11 +259,25 @@ public class SearchExecutor implements Closeable {
         long sumMs = nodeTimingsMs.values().stream().mapToLong(Long::longValue).sum();
         SearchResult.FanoutMetadata fanoutMetadata = new SearchResult.FanoutMetadata(
                 futures.size(), acc.successfulNodes, acc.failedNodes, acc.timedOutNodes);
+        FANOUT_OUTCOMES.labels(fanoutOutcome(fanoutMetadata)).inc();
         logFanoutSummary(
                 requestId, shardId, searchType, acc.totalHits, page, size, sumMs, nodeTimingsMs, fanoutMetadata);
 
         return new SearchResult(
                 pageHits, acc.totalHits, page, aggregatedFacets.isEmpty() ? null : aggregatedFacets, fanoutMetadata);
+    }
+
+    private static String fanoutOutcome(SearchResult.FanoutMetadata metadata) {
+        if (metadata.attemptedNodes() == 0 || metadata.succeededNodes() == 0) {
+            return "failed";
+        }
+        if (metadata.timedOutNodes() > 0) {
+            return "deadline_exhausted";
+        }
+        if (metadata.failedNodes() > 0) {
+            return "partial_failure";
+        }
+        return "success";
     }
 
     private CompletableFuture<SearchResult> submitNodeSearch(
@@ -655,12 +684,14 @@ public class SearchExecutor implements Closeable {
         void releaseIfNotStarted() {
             if (state.compareAndSet(NOT_STARTED, RELEASED)) {
                 fanoutAdmission.release();
+                FANOUT_ADMISSION_AVAILABLE.set(fanoutAdmission.availablePermits());
             }
         }
 
         void release() {
             if (state.getAndSet(RELEASED) != RELEASED) {
                 fanoutAdmission.release();
+                FANOUT_ADMISSION_AVAILABLE.set(fanoutAdmission.availablePermits());
             }
         }
     }

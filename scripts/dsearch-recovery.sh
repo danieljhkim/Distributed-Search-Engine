@@ -6,6 +6,8 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 default_compose_file="$repo_root/docker-compose.yml"
 default_config_file="$repo_root/dk.common/src/main/resources/app-config.docker.yaml"
 default_pom_file="$repo_root/pom.xml"
+recovery_metrics_file=${DSEARCH_RECOVERY_METRICS_FILE:-}
+recovery_operation=
 
 log() {
   printf '[dsearch-recovery] %s\n' "$*" >&2
@@ -13,7 +15,44 @@ log() {
 
 fail() {
   printf '[dsearch-recovery] ERROR: %s\n' "$*" >&2
+  if [[ "$recovery_operation" == restore ]]; then
+    publish_recovery_metric restore_failure "$(date +%s)" || true
+  fi
   return 1
+}
+
+# The optional textfile collector target keeps recovery metrics free of artifact IDs and project
+# names. A node-exporter textfile collector or equivalent scraper owns serving this file.
+publish_recovery_metric() {
+  local event=$1 timestamp=$2 current_snapshot=0 restore_success=0 restore_failure=0 target temporary
+  [[ -n "$recovery_metrics_file" ]] || return 0
+  target=$recovery_metrics_file
+  mkdir -p "$(dirname "$target")"
+  if [[ -f "$target" ]]; then
+    current_snapshot=$(sed -n 's/^dsearch_snapshot_last_successful_timestamp_seconds //p' "$target" | tail -n 1)
+    restore_success=$(sed -n 's/^dsearch_restore_outcomes_total{outcome="success"} //p' "$target" | tail -n 1)
+    restore_failure=$(sed -n 's/^dsearch_restore_outcomes_total{outcome="failure"} //p' "$target" | tail -n 1)
+  fi
+  [[ "$current_snapshot" =~ ^[0-9]+$ ]] || current_snapshot=0
+  [[ "$restore_success" =~ ^[0-9]+$ ]] || restore_success=0
+  [[ "$restore_failure" =~ ^[0-9]+$ ]] || restore_failure=0
+  case "$event" in
+    snapshot_success) current_snapshot=$timestamp ;;
+    restore_success) restore_success=$((restore_success + 1)) ;;
+    restore_failure) restore_failure=$((restore_failure + 1)) ;;
+    *) return 2 ;;
+  esac
+  temporary="${target}.tmp.$$"
+  {
+    printf '# HELP dsearch_snapshot_last_successful_timestamp_seconds Unix timestamp of the last valid snapshot\n'
+    printf '# TYPE dsearch_snapshot_last_successful_timestamp_seconds gauge\n'
+    printf 'dsearch_snapshot_last_successful_timestamp_seconds %s\n' "$current_snapshot"
+    printf '# HELP dsearch_restore_outcomes_total Completed restore attempts by bounded outcome\n'
+    printf '# TYPE dsearch_restore_outcomes_total counter\n'
+    printf 'dsearch_restore_outcomes_total{outcome="success"} %s\n' "$restore_success"
+    printf 'dsearch_restore_outcomes_total{outcome="failure"} %s\n' "$restore_failure"
+  } >"$temporary"
+  mv "$temporary" "$target"
 }
 
 usage() {
@@ -399,6 +438,7 @@ copy_to_service() {
 }
 
 snapshot_command() {
+  recovery_operation=snapshot
   local project= output= verification= gateway_url= leave_stopped=false
   local compose_file=$default_compose_file config_file=$default_config_file pom_file=$default_pom_file
   while (($#)); do
@@ -576,6 +616,7 @@ snapshot_command() {
   mv "$stage" "$output"
   stage=$output
   log "Published complete snapshot $artifact_id at $output"
+  publish_recovery_metric snapshot_success "$(date +%s)"
 
   if [[ "$leave_stopped" == "true" ]]; then
     restart_source=false
@@ -608,6 +649,7 @@ validate_command() {
 }
 
 restore_command() {
+  recovery_operation=restore
   local project= snapshot= report= gateway_url= startup_timeout=420
   local compose_file=$default_compose_file config_file=$default_config_file pom_file=$default_pom_file
   while (($#)); do
@@ -731,6 +773,7 @@ restore_command() {
     >"$report"
   rm -f "$verification_evidence"
   log "Restore verified through the public gateway; report: $report"
+  publish_recovery_metric restore_success "$(date +%s)"
   jq -n --arg artifactId "$artifact_id" --arg project "$project" --arg report "$report" \
     --argjson recoveryPointSeconds "$rpo_seconds" --argjson recoveryTimeSeconds "$rto_seconds" \
     '{status:"success",artifactId:$artifactId,project:$project,report:$report,

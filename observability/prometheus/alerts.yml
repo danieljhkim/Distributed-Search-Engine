@@ -1,0 +1,38 @@
+groups:
+  - name: dsearch-slos
+    rules:
+      - alert: DsearchGatewayAvailabilityBudgetBurn
+        expr: sum(rate(http_server_requests_seconds_count{application="dsearch-gateway",status=~"5.."}[5m])) / clamp_min(sum(rate(http_server_requests_seconds_count{application="dsearch-gateway"}[5m])), 1) > 0.01
+        for: 10m
+        labels: {severity: page, service: gateway, objective: availability}
+        annotations: {summary: "Gateway availability objective at risk", runbook: "docs/OBSERVABILITY.md#signals-and-operator-actions"}
+      - alert: DsearchFanoutDegraded
+        expr: sum(rate(dsearch_search_fanout_outcomes_total{outcome=~"failed|partial_failure|deadline_exhausted"}[5m])) > 0
+        for: 5m
+        labels: {severity: page, service: query-node, objective: availability}
+        annotations: {summary: "Search fan-out is degraded", runbook: "docs/OPERABILITY.md"}
+      - alert: DsearchAdmissionSaturated
+        expr: sum(rate(dsearch_search_fanout_outcomes_total{outcome="rejected"}[5m])) + sum(rate(dsearch_embedding_inference_outcomes_total{outcome="rejected"}[5m])) > 0
+        for: 5m
+        labels: {severity: ticket, service: query-node, objective: latency}
+        annotations: {summary: "Admission capacity is exhausted", runbook: "docs/OPERABILITY.md"}
+      - alert: DsearchTopologyCapacityLost
+        expr: sum(dsearch_topology_members{state="healthy"}) < sum(dsearch_topology_members{state="total"})
+        for: 2m
+        labels: {severity: page, service: coordinator, objective: availability}
+        annotations: {summary: "Topology has unhealthy members", runbook: "docs/OPERABILITY.md"}
+      - alert: DsearchModelUnavailableOrSaturated
+        expr: dsearch_embedding_model_ready == 0 or dsearch_embedding_inference_in_flight >= 1
+        for: 5m
+        labels: {severity: page, service: index-node, objective: availability}
+        annotations: {summary: "Embedding model is unavailable or saturated", runbook: "docs/OPERABILITY.md"}
+      - alert: DsearchLuceneDurabilityRisk
+        expr: sum(rate(dsearch_lucene_commit_outcomes_total{outcome="failure"}[5m])) > 0 or time() - dsearch_lucene_last_successful_commit_timestamp_seconds > 300 or dsearch_lucene_disk_available_bytes < 104857600
+        for: 5m
+        labels: {severity: page, service: index-node, objective: durability}
+        annotations: {summary: "Lucene durability or capacity objective at risk", runbook: "docs/RECOVERY.md"}
+      - alert: DsearchSnapshotOrRestoreRisk
+        expr: time() - dsearch_snapshot_last_successful_timestamp_seconds > 86400 or increase(dsearch_restore_outcomes_total{outcome="failure"}[24h]) > 0
+        for: 15m
+        labels: {severity: page, service: recovery, objective: durability}
+        annotations: {summary: "Snapshot age or restore outcome needs action", runbook: "docs/RECOVERY.md"}

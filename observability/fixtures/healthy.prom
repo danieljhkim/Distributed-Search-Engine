@@ -1,0 +1,15 @@
+# Representative bounded healthy signal set used by scripts/observability-smoke.sh.
+http_server_requests_seconds_count{application="dsearch-gateway",status="200"} 100
+http_server_requests_seconds_count{application="dsearch-gateway",status="500"} 0
+dsearch_search_fanout_outcomes_total{outcome="success"} 100
+dsearch_search_fanout_outcomes_total{outcome="rejected"} 0
+dsearch_embedding_inference_outcomes_total{outcome="rejected"} 0
+dsearch_topology_members{role="index",state="total"} 2
+dsearch_topology_members{role="index",state="healthy"} 2
+dsearch_embedding_model_ready 1
+dsearch_embedding_inference_in_flight 0
+dsearch_lucene_commit_outcomes_total{outcome="failure"} 0
+dsearch_lucene_last_successful_commit_timestamp_seconds 4102444800
+dsearch_lucene_disk_available_bytes 1073741824
+dsearch_snapshot_last_successful_timestamp_seconds 4102444800
+dsearch_restore_outcomes_total{outcome="failure"} 0

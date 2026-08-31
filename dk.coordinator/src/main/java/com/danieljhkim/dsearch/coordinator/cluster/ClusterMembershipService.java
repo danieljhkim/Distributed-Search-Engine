@@ -3,6 +3,8 @@ package com.danieljhkim.dsearch.coordinator.cluster;
 import com.danieljhkim.dsearch.common.cluster.NodeGroup;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
+import io.prometheus.client.Counter;
+import io.prometheus.client.Gauge;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -40,6 +42,16 @@ public class ClusterMembershipService {
     private static final int LEGACY_STATE_FORMAT_VERSION = 1;
     private static final String STATE_FORMAT_VERSION_KEY = "state.format.version";
     private static final String BACKUP_SUFFIX = ".bak";
+    private static final Counter LEASE_EVENTS = Counter.build()
+            .name("dsearch_topology_lease_events_total")
+            .help("Coordinator membership lease events by bounded event")
+            .labelNames("event")
+            .register();
+    private static final Gauge MEMBERSHIP = Gauge.build()
+            .name("dsearch_topology_members")
+            .help("Coordinator topology members by role and health state")
+            .labelNames("role", "state")
+            .register();
 
     private final NodeGroup indexGroup;
     private final NodeGroup queryGroup;
@@ -86,6 +98,7 @@ public class ClusterMembershipService {
             seedLeases(coordinatorGroup, NodeRole.NODE_ROLE_COORDINATOR, now);
             persistState();
         }
+        updateMembershipMetrics();
     }
 
     /** Register or replace a node and renew its lease. */
@@ -98,6 +111,8 @@ public class ClusterMembershipService {
         group.addOrUpdateNode(healthyNode);
         lastSeenMillis.put(new MemberKey(role, nodeInfo.getNodeId()), clock.millis());
         persistMutation(topologyChanged);
+        LEASE_EVENTS.labels("register").inc();
+        updateMembershipMetrics();
     }
 
     /**
@@ -127,6 +142,8 @@ public class ClusterMembershipService {
         }
         lastSeenMillis.put(new MemberKey(role, nodeId), clock.millis());
         persistMutation(topologyChanged);
+        LEASE_EVENTS.labels("renew").inc();
+        updateMembershipMetrics();
         return topologyVersion;
     }
 
@@ -148,6 +165,8 @@ public class ClusterMembershipService {
             lastSeenMillis.remove(key);
         }
         persistMutation(true);
+        LEASE_EVENTS.labels("expired").inc(expired.size());
+        updateMembershipMetrics();
         return expired.stream().map(key -> key.role() + "/" + key.nodeId()).toList();
     }
 
@@ -166,6 +185,8 @@ public class ClusterMembershipService {
             group.addOrUpdateNode(copyWithHealth(existing, healthy));
         }
         persistMutation(topologyChanged);
+        LEASE_EVENTS.labels(healthy ? "health_restored" : "health_failed").inc();
+        updateMembershipMetrics();
     }
 
     /** Compatibility entry point for existing callers and tests. */
@@ -181,6 +202,8 @@ public class ClusterMembershipService {
         group.removeNode(nodeId);
         lastSeenMillis.remove(new MemberKey(role, nodeId));
         persistMutation(true);
+        LEASE_EVENTS.labels("removed").inc();
+        updateMembershipMetrics();
     }
 
     /**
@@ -265,6 +288,20 @@ public class ClusterMembershipService {
             topologyVersion++;
         }
         persistState();
+    }
+
+    private void updateMembershipMetrics() {
+        updateMembershipMetrics("index", indexGroup);
+        updateMembershipMetrics("query", queryGroup);
+        updateMembershipMetrics("coordinator", coordinatorGroup);
+    }
+
+    private static void updateMembershipMetrics(String role, NodeGroup group) {
+        List<NodeGroup.NodeInfo> nodes = group.getAllNodes();
+        MEMBERSHIP.labels(role, "total").set(nodes.size());
+        MEMBERSHIP
+                .labels(role, "healthy")
+                .set(nodes.stream().filter(NodeGroup.NodeInfo::isHealthy).count());
     }
 
     private void seedLeases(NodeGroup group, NodeRole role, long now) {

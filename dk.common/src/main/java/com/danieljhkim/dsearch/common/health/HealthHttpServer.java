@@ -3,8 +3,11 @@ package com.danieljhkim.dsearch.common.health;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
+import io.prometheus.client.CollectorRegistry;
+import io.prometheus.client.exporter.common.TextFormat;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -41,6 +44,7 @@ public final class HealthHttpServer {
         server.createContext("/health", livenessHandler);
         server.createContext("/livez", livenessHandler);
         server.createContext("/readyz", new HealthHandler(serviceName, readiness));
+        server.createContext("/metrics", new MetricsHandler());
         ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, serviceName + "-health-http");
             t.setDaemon(true);
@@ -113,6 +117,24 @@ public final class HealthHttpServer {
 
         private static String escapeJson(String value) {
             return value.replace("\\", "\\\\").replace("\"", "\\\"");
+        }
+    }
+
+    /** Exposes the process-wide Prometheus registry alongside health without changing gRPC ports. */
+    private static class MetricsHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                exchange.close();
+                return;
+            }
+            exchange.getResponseHeaders().set("Content-Type", TextFormat.CONTENT_TYPE_004);
+            exchange.sendResponseHeaders(200, 0);
+            try (OutputStream output = exchange.getResponseBody();
+                    OutputStreamWriter writer = new OutputStreamWriter(output, StandardCharsets.UTF_8)) {
+                TextFormat.write004(writer, CollectorRegistry.defaultRegistry.metricFamilySamples());
+            }
         }
     }
 }

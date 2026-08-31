@@ -1,0 +1,15 @@
+{
+  "uid": "dsearch-slos-v1",
+  "title": "dsearch SLOs and distributed failure modes",
+  "schemaVersion": 39,
+  "version": 1,
+  "tags": ["dsearch", "slo"],
+  "panels": [
+    {"title": "Gateway error ratio", "type": "timeseries", "targets": [{"expr": "sum(rate(http_server_requests_seconds_count{application=\"dsearch-gateway\",status=~\"5..\"}[5m])) / clamp_min(sum(rate(http_server_requests_seconds_count{application=\"dsearch-gateway\"}[5m])), 1)"}]},
+    {"title": "Fan-out outcomes", "type": "timeseries", "targets": [{"expr": "sum by (outcome) (rate(dsearch_search_fanout_outcomes_total[5m]))"}]},
+    {"title": "Topology members", "type": "timeseries", "targets": [{"expr": "sum by (role, state) (dsearch_topology_members)"}]},
+    {"title": "Model readiness and saturation", "type": "timeseries", "targets": [{"expr": "dsearch_embedding_model_ready"}, {"expr": "dsearch_embedding_inference_in_flight"}]},
+    {"title": "Lucene durability", "type": "timeseries", "targets": [{"expr": "sum by (outcome) (rate(dsearch_lucene_commit_outcomes_total[5m]))"}, {"expr": "dsearch_lucene_disk_available_bytes"}]},
+    {"title": "Snapshot and restore", "type": "timeseries", "targets": [{"expr": "time() - dsearch_snapshot_last_successful_timestamp_seconds"}, {"expr": "dsearch_restore_outcomes_total"}]}
+  ]
+}
