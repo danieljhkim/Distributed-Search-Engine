@@ -64,6 +64,7 @@ indexing:
   maxFlushIntervalSeconds: 5
   # Admission control: leave room for Lucene merges and durable commits.
   minimumFreeDiskBytes: 104857600
+  analyzer: "standard"
 
 ml:
   models:
@@ -72,6 +73,7 @@ ml:
       engine: "PyTorch"
       predictorPoolSize: 1
       predictorPerCall: false
+      dimension: 384
 
 requestLimits:
   # One end-to-end budget. gRPC automatically propagates the remaining deadline.

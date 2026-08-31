@@ -1,14 +1,23 @@
 package com.danieljhkim.dsearch.indexnode.index;
 
 import com.danieljhkim.dsearch.common.config.AppConfig.FieldConfig;
+import com.danieljhkim.dsearch.common.exception.SchemaMismatchException;
+import com.danieljhkim.dsearch.common.exception.ShardNotFoundException;
 import com.danieljhkim.dsearch.common.health.HealthHttpServer;
 import com.danieljhkim.dsearch.common.model.SearchDocument;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.common.schema.IndexAlias;
+import com.danieljhkim.dsearch.common.schema.IndexAliasStore;
+import com.danieljhkim.dsearch.common.schema.IndexSchema;
+import com.danieljhkim.dsearch.common.schema.IndexSchemaCompatibility;
+import com.danieljhkim.dsearch.common.schema.ReindexJob;
+import com.danieljhkim.dsearch.common.validation.PartitionIdValidator;
 import com.danieljhkim.dsearch.ml.embedding.TextEmbedder;
 import com.danieljhkim.dsearch.ml.embedding.TextEmbeddingService;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.Filter;
 import com.danieljhkim.dsearch.proto.common.SearchType;
+import com.danieljhkim.dsearch.proto.index.RepresentativeQuery;
 import java.io.Closeable;
 import java.io.IOException;
 import java.nio.file.FileStore;
@@ -19,6 +28,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -61,6 +71,9 @@ public class IndexManager implements Closeable {
 
     // Field configurations for filtering, sorting, and highlighting
     private final Map<String, FieldConfig> fieldConfigMap;
+    private final IndexSchema expectedSchema;
+    private final IndexAliasStore aliasStore;
+    private final Map<String, SchemaMismatchException> unservableIndexes = new ConcurrentHashMap<>();
     private volatile boolean closed;
 
     public IndexManager(Path baseDir) {
@@ -122,7 +135,27 @@ public class IndexManager implements Closeable {
                 fieldConfigs,
                 embeddingService,
                 false,
-                minimumFreeDiskBytes);
+                minimumFreeDiskBytes,
+                null);
+    }
+
+    public IndexManager(
+            Path baseDir,
+            int maxBufferedOpsPerShard,
+            Duration maxFlushInterval,
+            List<FieldConfig> fieldConfigs,
+            TextEmbedder embeddingService,
+            long minimumFreeDiskBytes,
+            IndexSchema expectedSchema) {
+        this(
+                baseDir,
+                maxBufferedOpsPerShard,
+                maxFlushInterval,
+                fieldConfigs,
+                embeddingService,
+                false,
+                minimumFreeDiskBytes,
+                expectedSchema);
     }
 
     IndexManager(
@@ -133,6 +166,26 @@ public class IndexManager implements Closeable {
             TextEmbedder embeddingService,
             boolean ownsEmbeddingService,
             long minimumFreeDiskBytes) {
+        this(
+                baseDir,
+                maxBufferedOpsPerShard,
+                maxFlushInterval,
+                fieldConfigs,
+                embeddingService,
+                ownsEmbeddingService,
+                minimumFreeDiskBytes,
+                null);
+    }
+
+    IndexManager(
+            Path baseDir,
+            int maxBufferedOpsPerShard,
+            Duration maxFlushInterval,
+            List<FieldConfig> fieldConfigs,
+            TextEmbedder embeddingService,
+            boolean ownsEmbeddingService,
+            long minimumFreeDiskBytes,
+            IndexSchema expectedSchema) {
         if (maxBufferedOpsPerShard < 1) {
             throw new IllegalArgumentException("maxBufferedOpsPerShard must be greater than 0");
         }
@@ -164,9 +217,12 @@ public class IndexManager implements Closeable {
                 this.fieldConfigMap.put(fc.getName(), fc);
             }
         }
+        this.expectedSchema = ShardIndex.resolveRuntimeSchema(expectedSchema, this.fieldConfigMap, this.embeddingService);
+        this.aliasStore = new IndexAliasStore(this.baseDir);
 
         ScheduledExecutorService scheduler = null;
         try {
+            this.aliasStore.load();
             loadExistingShards();
 
             scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -180,6 +236,13 @@ public class IndexManager implements Closeable {
             scheduler.scheduleAtFixedRate(
                     this::flushBuffersOnSchedule, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
             this.flushScheduler = scheduler;
+        } catch (IOException e) {
+            RuntimeException wrapped = new RuntimeException("Failed to load index alias metadata from " + baseDir, e);
+            if (scheduler != null) {
+                scheduler.shutdownNow();
+            }
+            closeInitializingResources(wrapped);
+            throw wrapped;
         } catch (RuntimeException e) {
             if (scheduler != null) {
                 scheduler.shutdownNow();
@@ -234,12 +297,30 @@ public class IndexManager implements Closeable {
             }
             for (String dirName : shardDirectoryNames) {
                 String shardId = dirName.substring(SHARD_PREFIX.length());
-                ShardIndex shardIndex = new ShardIndex(shardId, baseDir, fieldConfigMap, embeddingService);
-                shardIndexes.put(shardId, shardIndex);
-                shardBuffers.put(shardId, new ShardBuffer());
+                openExistingShard(shardId);
             }
         } catch (IOException e) {
             throw new RuntimeException("Failed to load existing shard indexes from " + baseDir, e);
+        }
+    }
+
+    private void openExistingShard(String shardId) {
+        try {
+            ShardIndex shardIndex = new ShardIndex(shardId, baseDir, fieldConfigMap, embeddingService, expectedSchema, true);
+            shardIndexes.put(shardId, shardIndex);
+            shardBuffers.put(shardId, new ShardBuffer());
+            unservableIndexes.remove(shardId);
+            try {
+                aliasStore.ensureIdentityAlias(shardId);
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to persist identity alias for " + shardId, e);
+            }
+        } catch (SchemaMismatchException e) {
+            LOGGER.log(Level.SEVERE, "Refusing to serve incompatible index " + shardId + ": " + e.getMessage());
+            unservableIndexes.put(shardId, e);
+            ShardIndex readable = new ShardIndex(shardId, baseDir, fieldConfigMap, embeddingService, expectedSchema, false);
+            shardIndexes.put(shardId, readable);
+            shardBuffers.put(shardId, new ShardBuffer());
         }
     }
 
@@ -263,13 +344,46 @@ public class IndexManager implements Closeable {
     }
 
     private ShardIndex getOrCreateShard(String shardId) {
+        ensureServable(shardId);
         ShardIndex index = shardIndexes.computeIfAbsent(shardId, id -> {
-            ShardIndex si = new ShardIndex(id, baseDir, fieldConfigMap, embeddingService);
+            ShardIndex si = new ShardIndex(id, baseDir, fieldConfigMap, embeddingService, expectedSchema, true);
             shardBuffers.put(id, new ShardBuffer());
+            try {
+                aliasStore.ensureIdentityAlias(id);
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to persist identity alias for " + id, e);
+            }
             return si;
         });
         shardBuffers.computeIfAbsent(shardId, id -> new ShardBuffer());
         return index;
+    }
+
+    public IndexSchema expectedSchema() {
+        return expectedSchema;
+    }
+
+    public IndexAliasStore aliasStore() {
+        return aliasStore;
+    }
+
+    public String resolvePhysicalIndex(String aliasOrIndex) {
+        return aliasStore.resolve(aliasOrIndex);
+    }
+
+    private void ensureServable(String physicalIndex) {
+        SchemaMismatchException mismatch = unservableIndexes.get(physicalIndex);
+        if (mismatch != null) {
+            throw mismatch;
+        }
+    }
+
+    private ShardIndex requireShard(String physicalIndex) {
+        ShardIndex shardIndex = shardIndexes.get(physicalIndex);
+        if (shardIndex == null) {
+            throw new ShardNotFoundException(physicalIndex);
+        }
+        return shardIndex;
     }
 
     private ShardBuffer getBuffer(String shardId) {
@@ -283,14 +397,15 @@ public class IndexManager implements Closeable {
      * - the background thread sees that maxFlushInterval has passed.
      */
     public void indexDocument(String partitionId, SearchDocument doc) throws IOException {
-        ShardIndex shardIndex = getOrCreateShard(partitionId);
-        ShardBuffer buffer = getBuffer(partitionId);
+        String physicalIndex = resolvePhysicalIndex(partitionId);
+        ShardIndex shardIndex = getOrCreateShard(physicalIndex);
+        ShardBuffer buffer = getBuffer(physicalIndex);
 
         buffer.lock.lock();
         try {
             buffer.add(BufferedOperation.index(doc));
             if (buffer.pendingOperations.size() >= maxBufferedOpsPerShard) {
-                flushShardBufferLocked(partitionId, shardIndex, buffer);
+                flushShardBufferLocked(physicalIndex, shardIndex, buffer);
             }
         } finally {
             buffer.lock.unlock();
@@ -306,13 +421,14 @@ public class IndexManager implements Closeable {
      * may be issued by the caller.
      */
     public void indexDocumentDurably(String partitionId, SearchDocument doc) throws IOException {
-        ShardIndex shardIndex = getOrCreateShard(partitionId);
-        ShardBuffer buffer = getBuffer(partitionId);
+        String physicalIndex = resolvePhysicalIndex(partitionId);
+        ShardIndex shardIndex = getOrCreateShard(physicalIndex);
+        ShardBuffer buffer = getBuffer(physicalIndex);
 
         buffer.lock.lock();
         try {
             buffer.add(BufferedOperation.index(doc));
-            flushShardBufferLocked(partitionId, shardIndex, buffer);
+            flushShardBufferLocked(physicalIndex, shardIndex, buffer);
         } finally {
             buffer.lock.unlock();
         }
@@ -323,13 +439,14 @@ public class IndexManager implements Closeable {
      * and only flushed/committed when thresholds/timeouts are reached.
      */
     public void deleteDocument(String partitionId, String docId) throws IOException {
-        ShardIndex shardIndex = getOrCreateShard(partitionId);
-        ShardBuffer buffer = getBuffer(partitionId);
+        String physicalIndex = resolvePhysicalIndex(partitionId);
+        ShardIndex shardIndex = getOrCreateShard(physicalIndex);
+        ShardBuffer buffer = getBuffer(physicalIndex);
         buffer.lock.lock();
         try {
             buffer.add(BufferedOperation.delete(docId));
             if (buffer.pendingOperations.size() >= maxBufferedOpsPerShard) {
-                flushShardBufferLocked(partitionId, shardIndex, buffer);
+                flushShardBufferLocked(physicalIndex, shardIndex, buffer);
             }
         } finally {
             buffer.lock.unlock();
@@ -345,13 +462,14 @@ public class IndexManager implements Closeable {
      * by the caller.
      */
     public void deleteDocumentDurably(String partitionId, String docId) throws IOException {
-        ShardIndex shardIndex = getOrCreateShard(partitionId);
-        ShardBuffer buffer = getBuffer(partitionId);
+        String physicalIndex = resolvePhysicalIndex(partitionId);
+        ShardIndex shardIndex = getOrCreateShard(physicalIndex);
+        ShardBuffer buffer = getBuffer(physicalIndex);
 
         buffer.lock.lock();
         try {
             buffer.add(BufferedOperation.delete(docId));
-            flushShardBufferLocked(partitionId, shardIndex, buffer);
+            flushShardBufferLocked(physicalIndex, shardIndex, buffer);
         } finally {
             buffer.lock.unlock();
         }
@@ -379,7 +497,9 @@ public class IndexManager implements Closeable {
             boolean highlight,
             List<FacetRequest> facetRequests)
             throws IOException {
-        ShardIndex shardIndex = shardIndexes.get(partitionId);
+        String physicalIndex = resolvePhysicalIndex(partitionId);
+        ensureServable(physicalIndex);
+        ShardIndex shardIndex = shardIndexes.get(physicalIndex);
         if (shardIndex == null) {
             return new SearchResult(new ArrayList<>(), 0);
         }
@@ -390,6 +510,192 @@ public class IndexManager implements Closeable {
             default -> shardIndex.search(query, limit, from, filters, highlight, facetRequests);
         };
     }
+
+    public CreatedIndex createIndex(String indexName, String alias, IndexSchema schema) throws IOException {
+        PartitionIdValidator.validate(indexName);
+        String resolvedAlias = alias == null || alias.isBlank() ? indexName : alias;
+        PartitionIdValidator.validate(resolvedAlias);
+        IndexSchema toPersist = schema == null ? expectedSchema : ShardIndex.resolveRuntimeSchema(schema, fieldConfigMap, embeddingService);
+        if (schema != null) {
+            IndexSchemaCompatibility.requireCompatible(toPersist, expectedSchema);
+        }
+        IndexAlias existing = aliasStore.getAlias(resolvedAlias);
+        if (existing != null && shardIndexes.containsKey(existing.getIndexName())) {
+            throw new IllegalArgumentException("Alias '" + resolvedAlias + "' already points to index " + existing.getIndexName());
+        }
+        if (shardIndexes.containsKey(indexName)) {
+            throw new IllegalArgumentException("Index '" + indexName + "' already exists");
+        }
+        getOrCreateShard(indexName);
+        aliasStore.putAlias(
+                resolvedAlias,
+                indexName,
+                existing == null ? null : existing.getPreviousIndexName(),
+                existing == null ? 1 : existing.getGeneration());
+        return new CreatedIndex(indexName, resolvedAlias, toPersist);
+    }
+
+    public InspectedSchema inspectSchema(String indexOrAlias) {
+        PartitionIdValidator.validate(indexOrAlias);
+        String physicalIndex = resolvePhysicalIndex(indexOrAlias);
+        ShardIndex shardIndex = shardIndexes.get(physicalIndex);
+        if (shardIndex == null) {
+            throw new ShardNotFoundException(physicalIndex);
+        }
+        IndexAlias alias = aliasStore.getAlias(indexOrAlias);
+        String aliasName = alias != null ? alias.getAlias() : indexOrAlias.equals(physicalIndex) ? physicalIndex : indexOrAlias;
+        return new InspectedSchema(physicalIndex, aliasName, shardIndex.getSchema());
+    }
+
+    public ReindexResult reindex(
+            String sourceAlias, String targetIndex, IndexSchema schema, List<RepresentativeQuery> verificationQueries)
+            throws IOException {
+        PartitionIdValidator.validate(sourceAlias);
+        String sourceIndex = resolvePhysicalIndex(sourceAlias);
+        ShardIndex source = shardIndexes.get(sourceIndex);
+        if (source == null) {
+            throw new ShardNotFoundException(sourceIndex);
+        }
+        String resolvedTarget = targetIndex == null || targetIndex.isBlank()
+                ? nextPhysicalIndex(sourceAlias)
+                : targetIndex;
+        PartitionIdValidator.validate(resolvedTarget);
+        if (resolvedTarget.equals(sourceIndex)) {
+            throw new IllegalArgumentException("Reindex target must be distinct from source index " + sourceIndex);
+        }
+        IndexSchema targetSchema =
+                schema == null ? expectedSchema : ShardIndex.resolveRuntimeSchema(schema, fieldConfigMap, embeddingService);
+        ReindexJob job = new ReindexJob();
+        job.setJobId(UUID.randomUUID().toString());
+        job.setSourceAlias(sourceAlias);
+        job.setSourceIndex(sourceIndex);
+        job.setTargetIndex(resolvedTarget);
+        job.setStatus(ReindexJob.STATUS_COPYING);
+        job.setSourceCount(source.countDocuments());
+        aliasStore.saveJob(job);
+
+        ShardIndex target = getOrCreateShard(resolvedTarget);
+        try {
+            for (SearchDocument document : source.exportDocuments()) {
+                target.index(document);
+            }
+            target.commit();
+            long targetCount = target.countDocuments();
+            job.setTargetCount(targetCount);
+            boolean verified = targetCount == job.getSourceCount()
+                    && verifyQueries(source, target, verificationQueries);
+            job.setVerificationPassed(verified);
+            job.setStatus(verified ? ReindexJob.STATUS_VERIFIED : ReindexJob.STATUS_FAILED);
+            if (!verified) {
+                job.setError("reindex verification failed for counts or representative queries");
+            }
+            aliasStore.saveJob(job);
+            return new ReindexResult(
+                    verified,
+                    sourceIndex,
+                    resolvedTarget,
+                    job.getSourceCount(),
+                    targetCount,
+                    verified,
+                    job.getError());
+        } catch (RuntimeException | IOException e) {
+            job.setStatus(ReindexJob.STATUS_INTERRUPTED);
+            job.setError(e.getMessage());
+            try {
+                aliasStore.saveJob(job);
+            } catch (IOException persistError) {
+                e.addSuppressed(persistError);
+            }
+            throw e;
+        }
+    }
+
+    public IndexAlias swapAlias(String alias, String targetIndex) throws IOException {
+        PartitionIdValidator.validate(alias);
+        PartitionIdValidator.validate(targetIndex);
+        ensureServable(targetIndex);
+        requireShard(targetIndex);
+        IndexAlias current = aliasStore.getAlias(alias);
+        String currentIndex = current == null ? alias : current.getIndexName();
+        if (!targetIndex.equals(currentIndex)) {
+            ReindexJob verified = aliasStore.current().getReindexJobs().values().stream()
+                    .filter(job -> alias.equals(job.getSourceAlias()) && targetIndex.equals(job.getTargetIndex()))
+                    .findFirst()
+                    .orElse(null);
+            if (verified != null && !verified.isComplete()) {
+                throw new IllegalArgumentException("Cannot swap alias '" + alias + "' until reindex of "
+                        + targetIndex + " is verified");
+            }
+        }
+        return aliasStore.swap(alias, targetIndex);
+    }
+
+    public IndexAlias rollbackAlias(String alias) throws IOException {
+        PartitionIdValidator.validate(alias);
+        IndexAlias current = aliasStore.getAlias(alias);
+        if (current == null) {
+            throw new IllegalArgumentException("Unknown alias '" + alias + "'");
+        }
+        String previous = current.getPreviousIndexName();
+        if (previous == null || previous.isBlank()) {
+            throw new IllegalArgumentException("No previous alias target to roll back for '" + alias + "'");
+        }
+        requireShard(previous);
+        return aliasStore.rollback(alias);
+    }
+
+    public String nextPhysicalIndex(String alias) {
+        PartitionIdValidator.validate(alias);
+        IndexAlias current = aliasStore.getAlias(alias);
+        int generation = current == null ? 2 : current.getGeneration() + 1;
+        String candidate = alias + "_" + generation;
+        while (candidate.length() <= 64
+                && (shardIndexes.containsKey(candidate) || candidate.equals(aliasStore.resolve(alias)))) {
+            generation++;
+            candidate = alias + "_" + generation;
+        }
+        if (candidate.length() > 64) {
+            throw new IllegalArgumentException("Unable to allocate a physical index name for alias '" + alias + "'");
+        }
+        return candidate;
+    }
+
+    private boolean verifyQueries(ShardIndex source, ShardIndex target, List<RepresentativeQuery> verificationQueries) {
+        if (verificationQueries == null || verificationQueries.isEmpty()) {
+            return true;
+        }
+        for (RepresentativeQuery query : verificationQueries) {
+            int size = query.getSize() > 0 ? query.getSize() : 10;
+            SearchType searchType =
+                    query.getSearchType() == SearchType.SEARCH_TYPE_UNSPECIFIED ? SearchType.BM25 : query.getSearchType();
+            SearchResult sourceResult = searchOn(source, query.getQuery(), size, searchType);
+            SearchResult targetResult = searchOn(target, query.getQuery(), size, searchType);
+            if (sourceResult.getTotalHits() != targetResult.getTotalHits()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private SearchResult searchOn(ShardIndex shardIndex, String query, int size, SearchType searchType) {
+        return switch (searchType) {
+            case SearchType.SEMANTIC -> shardIndex.semanticSearch(query, size, 0, null, false, null);
+            default -> shardIndex.search(query, size, 0, null, false, null);
+        };
+    }
+
+    public record CreatedIndex(String indexName, String alias, IndexSchema schema) {}
+
+    public record InspectedSchema(String indexName, String alias, IndexSchema schema) {}
+
+    public record ReindexResult(
+            boolean success,
+            String sourceIndex,
+            String targetIndex,
+            long sourceCount,
+            long targetCount,
+            boolean verificationPassed,
+            String error) {}
 
     /**
      * Force a synchronous commit of all shards:

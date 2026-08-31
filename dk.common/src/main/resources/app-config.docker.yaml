@@ -77,6 +77,7 @@ indexing:
   maxBufferedOpsPerShard: 100
   maxFlushIntervalSeconds: 5
   minimumFreeDiskBytes: 104857600
+  analyzer: "standard"
 
 coordinatorNodes:
   routingStrategy: "ROUND_ROBIN"
@@ -92,6 +93,7 @@ ml:
     textEmbedding:
       url: "djl://ai.djl.huggingface.pytorch/sentence-transformers/all-MiniLM-L6-v2"
       engine: "PyTorch"
+      dimension: 384
 
 # Field configurations for filtering, sorting, faceting, and highlighting
 fieldConfigs:

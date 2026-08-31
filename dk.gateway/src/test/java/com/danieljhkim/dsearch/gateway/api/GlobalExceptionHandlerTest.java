@@ -2,7 +2,9 @@ package com.danieljhkim.dsearch.gateway.api;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.danieljhkim.dsearch.common.exception.SchemaMismatchException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -19,6 +21,17 @@ class GlobalExceptionHandlerTest {
         handler = new GlobalExceptionHandler();
         request = new MockHttpServletRequest();
         request.setRequestURI("/api/v1/search");
+    }
+
+    @Test
+    void schemaMismatchIsPreconditionFailed() {
+        SchemaMismatchException ex = SchemaMismatchException.of("embedding.dimension", "384", "768");
+        ResponseEntity<ErrorResponse> response = handler.handleSchemaMismatch(ex, request);
+
+        assertEquals(HttpStatus.PRECONDITION_FAILED, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(412, response.getBody().getStatus());
+        assertTrue(response.getBody().getMessage().contains("embedding.dimension"));
     }
 
     @Test

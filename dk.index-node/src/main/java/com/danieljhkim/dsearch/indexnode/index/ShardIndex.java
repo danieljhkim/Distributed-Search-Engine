@@ -7,6 +7,12 @@ import com.danieljhkim.dsearch.common.exception.ParseGoneWrongException;
 import com.danieljhkim.dsearch.common.model.SearchDocument;
 import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.common.schema.AnalyzerConfig;
+import com.danieljhkim.dsearch.common.schema.EmbeddingModelIdentity;
+import com.danieljhkim.dsearch.common.schema.FieldSchema;
+import com.danieljhkim.dsearch.common.schema.IndexSchema;
+import com.danieljhkim.dsearch.common.schema.IndexSchemaCompatibility;
+import com.danieljhkim.dsearch.common.schema.IndexSchemaStore;
 import com.danieljhkim.dsearch.indexnode.index.facet.FacetCalculator;
 import com.danieljhkim.dsearch.indexnode.index.highlight.TextHighlighter;
 import com.danieljhkim.dsearch.indexnode.index.query.FilterQueryBuilder;
@@ -29,6 +35,7 @@ import java.util.Set;
 import java.util.logging.Level;
 import lombok.Getter;
 import org.apache.lucene.analysis.Analyzer;
+import org.apache.lucene.analysis.core.KeywordAnalyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.DoubleDocValuesField;
@@ -81,7 +88,14 @@ public class ShardIndex implements Closeable {
     @Getter
     private final String shardId;
 
+    @Getter
     private final Path indexPath;
+
+    @Getter
+    private final IndexSchema schema;
+
+    @Getter
+    private final boolean serving;
     private final Directory directory;
     private final Analyzer analyzer;
     private final IndexWriter indexWriter;
@@ -100,12 +114,31 @@ public class ShardIndex implements Closeable {
     }
 
     public ShardIndex(String shardId, Path baseDir, Map<String, FieldConfig> fieldConfigMap) {
-        this(shardId, baseDir, fieldConfigMap, new TextEmbeddingService(), true);
+        this(shardId, baseDir, fieldConfigMap, new TextEmbeddingService(), true, null, true);
     }
 
     public ShardIndex(
             String shardId, Path baseDir, Map<String, FieldConfig> fieldConfigMap, TextEmbedder embeddingService) {
-        this(shardId, baseDir, fieldConfigMap, embeddingService, false);
+        this(shardId, baseDir, fieldConfigMap, embeddingService, false, null, true);
+    }
+
+    public ShardIndex(
+            String shardId,
+            Path baseDir,
+            Map<String, FieldConfig> fieldConfigMap,
+            TextEmbedder embeddingService,
+            IndexSchema expectedSchema) {
+        this(shardId, baseDir, fieldConfigMap, embeddingService, false, expectedSchema, true);
+    }
+
+    public ShardIndex(
+            String shardId,
+            Path baseDir,
+            Map<String, FieldConfig> fieldConfigMap,
+            TextEmbedder embeddingService,
+            IndexSchema expectedSchema,
+            boolean serving) {
+        this(shardId, baseDir, fieldConfigMap, embeddingService, false, expectedSchema, serving);
     }
 
     private ShardIndex(
@@ -113,7 +146,9 @@ public class ShardIndex implements Closeable {
             Path baseDir,
             Map<String, FieldConfig> fieldConfigMap,
             TextEmbedder embeddingService,
-            boolean ownsEmbeddingService) {
+            boolean ownsEmbeddingService,
+            IndexSchema expectedSchema,
+            boolean serving) {
         Directory directory = null;
         Analyzer analyzer = null;
         IndexWriter indexWriter = null;
@@ -121,6 +156,8 @@ public class ShardIndex implements Closeable {
         Closeable ownedEmbeddingService = null;
         try {
             this.shardId = shardId;
+            this.serving = serving;
+            this.embeddingService = Objects.requireNonNull(embeddingService, "embeddingService");
             Path normalizedBaseDir = baseDir.normalize();
             Path resolved = normalizedBaseDir.resolve("shard-" + shardId).normalize();
             if (!resolved.startsWith(normalizedBaseDir)) {
@@ -130,9 +167,21 @@ public class ShardIndex implements Closeable {
             this.indexPath = resolved;
             Files.createDirectories(indexPath);
 
+            Map<String, FieldConfig> resolvedFieldConfigs = fieldConfigMap != null ? fieldConfigMap : new HashMap<>();
+            IndexSchema runtimeSchema = resolveRuntimeSchema(expectedSchema, resolvedFieldConfigs, embeddingService);
+            IndexSchemaStore schemaStore = new IndexSchemaStore();
+            IndexSchema persistedSchema = schemaStore.load(indexPath);
+            if (persistedSchema == null) {
+                schemaStore.save(indexPath, runtimeSchema);
+                persistedSchema = runtimeSchema;
+            } else if (serving) {
+                IndexSchemaCompatibility.requireCompatible(persistedSchema, runtimeSchema);
+            }
+            this.schema = persistedSchema;
+
             directory = FSDirectory.open(indexPath);
             this.directory = directory;
-            analyzer = new StandardAnalyzer();
+            analyzer = createAnalyzer(persistedSchema.analyzer().name());
             this.analyzer = analyzer;
 
             IndexWriterConfig config = new IndexWriterConfig(analyzer);
@@ -144,7 +193,6 @@ public class ShardIndex implements Closeable {
                 indexWriter.commit();
             }
 
-            this.embeddingService = Objects.requireNonNull(embeddingService, "embeddingService");
             ownedEmbeddingService =
                     ownsEmbeddingService && embeddingService instanceof Closeable closeable ? closeable : null;
             this.ownedEmbeddingService = ownedEmbeddingService;
@@ -158,7 +206,7 @@ public class ShardIndex implements Closeable {
             this.searcherManager = searcherManager;
 
             // Initialize field config and query builders
-            this.fieldConfigMap = fieldConfigMap != null ? fieldConfigMap : new HashMap<>();
+            this.fieldConfigMap = resolvedFieldConfigs;
             this.filterQueryBuilder = new FilterQueryBuilder(this.fieldConfigMap);
             this.textHighlighter = new TextHighlighter();
             this.facetCalculator = new FacetCalculator();
@@ -455,6 +503,77 @@ public class ShardIndex implements Closeable {
     public void commit() throws IOException {
         indexWriter.commit();
         searcherManager.maybeRefresh();
+    }
+
+    public long countDocuments() {
+        IndexSearcher searcher = null;
+        try {
+            searcher = searcherManager.acquire();
+            return getTotalHits(searcher, new MatchAllDocsQuery());
+        } catch (IOException e) {
+            throw new IndexOperationException("I/O error counting documents on shard " + shardId, e);
+        } finally {
+            releaseSearcher(searcher);
+        }
+    }
+
+    public List<SearchDocument> exportDocuments() {
+        IndexSearcher searcher = null;
+        try {
+            searcher = searcherManager.acquire();
+            TopDocs topDocs = searcher.search(new MatchAllDocsQuery(), Integer.MAX_VALUE);
+            List<SearchDocument> documents = new ArrayList<>(topDocs.scoreDocs.length);
+            StoredFields storedFields = searcher.storedFields();
+            for (ScoreDoc scoreDoc : topDocs.scoreDocs) {
+                Document doc = storedFields.document(scoreDoc.doc);
+                String docId = doc.get(FIELD_ID);
+                if (docId == null || docId.isBlank()) {
+                    continue;
+                }
+                Map<String, String> fields = new HashMap<>();
+                Set<String> seen = new HashSet<>();
+                for (IndexableField field : doc.getFields()) {
+                    String fieldName = field.name();
+                    if (FIELD_ID.equals(fieldName) || FIELD_EMBEDDING.equals(fieldName) || !seen.add(fieldName)) {
+                        continue;
+                    }
+                    String value = doc.get(fieldName);
+                    if (value != null) {
+                        fields.put(fieldName, value);
+                    }
+                }
+                documents.add(new SearchDocument(docId, fields));
+            }
+            return documents;
+        } catch (IOException e) {
+            throw new IndexOperationException("I/O error exporting documents on shard " + shardId, e);
+        } finally {
+            releaseSearcher(searcher);
+        }
+    }
+
+    static Analyzer createAnalyzer(String analyzerName) {
+        String name = AnalyzerConfig.normalize(analyzerName);
+        return switch (name) {
+            case AnalyzerConfig.KEYWORD -> new KeywordAnalyzer();
+            case AnalyzerConfig.STANDARD -> new StandardAnalyzer();
+            default -> throw new IllegalArgumentException("Unsupported analyzer '" + name + "'");
+        };
+    }
+
+    static IndexSchema resolveRuntimeSchema(
+            IndexSchema expectedSchema, Map<String, FieldConfig> fieldConfigMap, TextEmbedder embeddingService) {
+        if (expectedSchema != null) {
+            return expectedSchema;
+        }
+        EmbeddingModelIdentity identity = embeddingService.identity();
+        List<FieldSchema> fields = new ArrayList<>();
+        for (FieldConfig fieldConfig : fieldConfigMap.values()) {
+            if (fieldConfig != null && fieldConfig.getName() != null && !fieldConfig.getName().isBlank()) {
+                fields.add(FieldSchema.from(fieldConfig));
+            }
+        }
+        return IndexSchema.current(AnalyzerConfig.standard(), fields, identity);
     }
 
     @SuppressWarnings("all")

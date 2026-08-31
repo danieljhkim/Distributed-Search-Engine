@@ -229,6 +229,47 @@ make run-multi
 }
 ```
 
+#### Admin index schema and aliases
+
+Administrative create-index, inspect-schema, reindex, and atomic alias-swap
+operations require `Authorization: Bearer $DSEARCH_ADMIN_TOKEN`. Each call
+returns an auditable result (`auditId`, actor, operation, from/to index, status)
+and appends a JSON line to `dsearch.admin.audit-log`.
+
+```bash
+# Create a named index and alias
+curl -H "Authorization: Bearer $DSEARCH_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"indexName":"movies_1","alias":"movies"}' \
+  http://localhost:8080/api/v1/admin/indexes
+
+# Inspect the persisted schema (fields, analyzer, embedding identity/digest/dimension)
+curl -H "Authorization: Bearer $DSEARCH_ADMIN_TOKEN" \
+  http://localhost:8080/api/v1/admin/indexes/movies/schema
+
+# Rebuild into a distinct target, verify counts and representative queries.
+# The source alias stays live until swap succeeds.
+curl -H "Authorization: Bearer $DSEARCH_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"targetIndex":"movies_2","verificationQueries":[{"query":"interstellar","searchType":"BM25","size":10}]}' \
+  http://localhost:8080/api/v1/admin/indexes/movies/reindex
+
+# Atomically point the alias at the verified target
+curl -H "Authorization: Bearer $DSEARCH_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"alias":"movies","targetIndex":"movies_2"}' \
+  http://localhost:8080/api/v1/admin/aliases/swap
+
+# Restore the previous alias target
+curl -H "Authorization: Bearer $DSEARCH_ADMIN_TOKEN" \
+  -X POST http://localhost:8080/api/v1/admin/aliases/movies/rollback
+```
+
+Index and query nodes persist `dsearch-schema.json` beside each Lucene generation
+and refuse to open or serve a generation whose field types, analyzer, embedding
+model identity/digest, or vector dimension do not match the running process.
+The diagnostic names the mismatched property.
+
 #### Index Request
 
 ```json

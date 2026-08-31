@@ -16,6 +16,7 @@ import ai.djl.inference.Predictor;
 import ai.djl.repository.zoo.ZooModel;
 import ai.djl.translate.TranslateException;
 import com.danieljhkim.dsearch.common.config.AppConfig;
+import com.danieljhkim.dsearch.common.schema.EmbeddingModelIdentity;
 import com.danieljhkim.dsearch.common.validation.RequestAdmissionException;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -27,6 +28,20 @@ import java.util.logging.Logger;
 import org.junit.jupiter.api.Test;
 
 class TextEmbeddingServiceTest {
+
+    @Test
+    void identityUsesConfiguredModelEngineAndDimension() {
+        AppConfig config = config();
+        config.getMl().getModels().getTextEmbedding().setDimension(384);
+        ZooModel<String, float[]> model = mockModel();
+        TextEmbeddingService service = new TextEmbeddingService(manager(model, config), true, 1);
+        EmbeddingModelIdentity identity = service.identity();
+        assertEquals("fake-model", identity.modelId());
+        assertEquals("fake-engine", identity.engine());
+        assertEquals(384, identity.dimension());
+        assertTrue(identity.digest().startsWith("sha256:"));
+        service.close();
+    }
 
     @Test
     void embedReturnsPredictorOutputFromPool() throws Exception {

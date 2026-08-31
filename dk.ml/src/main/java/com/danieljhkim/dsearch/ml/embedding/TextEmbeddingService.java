@@ -3,6 +3,7 @@ package com.danieljhkim.dsearch.ml.embedding;
 import ai.djl.inference.Predictor;
 import ai.djl.translate.TranslateException;
 import com.danieljhkim.dsearch.common.config.AppConfig;
+import com.danieljhkim.dsearch.common.schema.EmbeddingModelIdentity;
 import com.danieljhkim.dsearch.common.validation.RequestAdmissionException;
 import java.io.Closeable;
 import java.util.ArrayList;
@@ -110,6 +111,13 @@ public class TextEmbeddingService implements TextEmbedder, Closeable {
      */
     public boolean isReady() {
         return !closed.get() && modelManager.isDefaultModelReady();
+    }
+
+    @Override
+    public EmbeddingModelIdentity identity() {
+        AppConfig.TextEmbeddingConfig config = textEmbeddingConfig(modelManager);
+        int dimension = config.getDimension() > 0 ? config.getDimension() : embeddingDimension.get();
+        return EmbeddingModelIdentity.of(config.getUrl(), config.getEngine(), dimension);
     }
 
     private float[] embedOpen(String text) {

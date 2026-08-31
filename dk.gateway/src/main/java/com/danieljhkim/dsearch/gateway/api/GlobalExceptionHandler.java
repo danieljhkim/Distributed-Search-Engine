@@ -5,6 +5,7 @@ import com.danieljhkim.dsearch.common.exception.IndexOperationException;
 import com.danieljhkim.dsearch.common.exception.InvalidIndexStateException;
 import com.danieljhkim.dsearch.common.exception.NodeUnavailableException;
 import com.danieljhkim.dsearch.common.exception.ParseGoneWrongException;
+import com.danieljhkim.dsearch.common.exception.SchemaMismatchException;
 import com.danieljhkim.dsearch.common.exception.ServiceException;
 import com.danieljhkim.dsearch.common.exception.ShardNotFoundException;
 import com.danieljhkim.dsearch.common.validation.RequestAdmissionException;
@@ -53,6 +54,14 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleInvalidIndexState(
             InvalidIndexStateException ex, HttpServletRequest request) {
 
+        HttpStatus status = HttpStatus.PRECONDITION_FAILED;
+        ErrorResponse body =
+                new ErrorResponse(status.value(), status.getReasonPhrase(), ex.getMessage(), request.getRequestURI());
+        return new ResponseEntity<>(body, status);
+    }
+
+    @ExceptionHandler(SchemaMismatchException.class)
+    public ResponseEntity<ErrorResponse> handleSchemaMismatch(SchemaMismatchException ex, HttpServletRequest request) {
         HttpStatus status = HttpStatus.PRECONDITION_FAILED;
         ErrorResponse body =
                 new ErrorResponse(status.value(), status.getReasonPhrase(), ex.getMessage(), request.getRequestURI());

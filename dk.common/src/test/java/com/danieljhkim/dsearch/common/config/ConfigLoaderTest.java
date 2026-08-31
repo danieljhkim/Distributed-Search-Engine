@@ -51,6 +51,8 @@ class ConfigLoaderTest {
         assertEquals(100, config.getIndexing().getMaxBufferedOpsPerShard());
         assertEquals(5, config.getIndexing().getMaxFlushIntervalSeconds());
         assertEquals(1, config.getMl().getModels().getTextEmbedding().getPredictorPoolSize());
+        assertEquals(384, config.getMl().getModels().getTextEmbedding().getDimension());
+        assertEquals("standard", config.getIndexing().getAnalyzer());
     }
 
     @Test

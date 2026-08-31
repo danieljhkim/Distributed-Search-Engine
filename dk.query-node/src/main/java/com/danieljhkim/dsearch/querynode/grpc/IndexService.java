@@ -1,16 +1,23 @@
 package com.danieljhkim.dsearch.querynode.grpc;
 
 import com.danieljhkim.dsearch.common.config.AppConfig;
+import com.danieljhkim.dsearch.common.grpc.NodeClient;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.common.schema.IndexSchema;
+import com.danieljhkim.dsearch.common.schema.SchemaProtoMapper;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.Filter;
 import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.proto.index.IndexSearchRequest;
 import com.danieljhkim.dsearch.proto.index.IndexSearchResponse;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
+import com.danieljhkim.dsearch.proto.index.InspectSchemaRequest;
+import com.danieljhkim.dsearch.proto.index.InspectSchemaResponse;
 import io.grpc.Context;
 import io.grpc.Deadline;
+import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -32,6 +39,31 @@ public class IndexService implements BaseIndexService {
             AppConfig.RequestLimitsConfig requestLimits) {
         this.nodeClientManager = nodeClientManager;
         this.defaultCallDeadline = Duration.ofMillis(Math.max(1, requestLimits.getRequestTimeoutMillis()));
+    }
+
+    @Override
+    public IndexSchema inspectSchema(String indexOrAlias) {
+        StatusRuntimeException lastNotFound = null;
+        for (NodeClient<IndexServiceGrpc.IndexServiceBlockingStub> client :
+                nodeClientManager.getClientMap().values()) {
+            try {
+                InspectSchemaResponse response = withDeadline(client.getStub(), defaultCallDeadline)
+                        .inspectSchema(InspectSchemaRequest.newBuilder()
+                                .setIndexOrAlias(indexOrAlias)
+                                .build());
+                return SchemaProtoMapper.fromProto(response.getSchema());
+            } catch (StatusRuntimeException e) {
+                if (e.getStatus().getCode() == Status.Code.NOT_FOUND) {
+                    lastNotFound = e;
+                    continue;
+                }
+                throw e;
+            }
+        }
+        if (lastNotFound != null) {
+            throw lastNotFound;
+        }
+        return null;
     }
 
     @Override
