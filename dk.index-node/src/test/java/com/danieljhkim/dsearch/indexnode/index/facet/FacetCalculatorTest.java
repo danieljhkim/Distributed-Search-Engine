@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.danieljhkim.dsearch.proto.common.FacetBucket;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.FacetResponse;
 import io.grpc.Status;
@@ -89,25 +90,38 @@ class FacetCalculatorTest {
     }
 
     @Test
-    void computeFacetsRespectsSizeSmallerThanDistinctValues() throws IOException {
+    void computeFacetsReturnsAllLocalCandidatesForGlobalAggregation() throws IOException {
         buildIndex(List.of(
-                Map.of("category", "a"),
-                Map.of("category", "b"),
-                Map.of("category", "b"),
-                Map.of("category", "c"),
-                Map.of("category", "c"),
-                Map.of("category", "c")));
+                Map.of("category", "local", "author", "local-author"),
+                Map.of("category", "local", "author", "local-author"),
+                Map.of("category", "local", "author", "local-author"),
+                Map.of("category", "local", "author", "shared-author"),
+                Map.of("category", "shared", "author", "local-author"),
+                Map.of("category", "shared", "author", "local-author"),
+                Map.of("category", "shared", "author", "shared-author")));
 
-        FacetRequest request =
-                FacetRequest.newBuilder().setField("category").setSize(1).build();
+        FacetRequest request = FacetRequest.newBuilder()
+                .setField("category")
+                .setSize(1)
+                .addNested(FacetRequest.newBuilder().setField("author").setSize(1))
+                .build();
         List<FacetResponse> responses =
                 facetCalculator.computeFacets(searcher, new MatchAllDocsQuery(), List.of(request));
 
         assertEquals(1, responses.size());
         FacetResponse response = responses.get(0);
-        assertEquals(1, response.getBucketsCount());
-        assertEquals("c", response.getBuckets(0).getValue());
-        assertEquals(3L, response.getBuckets(0).getCount());
+        assertEquals(
+                Map.of("local", 4L, "shared", 3L),
+                response.getBucketsList().stream()
+                        .collect(Collectors.toMap(bucket -> bucket.getValue(), bucket -> bucket.getCount())));
+        for (FacetBucket bucket : response.getBucketsList()) {
+            long localAuthorCount = bucket.getValue().equals("local") ? 3L : 2L;
+            assertEquals(
+                    Map.of("local-author", localAuthorCount, "shared-author", 1L),
+                    bucket.getNested(0).getBucketsList().stream()
+                            .collect(Collectors.toMap(
+                                    nestedBucket -> nestedBucket.getValue(), nestedBucket -> nestedBucket.getCount())));
+        }
     }
 
     @Test

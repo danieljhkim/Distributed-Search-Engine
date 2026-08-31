@@ -328,6 +328,42 @@ class SearchExecutorTest {
     }
 
     @Test
+    void completeLocalFacetCandidatesMatchSingleIndexReferenceAtEveryRequestedLevel() {
+        FacetResponse nodeA = facet(
+                "category", bucket("a", 100), bucket("x", 99, facet("author", bucket("p", 50), bucket("shared", 49))));
+        FacetResponse nodeB = facet(
+                "category", bucket("b", 100), bucket("x", 99, facet("author", bucket("q", 50), bucket("shared", 49))));
+        RecordingIndexService indexService = new RecordingIndexService()
+                .success("1", result(List.of(), List.of(nodeA)))
+                .success("2", result(List.of(), List.of(nodeB)));
+
+        FacetRequest request = FacetRequest.newBuilder()
+                .setField("category")
+                .setSize(1)
+                .addNested(FacetRequest.newBuilder().setField("author").setSize(1))
+                .build();
+        SearchResult distributed = searchExecutor(node("1", true), node("2", true))
+                .search("coffee", "shard-a", 0, 10, SearchType.BM25, indexService, null, false, List.of(request));
+
+        assertEquals("a", nodeA.getBuckets(0).getValue(), "node A's local parent leader must not be global");
+        assertEquals("b", nodeB.getBuckets(0).getValue(), "node B's local parent leader must not be global");
+        assertEquals(
+                "p",
+                nodeA.getBuckets(1).getNested(0).getBuckets(0).getValue(),
+                "node A's local child leader must not be global");
+        assertEquals(
+                "q",
+                nodeB.getBuckets(1).getNested(0).getBuckets(0).getValue(),
+                "node B's local child leader must not be global");
+
+        FacetResponse singleIndexReference = facet("category", bucket("x", 198, facet("author", bucket("shared", 98))));
+        assertEquals(List.of(singleIndexReference), distributed.getFacets());
+        assertEquals(
+                SearchResult.FanoutStatus.SUCCESS,
+                distributed.getFanoutMetadata().status());
+    }
+
+    @Test
     void nestedFacetsAggregateRecursivelyAcrossSuccessfulNodesAndIgnoreFailedNodes() {
         RecordingIndexService indexService = new RecordingIndexService()
                 .success(
