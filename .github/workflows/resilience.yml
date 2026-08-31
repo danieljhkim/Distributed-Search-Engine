@@ -1,0 +1,59 @@
+name: Resilience
+
+# The operability gate for overload, storage exhaustion, and rolling restarts.
+# It is kept out of ci.yml because it restarts the whole Compose topology many
+# times and needs a long timeout. See docs/OPERABILITY.md.
+
+on:
+  schedule:
+    # Nightly at 04:00 UTC.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/docker-cluster-resilience.sh"
+      - "scripts/lib/docker-cluster.sh"
+      - "docker-compose.yml"
+      - "dk.common/src/main/resources/app-config.docker.yaml"
+      - ".github/workflows/resilience.yml"
+
+concurrency:
+  group: resilience-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  docker-resilience:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Exercise overload, disk-full, and rolling-restart recovery
+        env:
+          DSEARCH_RESILIENCE_DIAGNOSTICS: ${{ runner.temp }}/dsearch-resilience-diagnostics
+        run: scripts/docker-cluster-resilience.sh
+
+      - name: Summarise the resilience report
+        if: always()
+        run: |
+          report="${{ runner.temp }}/dsearch-resilience-diagnostics/resilience-report.md"
+          if [[ -f "$report" ]]; then
+            cat "$report" >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo 'No resilience report was produced; see the uploaded diagnostics.' >>"$GITHUB_STEP_SUMMARY"
+          fi
+        shell: bash
+
+      - name: Upload fault timeline, logs, metrics, and burst evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-resilience-diagnostics
+          path: ${{ runner.temp }}/dsearch-resilience-diagnostics
+          if-no-files-found: error

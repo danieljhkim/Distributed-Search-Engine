@@ -8,7 +8,7 @@ SHELL := /bin/bash
 N_INDEX_NODES ?= 2
 N_QUERY_NODES ?= 2
 
-.PHONY: help build clean run run-multi stop logs reset wipe-data
+.PHONY: help build clean run run-multi stop logs reset wipe-data e2e resilience
 
 help:
 	@echo ""
@@ -20,6 +20,8 @@ help:
 	@echo "  make logs         - Tail all logs"
 	@echo "  make reset        - Clean targets + wipe logs + wipe data"
 	@echo "  make clean        - Remove Maven target directories"
+	@echo "  make e2e          - Docker cluster end-to-end gate"
+	@echo "  make resilience   - Docker cluster resilience gate (see docs/OPERABILITY.md)"
 	@echo ""
 
 # ============================
@@ -70,6 +72,14 @@ reset: clean stop wipe-data
 # Convenience
 # ============================
 
+
+e2e:
+	DSEARCH_E2E_DIAGNOSTICS=$(CURDIR)/target/docker-e2e-diagnostics \
+	./scripts/docker-cluster-e2e.sh
+
+resilience:
+	DSEARCH_RESILIENCE_DIAGNOSTICS=$(CURDIR)/target/docker-resilience-diagnostics \
+	./scripts/docker-cluster-resilience.sh
 
 format:
 	mvn spotless:apply
