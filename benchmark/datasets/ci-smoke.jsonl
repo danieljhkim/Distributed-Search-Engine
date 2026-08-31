@@ -1,0 +1,12 @@
+{"id":"bench-lucene","partitionId":"bench","fields":{"title":"Lucene cluster guide","content":"distributed lucene search cluster and index ownership"}}
+{"id":"bench-storage","partitionId":"bench","fields":{"title":"Durable storage","content":"building reliable distributed storage systems"}}
+{"id":"bench-vector","partitionId":"bench","fields":{"title":"Vector retrieval handbook","content":"semantic neural vector embeddings retrieval by meaning"}}
+{"id":"bench-semantic","partitionId":"bench","fields":{"title":"Meaning search","content":"meaning based semantic document retrieval"}}
+{"id":"bench-hybrid","partitionId":"bench","fields":{"title":"Hybrid Lucene vector ranking","content":"lucene vector hybrid ranking search"}}
+{"id":"bench-relevance","partitionId":"bench","fields":{"title":"Relevance fusion","content":"search relevance fusion combines lexical and semantic evidence"}}
+{"id":"bench-refresh-01","partitionId":"bench","fields":{"title":"Refresh test 01","content":"refresh commit cost benchmark record"}}
+{"id":"bench-refresh-02","partitionId":"bench","fields":{"title":"Refresh test 02","content":"refresh commit cost benchmark record"}}
+{"id":"bench-query-01","partitionId":"bench","fields":{"title":"Query mix 01","content":"representative search workload query"}}
+{"id":"bench-query-02","partitionId":"bench","fields":{"title":"Query mix 02","content":"representative search workload query"}}
+{"id":"bench-query-03","partitionId":"bench","fields":{"title":"Query mix 03","content":"representative search workload query"}}
+{"id":"bench-query-04","partitionId":"bench","fields":{"title":"Query mix 04","content":"representative search workload query"}}

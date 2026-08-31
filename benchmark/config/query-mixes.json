@@ -1,0 +1,16 @@
+{
+  "representative": {
+    "BM25": [
+      {"query":"lucene cluster", "expectedDocId":"bench-lucene", "maxRank":3, "minTotalHits":1},
+      {"query":"durable storage", "expectedDocId":"bench-storage", "maxRank":3, "minTotalHits":1}
+    ],
+    "SEMANTIC": [
+      {"query":"neural vector retrieval", "expectedDocId":"bench-vector", "maxRank":5, "minTotalHits":1},
+      {"query":"meaning based search", "expectedDocId":"bench-semantic", "maxRank":5, "minTotalHits":1}
+    ],
+    "HYBRID": [
+      {"query":"lucene vector ranking", "expectedDocId":"bench-hybrid", "maxRank":5, "minTotalHits":1},
+      {"query":"search relevance fusion", "expectedDocId":"bench-relevance", "maxRank":5, "minTotalHits":1}
+    ]
+  }
+}

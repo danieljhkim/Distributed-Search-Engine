@@ -1,135 +1,44 @@
-# ===============================================
-# dsearch Benchmark Makefile
-# ===============================================
-
+# dsearch public-API benchmark entrypoints. Results are written to a unique
+# directory beneath results/; committed files describe the result contract only.
 SHELL := /bin/bash
 
-BENCH_DIR := $(shell pwd)
+BENCH_DIR := $(CURDIR)
 SCRIPTS_DIR := $(BENCH_DIR)/scripts
-K6_DIR := $(BENCH_DIR)/k6
-GHZ_DIR := $(BENCH_DIR)/ghz
-DATA_DIR := $(BENCH_DIR)/datasets
 RESULTS_DIR := $(BENCH_DIR)/results
 
-# Load environment variables from config
 include config/bench.env.example
 export
 
-# ===============================================
-# General Helpers
-# ===============================================
+.PHONY: help env check ingest generate-dataset smoke bm25 semantic hybrid overload failure capacity clean
 
-.PHONY: help
 help:
-	@echo "============================================================="
-	@echo " dsearch Benchmark Suite - Available Commands"
-	@echo "============================================================="
-	@echo ""
-	@echo " HTTP Gateway Benchmarks (k6):"
-	@echo "   make bm25           - Run BM25-only Gateway load test"
-	@echo "   make hybrid         - Run HYBRID (BM25 + embedding) load test"
-	@echo "   make semantic       - Run SEMANTIC-only load test"
-	@echo ""
-	@echo " gRPC QueryNode Benchmarks (ghz):"
-	@echo "   make grpc-bm25      - Run QueryNode BM25-only benchmark"
-	@echo "   make grpc-hybrid    - Run QueryNode HYBRID benchmark"
-	@echo ""
-	@echo " Data / Utility:"
-	@echo "   make ingest         - Import sample dataset into dsearch"
-	@echo "   make env            - Print benchmark environment variables"
-	@echo "   make es-bm25        - Compare BM25 latency vs Elasticsearch"
-	@echo ""
-	@echo " Cleanup:"
-	@echo "   make clean          - Remove temp benchmark files"
-	@echo ""
+	@echo "dsearch benchmark suite"
+	@echo "  make smoke     Run the small, reproducible public-API smoke workload"
+	@echo "  make bm25|semantic|hybrid  Run one search mode with semantic assertions"
+	@echo "  make overload|failure       Run negative and partial-failure scenarios"
+	@echo "  make capacity  Run the declared capacity workload; use repeated runs"
+	@echo "  make check     Verify benchmark target and manifest contracts (no cluster required)"
 
-# ===============================================
-# Environment
-# ===============================================
-
-.PHONY: env
 env:
-	@echo "Current Benchmark Environment:"
-	@echo "  DSEARCH_GATEWAY_BASE_URL=$(DSEARCH_GATEWAY_BASE_URL)"
-	@echo "  DSEARCH_GATEWAY_SEARCH_PATH=$(DSEARCH_GATEWAY_SEARCH_PATH)"
-	@echo "  DSEARCH_QUERYNODE_ADDR=$(DSEARCH_QUERYNODE_ADDR)"
-	@echo "  DSEARCH_BENCH_VUS=$(DSEARCH_BENCH_VUS)"
-	@echo "  DSEARCH_BENCH_DURATION=$(DSEARCH_BENCH_DURATION)"
-	@echo "  DSEARCH_BENCH_QUERY=$(DSEARCH_BENCH_QUERY)"
-	@echo "  DSEARCH_BENCH_PAGE=$(DSEARCH_BENCH_PAGE)"
-	@echo "  DSEARCH_BENCH_PAGE_SIZE=$(DSEARCH_BENCH_PAGE_SIZE)"
-	@echo "  DSEARCH_BENCH_SEARCH_TYPE=$(DSEARCH_BENCH_SEARCH_TYPE)"
+	@$(SCRIPTS_DIR)/collect_metadata.sh --print
 
-# ===============================================
-# Dataset Ingestion
-# ===============================================
+check:
+	@$(SCRIPTS_DIR)/test_benchmark_harness.sh
 
-.PHONY: ingest
 ingest:
-	@echo "Ingesting sample dataset into dsearch..."
-	@bash $(SCRIPTS_DIR)/import_sample_data.sh $(DATA_DIR)/small.jsonl
+	@$(SCRIPTS_DIR)/ingest_dataset.sh "$(DSEARCH_BENCH_DATASET)"
 
-# ===============================================
-# k6 HTTP Benchmarks (Gateway)
-# ===============================================
+generate-dataset:
+	@$(SCRIPTS_DIR)/generate_dataset.sh "$(DSEARCH_GENERATED_DATASET)" "$(DSEARCH_DATASET_DOCUMENTS)"
 
-.PHONY: bm25
-bm25:
-	@mkdir -p $(RESULTS_DIR)
-	@echo "Running Gateway BM25 benchmark..."
-	@DSEARCH_BENCH_SEARCH_TYPE=BM25 \
-		k6 run $(K6_DIR)/bm25_search.js > $(RESULTS_DIR)/bm25.log 2>&1
+smoke:
+	@$(SCRIPTS_DIR)/run_gateway_benchmark.sh smoke all
 
-.PHONY: hybrid
-hybrid:
-	@mkdir -p $(RESULTS_DIR)
-	@echo "Running Gateway HYBRID benchmark..."
-	@DSEARCH_BENCH_SEARCH_TYPE=HYBRID \
-		k6 run $(K6_DIR)/hybrid_search.js > $(RESULTS_DIR)/hybrid.log 2>&1
+bm25 semantic hybrid overload failure:
+	@$(SCRIPTS_DIR)/run_gateway_benchmark.sh "$@" single
 
-.PHONY: semantic
-semantic:
-	@mkdir -p $(RESULTS_DIR)
-	@echo "Running Gateway SEMANTIC benchmark..."
-	@DSEARCH_BENCH_SEARCH_TYPE=SEMANTIC \
-		k6 run $(K6_DIR)/hybrid_search.js > $(RESULTS_DIR)/semantic.log 2>&1
+capacity:
+	@$(SCRIPTS_DIR)/run_capacity_benchmark.sh
 
-# ===============================================
-# gRPC Benchmarks (QueryNode)
-# ===============================================
-
-.PHONY: grpc-bm25
-grpc-bm25:
-	@mkdir -p $(RESULTS_DIR)
-	@echo "Running QueryNode BM25 gRPC benchmark..."
-	@bash $(SCRIPTS_DIR)/run_ghz_querynode.sh BM25 > $(RESULTS_DIR)/grpc-bm25.log 2>&1
-
-.PHONY: grpc-hybrid
-grpc-hybrid:
-	@mkdir -p $(RESULTS_DIR)
-	@echo "Running QueryNode HYBRID gRPC benchmark..."
-	@bash $(SCRIPTS_DIR)/run_ghz_querynode.sh HYBRID > $(RESULTS_DIR)/grpc-hybrid.log 2>&1
-
-# ===============================================
-# Elasticsearch benchmark comparison (optional)
-# ===============================================
-
-.PHONY: es-bm25
-es-bm25:
-	@mkdir -p $(RESULTS_DIR)
-	@echo "Running Elasticsearch BM25 benchmark..."
-	@DSEARCH_GATEWAY_BASE_URL=http://localhost:9200 \
-		DSEARCH_GATEWAY_SEARCH_PATH=/docs/_search \
-		DSEARCH_BENCH_SEARCH_TYPE=BM25 \
-		k6 run $(K6_DIR)/bm25_search.js > $(RESULTS_DIR)/es-bm25.log 2>&1
-
-# ===============================================
-# Cleanup
-# ===============================================
-
-.PHONY: clean
 clean:
-	@echo "Cleaning benchmark temp files..."
-	@rm -f *.tmp
-	@rm -f *.log
-	@echo "Done."
+	@find "$(RESULTS_DIR)" -mindepth 1 -maxdepth 1 -type d -name 'run-*' -exec rm -rf {} +
