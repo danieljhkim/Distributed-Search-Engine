@@ -1,24 +1,38 @@
-scenarios:
-  - name: gateway-bm25-baseline
-    description: Gateway BM25-only search, small dataset
-    vus: 5
-    duration: 15s
-    searchType: BM25
+# The runner copies configuration identity into each result artifact; it never
+# infers capacity from the CI smoke profile.
+profiles:
+  ci-smoke:
+    dataset: datasets/ci-smoke.jsonl
+    documents: 12
+    warmup: 5s
+    duration: 10s
+    concurrency: [1, 2]
+    purpose: reproducible API-contract smoke only; not capacity evidence
+  capacity:
+    dataset: datasets/generated/capacity.jsonl
+    documents: 100000
+    warmup: 60s
+    duration: 300s
+    concurrency: [1, 4, 16, 64, 128]
+    repetitions: 5
+    purpose: capacity evidence; report interval and first saturation point
 
-  - name: gateway-hybrid-light
-    description: Gateway HYBRID search with embeddings, light concurrency
-    vus: 5
-    duration: 15s
-    searchType: HYBRID
-
-  - name: gateway-hybrid-stress
-    description: Gateway HYBRID search under moderate load
-    vus: 20
-    duration: 60s
-    searchType: HYBRID
-
-  - name: querynode-hybrid-grpc
-    description: Direct gRPC calls to QueryNode.hybrid search
-    concurrency: 20
-    requests: 2000
-    searchType: HYBRID
+workloads:
+  - name: dataset-scaled-ingestion
+    command: make ingest DSEARCH_BENCH_DATASET=datasets/generated/capacity.jsonl
+    assertions: indexed document count and per-document index acknowledgements
+  - name: refresh-commit-cost
+    command: make ingest
+    assertions: ingestion report includes elapsed time and request failures
+  - name: representative-query-mix
+    command: make bm25 && make semantic && make hybrid
+    assertions: expected ids, ranking bounds, fan-out metadata, and HTTP semantics
+  - name: steady-state-and-saturation
+    command: make capacity
+    assertions: latency, throughput, repeated-run variability, and saturation point
+  - name: overload-shedding
+    command: make overload
+    assertions: configured overload status and structured error response
+  - name: injected-node-or-coordinator-failure
+    command: make failure
+    assertions: partial fan-out metadata or configured unavailable error semantics

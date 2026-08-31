@@ -45,6 +45,9 @@ jobs:
             exit 1
           fi
 
+      - name: Benchmark harness contract
+        run: make -C benchmark check
+
       - name: Upload JaCoCo reports
         if: always()
         uses: actions/upload-artifact@v7

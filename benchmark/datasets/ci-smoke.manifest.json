@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "name": "ci-smoke",
+  "purpose": "public API contract smoke; not capacity evidence",
+  "documentCount": 12,
+  "dataFile": "ci-smoke.jsonl",
+  "dataSha256": "75958fbc2205cbbb25c26e91d08e6bf403e6a5f39ab72486ae5f55a652ea2a42"
+}
