@@ -20,12 +20,12 @@ import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResult;
+import com.danieljhkim.dsearch.proto.index.CreateIndexRequest;
+import com.danieljhkim.dsearch.proto.index.CreateIndexResponse;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.Document;
 import com.danieljhkim.dsearch.proto.index.Field;
-import com.danieljhkim.dsearch.proto.index.CreateIndexRequest;
-import com.danieljhkim.dsearch.proto.index.CreateIndexResponse;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexHit;
@@ -281,10 +281,7 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
         try {
             IndexSchema schema = SchemaProtoMapper.fromProto(request.getSchema());
             IndexManager.ReindexResult result = indexManager.reindex(
-                    request.getSourceAlias(),
-                    request.getTargetIndex(),
-                    schema,
-                    request.getVerificationQueriesList());
+                    request.getSourceAlias(), request.getTargetIndex(), schema, request.getVerificationQueriesList());
             responseObserver.onNext(ReindexResponse.newBuilder()
                     .setSuccess(result.success())
                     .setSourceIndex(result.sourceIndex())

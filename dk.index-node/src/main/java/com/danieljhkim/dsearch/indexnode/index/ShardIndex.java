@@ -96,6 +96,7 @@ public class ShardIndex implements Closeable {
 
     @Getter
     private final boolean serving;
+
     private final Directory directory;
     private final Analyzer analyzer;
     private final IndexWriter indexWriter;
@@ -569,7 +570,9 @@ public class ShardIndex implements Closeable {
         EmbeddingModelIdentity identity = embeddingService.identity();
         List<FieldSchema> fields = new ArrayList<>();
         for (FieldConfig fieldConfig : fieldConfigMap.values()) {
-            if (fieldConfig != null && fieldConfig.getName() != null && !fieldConfig.getName().isBlank()) {
+            if (fieldConfig != null
+                    && fieldConfig.getName() != null
+                    && !fieldConfig.getName().isBlank()) {
                 fields.add(FieldSchema.from(fieldConfig));
             }
         }

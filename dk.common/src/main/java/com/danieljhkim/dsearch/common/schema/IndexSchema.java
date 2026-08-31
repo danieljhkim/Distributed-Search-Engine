@@ -10,10 +10,7 @@ import java.util.Objects;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record IndexSchema(
-        int compatibilityVersion,
-        AnalyzerConfig analyzer,
-        List<FieldSchema> fields,
-        EmbeddingModelIdentity embedding) {
+        int compatibilityVersion, AnalyzerConfig analyzer, List<FieldSchema> fields, EmbeddingModelIdentity embedding) {
 
     public static final int CURRENT_COMPATIBILITY_VERSION = 1;
 
@@ -33,13 +30,16 @@ public record IndexSchema(
 
     public static IndexSchema fromAppConfig(AppConfig appConfig, EmbeddingModelIdentity embedding) {
         Objects.requireNonNull(appConfig, "appConfig");
-        String analyzerName = appConfig.getIndexing() != null && appConfig.getIndexing().getAnalyzer() != null
-                ? appConfig.getIndexing().getAnalyzer()
-                : AnalyzerConfig.STANDARD;
+        String analyzerName =
+                appConfig.getIndexing() != null && appConfig.getIndexing().getAnalyzer() != null
+                        ? appConfig.getIndexing().getAnalyzer()
+                        : AnalyzerConfig.STANDARD;
         List<FieldConfig> fieldConfigs = appConfig.getFieldConfigs() == null ? List.of() : appConfig.getFieldConfigs();
         List<FieldSchema> fieldSchemas = new ArrayList<>();
         for (FieldConfig fieldConfig : fieldConfigs) {
-            if (fieldConfig != null && fieldConfig.getName() != null && !fieldConfig.getName().isBlank()) {
+            if (fieldConfig != null
+                    && fieldConfig.getName() != null
+                    && !fieldConfig.getName().isBlank()) {
                 fieldSchemas.add(FieldSchema.from(fieldConfig));
             }
         }
@@ -57,7 +57,8 @@ public record IndexSchema(
                 || appConfig.getMl().getModels().getTextEmbedding() == null) {
             return EmbeddingModelIdentity.unspecified(fallbackDimension);
         }
-        AppConfig.TextEmbeddingConfig embeddingConfig = appConfig.getMl().getModels().getTextEmbedding();
+        AppConfig.TextEmbeddingConfig embeddingConfig =
+                appConfig.getMl().getModels().getTextEmbedding();
         int dimension = embeddingConfig.getDimension() > 0 ? embeddingConfig.getDimension() : fallbackDimension;
         return EmbeddingModelIdentity.of(embeddingConfig.getUrl(), embeddingConfig.getEngine(), dimension);
     }

@@ -232,16 +232,15 @@ class QueryServiceImplTest {
     @Test
     void incompatiblePersistedSchemaIsRefusedBeforeFanout() {
         IndexSchema runtime = IndexSchema.current(
-                AnalyzerConfig.standard(),
-                List.of(),
-                EmbeddingModelIdentity.of("model-a", "PyTorch", 384));
+                AnalyzerConfig.standard(), List.of(), EmbeddingModelIdentity.of("model-a", "PyTorch", 384));
         IndexSchema persisted = IndexSchema.current(
-                AnalyzerConfig.of("keyword"),
-                List.of(),
-                EmbeddingModelIdentity.of("model-a", "PyTorch", 384));
+                AnalyzerConfig.of("keyword"), List.of(), EmbeddingModelIdentity.of("model-a", "PyTorch", 384));
         when(indexService.inspectSchema("shard-a")).thenReturn(persisted);
         QueryServiceImpl guarded = new QueryServiceImpl(
-                searchExecutor, indexService, new com.danieljhkim.dsearch.common.config.AppConfig.RequestLimitsConfig(), runtime);
+                searchExecutor,
+                indexService,
+                new com.danieljhkim.dsearch.common.config.AppConfig.RequestLimitsConfig(),
+                runtime);
 
         RecordingObserver observer = new RecordingObserver();
         guarded.search(request(SearchType.BM25), observer);

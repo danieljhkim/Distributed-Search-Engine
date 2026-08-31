@@ -156,7 +156,9 @@ public class GatewayAdminIndexService {
                 sourceAlias,
                 last.getTargetIndex(),
                 last.getSourceIndex(),
-                last.getError().isBlank() ? "reindex verified; source remains active until alias swap" : last.getError(),
+                last.getError().isBlank()
+                        ? "reindex verified; source remains active until alias swap"
+                        : last.getError(),
                 details);
     }
 
@@ -218,8 +220,7 @@ public class GatewayAdminIndexService {
         throw new IllegalStateException("No index nodes available for admin operation");
     }
 
-    private IndexServiceGrpc.IndexServiceBlockingStub withDeadline(
-            IndexServiceGrpc.IndexServiceBlockingStub stub) {
+    private IndexServiceGrpc.IndexServiceBlockingStub withDeadline(IndexServiceGrpc.IndexServiceBlockingStub stub) {
         return stub.withDeadlineAfter(Math.max(1, requestLimits.getRequestTimeoutMillis()), TimeUnit.MILLISECONDS);
     }
 

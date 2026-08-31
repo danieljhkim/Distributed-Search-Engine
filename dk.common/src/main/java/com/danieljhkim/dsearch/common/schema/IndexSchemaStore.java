@@ -51,9 +51,6 @@ public final class IndexSchemaStore {
             return;
         }
         Files.createDirectories(destinationDirectory);
-        Files.copy(
-                source,
-                destinationDirectory.resolve(SCHEMA_FILE_NAME),
-                StandardCopyOption.REPLACE_EXISTING);
+        Files.copy(source, destinationDirectory.resolve(SCHEMA_FILE_NAME), StandardCopyOption.REPLACE_EXISTING);
     }
 }
