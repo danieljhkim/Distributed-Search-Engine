@@ -43,43 +43,12 @@ monotonic topology version across ordinary restarts. It never starts with a
 fresh epoch when an existing state file is corrupt, truncated, or from an
 unsupported format version: startup fails and requires deliberate recovery.
 
-Back up the state only while the coordinator is stopped. The default Compose
-project name in this repository is `dsearch`, so the named volume is
-`dsearch_coordinator-state`:
-
-```bash
-mkdir -p backups/coordinator
-docker compose stop coordinator
-docker run --rm \
-  -v dsearch_coordinator-state:/state:ro \
-  -v "$PWD/backups/coordinator":/backup \
-  alpine:3.20 sh -ceu '
-    cp /state/coordinator-topology.properties /backup/coordinator-topology.properties
-    cp /state/coordinator-topology.properties.bak /backup/coordinator-topology.properties.bak
-  '
-docker compose start coordinator
-```
-
-To restore a known-good pair, stop the coordinator, atomically replace both
-files in the volume, then start it. Do not delete the volume or remove the
-state files to work around a failed startup: that would create a new epoch and
-discard authoritative topology.
-
-```bash
-docker compose stop coordinator
-docker run --rm \
-  -v dsearch_coordinator-state:/state \
-  -v "$PWD/backups/coordinator":/backup:ro \
-  alpine:3.20 sh -ceu '
-    test -s /backup/coordinator-topology.properties
-    test -s /backup/coordinator-topology.properties.bak
-    cp /backup/coordinator-topology.properties /state/coordinator-topology.properties.restore
-    mv -f /state/coordinator-topology.properties.restore /state/coordinator-topology.properties
-    cp /backup/coordinator-topology.properties.bak /state/coordinator-topology.properties.bak.restore
-    mv -f /state/coordinator-topology.properties.bak.restore /state/coordinator-topology.properties.bak
-  '
-docker compose start coordinator
-```
+Coordinator state alone is not a recoverable search backup: it must be from
+the same consistency boundary as every Lucene shard and the schema/model
+metadata used to build and query those shards. Use the supported manifest,
+snapshot, empty-deployment restore, and public-query drill in
+[RECOVERY.md](RECOVERY.md). Do not copy a live volume or replace coordinator
+files independently to recover a cluster.
 
 The coordinator persistence tests exercise the same backup-and-restore flow
 and verify that corrupt and incompatible state fails explicitly rather than
