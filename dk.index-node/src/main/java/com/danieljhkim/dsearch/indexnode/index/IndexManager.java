@@ -18,6 +18,9 @@ import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.Filter;
 import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.proto.index.RepresentativeQuery;
+import io.prometheus.client.Counter;
+import io.prometheus.client.Gauge;
+import io.prometheus.client.Histogram;
 import java.io.Closeable;
 import java.io.IOException;
 import java.nio.file.FileStore;
@@ -42,6 +45,23 @@ public class IndexManager implements Closeable {
 
     private static final Logger LOGGER = Logger.getLogger(IndexManager.class.getName());
     private static final String SHARD_PREFIX = "shard-";
+    private static final Counter LUCENE_COMMIT_OUTCOMES = Counter.build()
+            .name("dsearch_lucene_commit_outcomes_total")
+            .help("Lucene commit attempts by bounded outcome")
+            .labelNames("outcome")
+            .register();
+    private static final Histogram LUCENE_COMMIT_DURATION = Histogram.build()
+            .name("dsearch_lucene_commit_duration_seconds")
+            .help("Duration of Lucene commit attempts")
+            .register();
+    private static final Gauge LUCENE_LAST_COMMIT = Gauge.build()
+            .name("dsearch_lucene_last_successful_commit_timestamp_seconds")
+            .help("Unix timestamp of the last successful Lucene commit")
+            .register();
+    private static final Gauge DISK_AVAILABLE_BYTES = Gauge.build()
+            .name("dsearch_lucene_disk_available_bytes")
+            .help("Usable bytes on the Lucene volume")
+            .register();
     public static final int DEFAULT_MAX_BUFFERED_OPS_PER_SHARD = 100;
     public static final Duration DEFAULT_MAX_FLUSH_INTERVAL = Duration.ofSeconds(5);
     public static final long DEFAULT_MINIMUM_FREE_DISK_BYTES = 104857600L;
@@ -269,7 +289,9 @@ public class IndexManager implements Closeable {
                 return HealthHttpServer.Readiness.notReady("lucene_directory_not_writable");
             }
             FileStore store = Files.getFileStore(baseDir);
-            if (store.getUsableSpace() < minimumFreeDiskBytes) {
+            long usableSpace = store.getUsableSpace();
+            DISK_AVAILABLE_BYTES.set(usableSpace);
+            if (usableSpace < minimumFreeDiskBytes) {
                 return HealthHttpServer.Readiness.notReady("disk_space_below_threshold");
             }
             return HealthHttpServer.Readiness.up();
@@ -777,7 +799,17 @@ public class IndexManager implements Closeable {
     }
 
     void commitShard(ShardIndex shardIndex) throws IOException {
-        shardIndex.commit();
+        long started = System.nanoTime();
+        try {
+            shardIndex.commit();
+            LUCENE_COMMIT_OUTCOMES.labels("success").inc();
+            LUCENE_LAST_COMMIT.set(System.currentTimeMillis() / 1000.0);
+        } catch (IOException e) {
+            LUCENE_COMMIT_OUTCOMES.labels("failure").inc();
+            throw e;
+        } finally {
+            LUCENE_COMMIT_DURATION.observe((System.nanoTime() - started) / 1_000_000_000.0);
+        }
     }
 
     @Override

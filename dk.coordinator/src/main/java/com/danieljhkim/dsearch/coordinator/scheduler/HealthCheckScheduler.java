@@ -4,6 +4,7 @@ import com.danieljhkim.dsearch.common.cluster.NodeGroup;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.coordinator.cluster.ClusterMembershipService;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
+import io.prometheus.client.Counter;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -18,6 +19,11 @@ import java.util.logging.Logger;
 public class HealthCheckScheduler {
 
     private static final Logger LOGGER = Logger.getLogger(HealthCheckScheduler.class.getName());
+    private static final Counter HEALTH_CHECK_OUTCOMES = Counter.build()
+            .name("dsearch_topology_health_checks_total")
+            .help("Coordinator readiness probes by bounded outcome")
+            .labelNames("outcome")
+            .register();
 
     private final ScheduledExecutorService clusterHealthScheduler;
     private final HttpClient httpClient;
@@ -90,8 +96,11 @@ public class HealthCheckScheduler {
                 .build();
         try {
             HttpResponse<Void> response = httpClient.send(request, HttpResponse.BodyHandlers.discarding());
-            return response.statusCode() == 200;
+            boolean healthy = response.statusCode() == 200;
+            HEALTH_CHECK_OUTCOMES.labels(healthy ? "healthy" : "unhealthy").inc();
+            return healthy;
         } catch (Exception e) {
+            HEALTH_CHECK_OUTCOMES.labels("error").inc();
             LOGGER.log(
                     Level.WARNING,
                     "Health check failed for node: " + nodeInfo.getNodeId() + " (" + nodeInfo.getHost() + ":"

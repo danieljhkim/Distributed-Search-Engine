@@ -5,6 +5,9 @@ import ai.djl.translate.TranslateException;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.schema.EmbeddingModelIdentity;
 import com.danieljhkim.dsearch.common.validation.RequestAdmissionException;
+import io.prometheus.client.Counter;
+import io.prometheus.client.Gauge;
+import io.prometheus.client.Histogram;
 import java.io.Closeable;
 import java.util.ArrayList;
 import java.util.List;
@@ -21,6 +24,19 @@ import java.util.logging.Logger;
 public class TextEmbeddingService implements TextEmbedder, Closeable {
 
     private static final Logger LOGGER = Logger.getLogger(TextEmbeddingService.class.getName());
+    private static final Counter INFERENCE_OUTCOMES = Counter.build()
+            .name("dsearch_embedding_inference_outcomes_total")
+            .help("Embedding inference attempts by bounded outcome")
+            .labelNames("outcome")
+            .register();
+    private static final Gauge INFERENCE_IN_FLIGHT = Gauge.build()
+            .name("dsearch_embedding_inference_in_flight")
+            .help("Embedding inferences currently holding a predictor")
+            .register();
+    private static final Histogram INFERENCE_DURATION = Histogram.build()
+            .name("dsearch_embedding_inference_duration_seconds")
+            .help("Duration of embedding inference attempts")
+            .register();
 
     private final EmbeddingModelManager modelManager;
     private final boolean predictorPerCall;
@@ -126,23 +142,33 @@ public class TextEmbeddingService implements TextEmbedder, Closeable {
         }
 
         if (!predictorAdmission.tryAcquire()) {
+            INFERENCE_OUTCOMES.labels("rejected").inc();
             throw new RequestAdmissionException("embedding predictor", retryAfterMillis);
         }
+        INFERENCE_IN_FLIGHT.inc();
+        long started = System.nanoTime();
         try {
             if (predictorPerCall) {
-                return embedWithNewPredictor(text);
+                float[] embedding = embedWithNewPredictor(text);
+                INFERENCE_OUTCOMES.labels("success").inc();
+                return embedding;
             }
 
             Predictor<String, float[]> predictor = borrowPredictor();
             try {
-                return validateEmbedding(predictor.predict(text));
+                float[] embedding = validateEmbedding(predictor.predict(text));
+                INFERENCE_OUTCOMES.labels("success").inc();
+                return embedding;
             } catch (TranslateException e) {
+                INFERENCE_OUTCOMES.labels("failure").inc();
                 LOGGER.log(Level.SEVERE, "Failed to compute embedding", e);
                 throw new RuntimeException("Failed to compute embedding", e);
             } finally {
                 returnPredictor(predictor);
             }
         } finally {
+            INFERENCE_DURATION.observe((System.nanoTime() - started) / 1_000_000_000.0);
+            INFERENCE_IN_FLIGHT.dec();
             predictorAdmission.release();
         }
     }
