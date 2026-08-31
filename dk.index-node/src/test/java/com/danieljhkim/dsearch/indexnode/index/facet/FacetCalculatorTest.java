@@ -1,10 +1,13 @@
 package com.danieljhkim.dsearch.indexnode.index.facet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.FacetResponse;
+import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
@@ -166,6 +169,36 @@ class FacetCalculatorTest {
                 IllegalArgumentException.class,
                 () -> facetCalculator.computeFacets(searcher, new MatchAllDocsQuery(), List.of(request)));
         assertTrue(exception.getMessage().contains("Facet-level filters are not supported"));
+    }
+
+    @Test
+    void recursiveCalculationStopsAtExpandedBucketBudget() throws IOException {
+        buildIndex(List.of(Map.of("category", "books", "author", "ada")));
+        FacetCalculator boundedCalculator = new FacetCalculator(new FacetsConfig(), 1, () -> false);
+        FacetRequest request = FacetRequest.newBuilder()
+                .setField("category")
+                .setSize(1)
+                .addNested(FacetRequest.newBuilder().setField("author").setSize(1))
+                .build();
+
+        StatusRuntimeException exception = assertThrows(
+                StatusRuntimeException.class,
+                () -> boundedCalculator.computeFacets(searcher, new MatchAllDocsQuery(), List.of(request)));
+
+        assertEquals(Status.Code.RESOURCE_EXHAUSTED, exception.getStatus().getCode());
+    }
+
+    @Test
+    void recursiveCalculationStopsWhenRequestIsCancelled() throws IOException {
+        buildIndex(List.of(Map.of("category", "books")));
+        FacetCalculator cancelledCalculator = new FacetCalculator(new FacetsConfig(), 10, () -> true);
+        FacetRequest request = FacetRequest.newBuilder().setField("category").build();
+
+        StatusRuntimeException exception = assertThrows(
+                StatusRuntimeException.class,
+                () -> cancelledCalculator.computeFacets(searcher, new MatchAllDocsQuery(), List.of(request)));
+
+        assertEquals(Status.Code.CANCELLED, exception.getStatus().getCode());
     }
 
     @Test

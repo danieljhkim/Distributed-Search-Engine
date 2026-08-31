@@ -24,8 +24,9 @@ final class GatewayRequestValidator {
         int facetCount = 0;
         ArrayDeque<FacetAtDepth> pending = new ArrayDeque<>();
         if (request.getFacets() != null) {
-            request.getFacets().forEach(facet -> pending.addLast(new FacetAtDepth(facet, 1)));
+            request.getFacets().forEach(facet -> pending.addLast(new FacetAtDepth(facet, 1, 1L)));
         }
+        long expandedBucketUpperBound = 0L;
         while (!pending.isEmpty()) {
             FacetAtDepth current = pending.removeFirst();
             facetCount++;
@@ -41,6 +42,18 @@ final class GatewayRequestValidator {
             if (facetSize != null && (facetSize < 1 || facetSize > limits.getMaxSize())) {
                 throw new IllegalArgumentException("Facet size must be between 1 and " + limits.getMaxSize());
             }
+            int effectiveSize = facetSize != null ? facetSize : RequestLimitsValidator.DEFAULT_FACET_SIZE;
+            if (effectiveSize > limits.getMaxSize()) {
+                throw new IllegalArgumentException("Facet size must be between 1 and " + limits.getMaxSize());
+            }
+            RequestLimitsValidator.FacetBucketUpperBound upperBound =
+                    RequestLimitsValidator.accumulateFacetBucketUpperBound(
+                            expandedBucketUpperBound,
+                            current.parentBucketUpperBound(),
+                            effectiveSize,
+                            limits.getMaxFacetExpandedBuckets());
+            long nodeBucketUpperBound = upperBound.nodeBuckets();
+            expandedBucketUpperBound = upperBound.expandedBuckets();
             if (current.facet().getFilters() != null
                     && !current.facet().getFilters().isEmpty()) {
                 throw new IllegalArgumentException(
@@ -49,10 +62,11 @@ final class GatewayRequestValidator {
             if (current.facet().getNested() != null) {
                 current.facet()
                         .getNested()
-                        .forEach(nested -> pending.addLast(new FacetAtDepth(nested, current.depth() + 1)));
+                        .forEach(nested ->
+                                pending.addLast(new FacetAtDepth(nested, current.depth() + 1, nodeBucketUpperBound)));
             }
         }
     }
 
-    private record FacetAtDepth(FacetRequestDto facet, int depth) {}
+    private record FacetAtDepth(FacetRequestDto facet, int depth, long parentBucketUpperBound) {}
 }

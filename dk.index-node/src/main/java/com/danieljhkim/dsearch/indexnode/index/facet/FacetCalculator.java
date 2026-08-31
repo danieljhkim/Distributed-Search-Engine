@@ -1,12 +1,16 @@
 package com.danieljhkim.dsearch.indexnode.index.facet;
 
+import com.danieljhkim.dsearch.common.validation.RequestLimitsValidator;
 import com.danieljhkim.dsearch.proto.common.FacetBucket;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.FacetResponse;
+import io.grpc.Context;
+import io.grpc.Status;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.BooleanSupplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import lombok.Getter;
@@ -31,21 +35,36 @@ import org.apache.lucene.search.Query;
 public class FacetCalculator {
 
     private static final Logger LOGGER = Logger.getLogger(FacetCalculator.class.getName());
-    private static final int DEFAULT_TOP_N = 10;
+    private static final int DEFAULT_TOP_N = RequestLimitsValidator.DEFAULT_FACET_SIZE;
 
     @Getter
     private final FacetsConfig facetsConfig;
+
+    private final long maxExpandedBuckets;
+    private final BooleanSupplier cancellationRequested;
 
     // Cache SortedSetDocValuesReaderState per IndexReader to avoid rebuilding it
     private volatile Object cachedReaderKey;
     private volatile SortedSetDocValuesReaderState cachedState;
 
     public FacetCalculator() {
-        this.facetsConfig = new FacetsConfig();
+        this(new FacetsConfig());
     }
 
     public FacetCalculator(FacetsConfig facetsConfig) {
+        this(
+                facetsConfig,
+                RequestLimitsValidator.limitsOrDefaults(null).getMaxFacetExpandedBuckets(),
+                () -> Context.current().isCancelled());
+    }
+
+    FacetCalculator(FacetsConfig facetsConfig, long maxExpandedBuckets, BooleanSupplier cancellationRequested) {
         this.facetsConfig = facetsConfig;
+        if (maxExpandedBuckets < 1) {
+            throw new IllegalArgumentException("maxExpandedBuckets must be greater than 0");
+        }
+        this.maxExpandedBuckets = maxExpandedBuckets;
+        this.cancellationRequested = Objects.requireNonNull(cancellationRequested, "cancellationRequested");
     }
 
     /**
@@ -64,9 +83,10 @@ public class FacetCalculator {
             return List.of();
         }
         validateSupportedRequests(facetRequests);
+        FacetWorkBudget workBudget = new FacetWorkBudget(maxExpandedBuckets, cancellationRequested);
 
         try {
-            return computeFacetResponses(searcher, query, facetRequests);
+            return computeFacetResponses(searcher, query, facetRequests, workBudget);
         } catch (IOException e) {
             LOGGER.log(Level.WARNING, "Failed to compute facets", e);
         } catch (IllegalStateException | IllegalArgumentException e) {
@@ -94,12 +114,15 @@ public class FacetCalculator {
         }
 
         try {
+            FacetWorkBudget workBudget = new FacetWorkBudget(maxExpandedBuckets, cancellationRequested);
+            workBudget.checkpoint();
             IndexReader reader = searcher.getIndexReader();
             SortedSetDocValuesReaderState state = getOrCreateState(reader);
             Facets facets = new SortedSetDocValuesFacetCounts(state, fc);
 
             for (FacetRequest request : facetRequests) {
-                responses.add(computeSingleFacet(searcher, null, facets, request));
+                workBudget.checkpoint();
+                responses.add(computeSingleFacet(searcher, null, facets, request, workBudget));
             }
         } catch (IOException e) {
             LOGGER.log(Level.WARNING, "Failed to compute facets", e);
@@ -112,13 +135,16 @@ public class FacetCalculator {
     }
 
     private List<FacetResponse> computeFacetResponses(
-            IndexSearcher searcher, Query query, List<FacetRequest> facetRequests) throws IOException {
+            IndexSearcher searcher, Query query, List<FacetRequest> facetRequests, FacetWorkBudget workBudget)
+            throws IOException {
+        workBudget.checkpoint();
         FacetsCollector collector = new FacetsCollector();
         searcher.search(query, collector);
         Facets facets = new SortedSetDocValuesFacetCounts(getOrCreateState(searcher.getIndexReader()), collector);
         List<FacetResponse> responses = new ArrayList<>(facetRequests.size());
         for (FacetRequest request : facetRequests) {
-            responses.add(computeSingleFacet(searcher, query, facets, request));
+            workBudget.checkpoint();
+            responses.add(computeSingleFacet(searcher, query, facets, request, workBudget));
         }
         return responses;
     }
@@ -158,7 +184,8 @@ public class FacetCalculator {
     /**
      * Computes a single facet.
      */
-    private FacetResponse computeSingleFacet(IndexSearcher searcher, Query query, Facets facets, FacetRequest request) {
+    private FacetResponse computeSingleFacet(
+            IndexSearcher searcher, Query query, Facets facets, FacetRequest request, FacetWorkBudget workBudget) {
         String field = request.getField();
         int topN = request.getSize() > 0 ? request.getSize() : DEFAULT_TOP_N;
 
@@ -168,6 +195,7 @@ public class FacetCalculator {
 
             if (result != null && result.labelValues != null) {
                 for (LabelAndValue lv : result.labelValues) {
+                    workBudget.expandBucket();
                     FacetBucket.Builder bucketBuilder =
                             FacetBucket.newBuilder().setValue(lv.label).setCount(lv.value.longValue());
 
@@ -178,7 +206,7 @@ public class FacetCalculator {
                         DrillDownQuery bucketQuery = new DrillDownQuery(facetsConfig, query);
                         bucketQuery.add(field, lv.label);
                         bucketBuilder.addAllNested(
-                                computeFacetResponses(searcher, bucketQuery, request.getNestedList()));
+                                computeFacetResponses(searcher, bucketQuery, request.getNestedList(), workBudget));
                     }
 
                     responseBuilder.addBuckets(bucketBuilder.build());
@@ -204,5 +232,38 @@ public class FacetCalculator {
 
     private static boolean containsNestedRequest(List<FacetRequest> facetRequests) {
         return facetRequests.stream().anyMatch(request -> request.getNestedCount() > 0);
+    }
+
+    private static final class FacetWorkBudget {
+        private final long maximumBuckets;
+        private final BooleanSupplier cancellationRequested;
+        private long expandedBuckets;
+
+        private FacetWorkBudget(long maximumBuckets, BooleanSupplier cancellationRequested) {
+            this.maximumBuckets = maximumBuckets;
+            this.cancellationRequested = cancellationRequested;
+        }
+
+        private void checkpoint() {
+            if (cancellationRequested.getAsBoolean()) {
+                Context context = Context.current();
+                Status status =
+                        context.getDeadline() != null && context.getDeadline().isExpired()
+                                ? Status.DEADLINE_EXCEEDED
+                                : Status.CANCELLED;
+                throw status.withDescription("Facet calculation cancelled before recursive expansion completed")
+                        .asRuntimeException();
+            }
+        }
+
+        private void expandBucket() {
+            checkpoint();
+            if (expandedBuckets >= maximumBuckets) {
+                throw Status.RESOURCE_EXHAUSTED
+                        .withDescription("Facet calculation exceeded expanded bucket limit (" + maximumBuckets + ")")
+                        .asRuntimeException();
+            }
+            expandedBuckets++;
+        }
     }
 }
