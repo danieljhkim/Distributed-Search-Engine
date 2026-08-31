@@ -161,6 +161,8 @@ public class AppConfig {
         private int maxFieldsPerDocument = 100;
         private int maxFieldValueBytes = 65536;
         private int maxIndexPayloadBytes = 1048576;
+        private int maxBulkItems = 100;
+        private long maxBulkEmbeddingBytes = 524288;
         private int maxFilterClauses = 100;
         private int maxFacetCount = 20;
         private int maxFacetDepth = 3;
@@ -175,7 +177,8 @@ public class AppConfig {
                     + ", maxHttpBodyBytes=" + maxHttpBodyBytes + ", maxGrpcInboundBytes=" + maxGrpcInboundBytes
                     + ", maxDocumentIdBytes=" + maxDocumentIdBytes + ", maxFieldsPerDocument="
                     + maxFieldsPerDocument + ", maxFieldValueBytes=" + maxFieldValueBytes
-                    + ", maxIndexPayloadBytes=" + maxIndexPayloadBytes + ", maxFilterClauses=" + maxFilterClauses
+                    + ", maxIndexPayloadBytes=" + maxIndexPayloadBytes + ", maxBulkItems=" + maxBulkItems
+                    + ", maxBulkEmbeddingBytes=" + maxBulkEmbeddingBytes + ", maxFilterClauses=" + maxFilterClauses
                     + ", maxFacetCount=" + maxFacetCount + ", maxFacetDepth=" + maxFacetDepth
                     + ", maxConcurrentHttpRequests=" + maxConcurrentHttpRequests + ", maxConcurrentFanoutCalls="
                     + maxConcurrentFanoutCalls + ", retryAfterMillis=" + retryAfterMillis + '}';

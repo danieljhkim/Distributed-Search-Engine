@@ -15,6 +15,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.danieljhkim.dsearch.common.cluster.NodeGroup;
 import com.danieljhkim.dsearch.common.cluster.NodeGroupManager;
 import com.danieljhkim.dsearch.common.config.AppConfig;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexItemResponseDto;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexRequestDto;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.SearchRequestDto;
@@ -100,6 +103,42 @@ class GatewayApiControllerTest {
         assertThat(mappedRequest.getFields())
                 .containsEntry("title", "Distributed Search")
                 .containsEntry("category", "docs");
+    }
+
+    @Test
+    void bulkIndexPreservesOrderedItemOutcomesAtTheVersionedEndpoint() throws Exception {
+        when(indexService.bulkIndex(any(BulkIndexRequestDto.class)))
+                .thenReturn(new BulkIndexResponseDto(
+                        false,
+                        List.of(
+                                new BulkIndexItemResponseDto(0, "doc-1", "success", null),
+                                new BulkIndexItemResponseDto(1, "doc-2", "retryable_failure", "retry same id"))));
+
+        mockMvc.perform(post("/api/v1/index/bulk")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "partitionId": "tenant-a",
+                                  "items": [
+                                    {"id": "doc-1", "fields": {"title": "first"}},
+                                    {"id": "doc-2", "fields": {"title": "second"}}
+                                  ]
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.items[0].requestIndex").value(0))
+                .andExpect(jsonPath("$.items[0].id").value("doc-1"))
+                .andExpect(jsonPath("$.items[0].status").value("success"))
+                .andExpect(jsonPath("$.items[1].requestIndex").value(1))
+                .andExpect(jsonPath("$.items[1].status").value("retryable_failure"));
+
+        ArgumentCaptor<BulkIndexRequestDto> requestCaptor = ArgumentCaptor.forClass(BulkIndexRequestDto.class);
+        verify(indexService).bulkIndex(requestCaptor.capture());
+        assertThat(requestCaptor.getValue().getPartitionId()).isEqualTo("tenant-a");
+        assertThat(requestCaptor.getValue().getItems())
+                .extracting(IndexRequestDto::getId)
+                .containsExactly("doc-1", "doc-2");
     }
 
     @Test

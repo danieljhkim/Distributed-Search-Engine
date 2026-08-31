@@ -22,7 +22,7 @@ class RequestAdmissionFilterTest {
         AppConfig.RequestLimitsConfig limits = new AppConfig.RequestLimitsConfig();
         limits.setMaxHttpBodyBytes(8);
         RequestAdmissionFilter filter = new RequestAdmissionFilter(limits);
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/index");
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/index/bulk");
         request.setContent("123456789".getBytes(StandardCharsets.UTF_8));
         MockHttpServletResponse response = new MockHttpServletResponse();
         AtomicBoolean dispatched = new AtomicBoolean();
@@ -65,7 +65,7 @@ class RequestAdmissionFilterTest {
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {
             var first = executor.submit(() -> {
-                MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/index");
+                MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/index/bulk");
                 filter.doFilter(request, new MockHttpServletResponse(), (ignoredRequest, ignoredResponse) -> {
                     admitted.countDown();
                     try {
@@ -81,7 +81,7 @@ class RequestAdmissionFilterTest {
 
             MockHttpServletResponse overloaded = new MockHttpServletResponse();
             filter.doFilter(
-                    new MockHttpServletRequest("GET", "/api/v1/search"),
+                    new MockHttpServletRequest("POST", "/api/v1/index/bulk"),
                     overloaded,
                     (ignoredRequest, ignoredResponse) -> {});
 

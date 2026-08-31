@@ -22,6 +22,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -195,6 +196,14 @@ public class GlobalExceptionHandler {
         HttpStatus status = HttpStatus.BAD_REQUEST;
         ErrorResponse body =
                 new ErrorResponse(status.value(), status.getReasonPhrase(), ex.getMessage(), request.getRequestURI());
+        return new ResponseEntity<>(body, status);
+    }
+
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<ErrorResponse> handleResponseStatus(ResponseStatusException ex, HttpServletRequest request) {
+        HttpStatus status = HttpStatus.valueOf(ex.getStatusCode().value());
+        ErrorResponse body =
+                new ErrorResponse(status.value(), status.getReasonPhrase(), ex.getReason(), request.getRequestURI());
         return new ResponseEntity<>(body, status);
     }
 

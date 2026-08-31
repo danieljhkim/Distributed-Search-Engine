@@ -133,8 +133,25 @@ public final class RequestLimitsValidator {
             BulkIndexDocumentRequest request, AppConfig.RequestLimitsConfig limits) {
         Objects.requireNonNull(request, "request");
         AppConfig.RequestLimitsConfig effective = limitsOrDefaults(limits);
+        validateBulkItemCount(request.getDocumentsCount(), effective);
         validateIndexPayloadBytes(request.getSerializedSize(), effective);
         request.getDocumentsList().forEach(document -> validateDocument(document, effective));
+    }
+
+    public static void validateBulkItemCount(int itemCount, AppConfig.RequestLimitsConfig limits) {
+        AppConfig.RequestLimitsConfig effective = limitsOrDefaults(limits);
+        if (itemCount > effective.getMaxBulkItems()) {
+            throw new IllegalArgumentException("Bulk item count (" + itemCount + ") exceeds maximum allowed ("
+                    + effective.getMaxBulkItems() + ")");
+        }
+    }
+
+    public static void validateBulkEmbeddingBytes(long embeddingBytes, AppConfig.RequestLimitsConfig limits) {
+        AppConfig.RequestLimitsConfig effective = limitsOrDefaults(limits);
+        if (embeddingBytes > effective.getMaxBulkEmbeddingBytes()) {
+            throw new IllegalArgumentException("Bulk embedding bytes (" + embeddingBytes + ") exceeds maximum allowed ("
+                    + effective.getMaxBulkEmbeddingBytes() + ")");
+        }
     }
 
     private static void validateIndexPayloadBytes(long payloadBytes, AppConfig.RequestLimitsConfig limits) {
