@@ -9,6 +9,7 @@ import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.index.Document;
 import com.danieljhkim.dsearch.proto.index.Field;
 import com.danieljhkim.dsearch.proto.query.QueryRequest;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class RequestLimitsValidatorTest {
@@ -99,6 +100,53 @@ class RequestLimitsValidatorTest {
     }
 
     @Test
+    void defaultLimitsAcceptOrdinaryNestedFacetWork() {
+        AppConfig.RequestLimitsConfig limits = new AppConfig.RequestLimitsConfig();
+        FacetRequest ordinaryTree = nestedFacetTree(10);
+        QueryRequest request = QueryRequest.newBuilder()
+                .setQueryString("query")
+                .setSize(10)
+                .addFacets(ordinaryTree)
+                .build();
+
+        assertDoesNotThrow(() -> RequestLimitsValidator.validateQueryRequest(request, limits));
+    }
+
+    @Test
+    void defaultLimitsRejectAmplifiedNestedFacetWorkBeforeFanout() {
+        AppConfig.RequestLimitsConfig limits = new AppConfig.RequestLimitsConfig();
+        QueryRequest request = QueryRequest.newBuilder()
+                .setQueryString("query")
+                .setSize(10)
+                .addFacets(nestedFacetTree(1000))
+                .build();
+
+        IllegalArgumentException exception = assertThrows(
+                IllegalArgumentException.class, () -> RequestLimitsValidator.validateQueryRequest(request, limits));
+
+        assertTrue(exception.getMessage().contains("Expanded facet bucket upper bound"));
+        assertTrue(exception.getMessage().contains(Long.toString(limits.getMaxFacetExpandedBuckets())));
+    }
+
+    @Test
+    void expandedFacetWorkHonorsTheConfiguredBoundary() {
+        FacetRequest twoLevels = FacetRequest.newBuilder()
+                .setField("parent")
+                .setSize(2)
+                .addNested(FacetRequest.newBuilder().setField("child").setSize(3))
+                .build();
+        AppConfig.RequestLimitsConfig accepted = new AppConfig.RequestLimitsConfig();
+        accepted.setMaxFacetExpandedBuckets(8);
+        AppConfig.RequestLimitsConfig rejected = new AppConfig.RequestLimitsConfig();
+        rejected.setMaxFacetExpandedBuckets(7);
+
+        assertDoesNotThrow(() -> RequestLimitsValidator.validateSearchStructures(null, List.of(twoLevels), accepted));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> RequestLimitsValidator.validateSearchStructures(null, List.of(twoLevels), rejected));
+    }
+
+    @Test
     void facetLocalFiltersAreRejectedAtTheGrpcBoundary() {
         QueryRequest request = QueryRequest.newBuilder()
                 .setQueryString("query")
@@ -154,5 +202,16 @@ class RequestLimitsValidatorTest {
 
         assertTrue(itemCount.getMessage().contains("Bulk item count"));
         assertTrue(embeddingBytes.getMessage().contains("Bulk embedding bytes"));
+    }
+
+    private static FacetRequest nestedFacetTree(int size) {
+        return FacetRequest.newBuilder()
+                .setField("level-1")
+                .setSize(size)
+                .addNested(FacetRequest.newBuilder()
+                        .setField("level-2")
+                        .setSize(size)
+                        .addNested(FacetRequest.newBuilder().setField("level-3").setSize(size)))
+                .build();
     }
 }

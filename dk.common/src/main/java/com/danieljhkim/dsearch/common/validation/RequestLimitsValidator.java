@@ -20,6 +20,8 @@ import java.util.logging.Logger;
 /** Validates request cost before fan-out, result-window allocation, or embedding inference. */
 public final class RequestLimitsValidator {
 
+    public static final int DEFAULT_FACET_SIZE = 10;
+
     private static final Logger LOGGER = Logger.getLogger(RequestLimitsValidator.class.getName());
     private static final AppConfig.RequestLimitsConfig DEFAULT_LIMITS = loadLimits();
 
@@ -166,12 +168,13 @@ public final class RequestLimitsValidator {
             Collection<FacetRequest> facets,
             AppConfig.RequestLimitsConfig configuredLimits) {
         AppConfig.RequestLimitsConfig limits = limitsOrDefaults(configuredLimits);
-        int filterClauses = validateFilters(filters, limits);
+        validateFilters(filters, limits);
         int facetCount = 0;
         ArrayDeque<FacetAtDepth> pending = new ArrayDeque<>();
         if (facets != null) {
-            facets.forEach(facet -> pending.addLast(new FacetAtDepth(facet, 1)));
+            facets.forEach(facet -> pending.addLast(new FacetAtDepth(facet, 1, 1L)));
         }
+        long expandedBucketUpperBound = 0L;
         while (!pending.isEmpty()) {
             FacetAtDepth current = pending.removeFirst();
             facetCount++;
@@ -187,10 +190,61 @@ public final class RequestLimitsValidator {
                 throw new IllegalArgumentException(
                         "Facet-level filters are not supported; use top-level search filters instead");
             }
+            int requestedSize = current.facet().getSize();
+            if (requestedSize < 0 || requestedSize > limits.getMaxSize()) {
+                throw new IllegalArgumentException(
+                        "Facet size must be between 1 and " + limits.getMaxSize() + " when specified");
+            }
+            int effectiveSize = requestedSize > 0 ? requestedSize : DEFAULT_FACET_SIZE;
+            if (effectiveSize > limits.getMaxSize()) {
+                throw new IllegalArgumentException("Facet size must be between 1 and " + limits.getMaxSize());
+            }
+            FacetBucketUpperBound upperBound = accumulateFacetBucketUpperBound(
+                    expandedBucketUpperBound,
+                    current.parentBucketUpperBound(),
+                    effectiveSize,
+                    limits.getMaxFacetExpandedBuckets());
+            long nodeBucketUpperBound = upperBound.nodeBuckets();
+            expandedBucketUpperBound = upperBound.expandedBuckets();
             current.facet()
                     .getNestedList()
-                    .forEach(nested -> pending.addLast(new FacetAtDepth(nested, current.depth() + 1)));
+                    .forEach(nested ->
+                            pending.addLast(new FacetAtDepth(nested, current.depth() + 1, nodeBucketUpperBound)));
         }
+    }
+
+    /** Adds one request-tree node to an overflow-safe expanded facet bucket estimate. */
+    public static FacetBucketUpperBound accumulateFacetBucketUpperBound(
+            long expandedBuckets, long parentBuckets, int facetSize, long maximum) {
+        long nodeBuckets = multiplyFacetBuckets(parentBuckets, facetSize, maximum);
+        return new FacetBucketUpperBound(addFacetBuckets(expandedBuckets, nodeBuckets, maximum), nodeBuckets);
+    }
+
+    private static long multiplyFacetBuckets(long parentBuckets, int facetSize, long maximum) {
+        validateFacetBucketLimit(maximum);
+        if (parentBuckets > maximum / facetSize) {
+            throw expandedFacetBucketsExceeded(maximum);
+        }
+        return parentBuckets * facetSize;
+    }
+
+    private static long addFacetBuckets(long currentBuckets, long additionalBuckets, long maximum) {
+        validateFacetBucketLimit(maximum);
+        if (currentBuckets > maximum - additionalBuckets) {
+            throw expandedFacetBucketsExceeded(maximum);
+        }
+        return currentBuckets + additionalBuckets;
+    }
+
+    private static void validateFacetBucketLimit(long maximum) {
+        if (maximum < 1) {
+            throw new IllegalArgumentException("maxFacetExpandedBuckets must be greater than 0");
+        }
+    }
+
+    private static IllegalArgumentException expandedFacetBucketsExceeded(long maximum) {
+        return new IllegalArgumentException(
+                "Expanded facet bucket upper bound exceeds maximum allowed (" + maximum + ")");
     }
 
     private static int validateFilters(Collection<Filter> filters, AppConfig.RequestLimitsConfig limits) {
@@ -243,5 +297,7 @@ public final class RequestLimitsValidator {
         return value == null ? 0 : value.getBytes(StandardCharsets.UTF_8).length;
     }
 
-    private record FacetAtDepth(FacetRequest facet, int depth) {}
+    private record FacetAtDepth(FacetRequest facet, int depth, long parentBucketUpperBound) {}
+
+    public record FacetBucketUpperBound(long expandedBuckets, long nodeBuckets) {}
 }

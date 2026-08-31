@@ -166,6 +166,12 @@ public class AppConfig {
         private int maxFilterClauses = 100;
         private int maxFacetCount = 20;
         private int maxFacetDepth = 3;
+        /**
+         * Maximum deterministic upper bound for all facet buckets expanded across a recursive
+         * request tree. Each level contributes the product of its size and every ancestor size.
+         */
+        private long maxFacetExpandedBuckets = 10000L;
+
         private int maxConcurrentHttpRequests = 128;
         private int maxConcurrentFanoutCalls = 64;
         private int retryAfterMillis = 100;
@@ -180,6 +186,7 @@ public class AppConfig {
                     + ", maxIndexPayloadBytes=" + maxIndexPayloadBytes + ", maxBulkItems=" + maxBulkItems
                     + ", maxBulkEmbeddingBytes=" + maxBulkEmbeddingBytes + ", maxFilterClauses=" + maxFilterClauses
                     + ", maxFacetCount=" + maxFacetCount + ", maxFacetDepth=" + maxFacetDepth
+                    + ", maxFacetExpandedBuckets=" + maxFacetExpandedBuckets
                     + ", maxConcurrentHttpRequests=" + maxConcurrentHttpRequests + ", maxConcurrentFanoutCalls="
                     + maxConcurrentFanoutCalls + ", retryAfterMillis=" + retryAfterMillis + '}';
         }
