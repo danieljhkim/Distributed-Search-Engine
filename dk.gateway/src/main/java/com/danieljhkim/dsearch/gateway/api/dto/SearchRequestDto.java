@@ -34,5 +34,17 @@ public class SearchRequestDto {
 
     private Boolean highlight = true;
 
+    /**
+     * Ordering, most significant component first. Empty means relevance order. A deterministic
+     * document-id tie-breaker is always appended server-side, so the order is total.
+     */
+    private List<SortDto> sort;
+
+    /**
+     * Opaque cursor from a previous response's {@code nextCursor}. Must not be combined with a
+     * non-zero {@code page}: the cursor already encodes the position.
+     */
+    private String cursor;
+
     public SearchRequestDto() {}
 }

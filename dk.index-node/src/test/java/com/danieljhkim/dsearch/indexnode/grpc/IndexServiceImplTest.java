@@ -341,7 +341,8 @@ class IndexServiceImplTest {
                 SearchType searchType,
                 java.util.List<Filter> filters,
                 boolean highlight,
-                java.util.List<FacetRequest> facetRequests)
+                java.util.List<FacetRequest> facetRequests,
+                com.danieljhkim.dsearch.common.pagination.SortOptions sortOptions)
                 throws IOException {
             throw new IOException("search failure");
         }

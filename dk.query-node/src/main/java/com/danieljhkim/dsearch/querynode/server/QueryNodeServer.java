@@ -1,10 +1,10 @@
 package com.danieljhkim.dsearch.querynode.server;
 
 import com.danieljhkim.dsearch.common.config.AppConfig;
-import com.danieljhkim.dsearch.common.schema.IndexSchema;
 import com.danieljhkim.dsearch.common.grpc.GlobalExceptionInterceptor;
 import com.danieljhkim.dsearch.common.grpc.GrpcTransportSecurity;
 import com.danieljhkim.dsearch.common.grpc.PrometheusGrpcServerInterceptor;
+import com.danieljhkim.dsearch.common.schema.IndexSchema;
 import com.danieljhkim.dsearch.common.tracing.CorrelationIdServerInterceptor;
 import com.danieljhkim.dsearch.querynode.grpc.BaseIndexService;
 import com.danieljhkim.dsearch.querynode.grpc.QueryServiceImpl;
@@ -39,9 +39,11 @@ public class QueryNodeServer {
         AppConfig.RequestLimitsConfig requestLimits = appConfig.getRequestLimits() != null
                 ? appConfig.getRequestLimits()
                 : new AppConfig.RequestLimitsConfig();
-        IndexSchema expectedSchema = IndexSchema.fromAppConfig(
-                appConfig, IndexSchema.embeddingFrom(appConfig, 384));
-        QueryServiceImpl queryService = new QueryServiceImpl(searchExecutor, indexService, requestLimits, expectedSchema);
+        IndexSchema expectedSchema = IndexSchema.fromAppConfig(appConfig, IndexSchema.embeddingFrom(appConfig, 384));
+        AppConfig.PaginationConfig pagination =
+                appConfig.getPagination() != null ? appConfig.getPagination() : new AppConfig.PaginationConfig();
+        QueryServiceImpl queryService =
+                new QueryServiceImpl(searchExecutor, indexService, requestLimits, expectedSchema, pagination);
         ServerServiceDefinition interceptedService =
                 ServerInterceptors.intercept(queryService, new GlobalExceptionInterceptor());
 

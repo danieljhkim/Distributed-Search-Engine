@@ -12,6 +12,7 @@ import com.danieljhkim.dsearch.gateway.api.dto.FacetRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.FilterDto;
 import com.danieljhkim.dsearch.gateway.api.dto.SearchRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.SearchResponseDto;
+import com.danieljhkim.dsearch.gateway.api.dto.SortDto;
 import com.danieljhkim.dsearch.gateway.mapper.QueryRequestMapper;
 import com.danieljhkim.dsearch.gateway.mapper.QueryResponseMapper;
 import com.danieljhkim.dsearch.proto.common.FacetBucket;
@@ -19,6 +20,7 @@ import com.danieljhkim.dsearch.proto.common.FacetResponse;
 import com.danieljhkim.dsearch.proto.common.FilterOperator;
 import com.danieljhkim.dsearch.proto.common.FusionStrategy;
 import com.danieljhkim.dsearch.proto.common.SearchType;
+import com.danieljhkim.dsearch.proto.common.SortOrder;
 import com.danieljhkim.dsearch.proto.query.FanoutMetadata;
 import com.danieljhkim.dsearch.proto.query.FanoutStatus;
 import com.danieljhkim.dsearch.proto.query.QueryRequest;
@@ -116,6 +118,69 @@ class GatewaySearchServiceTest {
         assertThatThrownBy(() -> service.search(request))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Facet-level filters are not supported");
+    }
+
+    @Test
+    void sortAndCursorTravelToTheQueryNodeAndTheNextCursorComesBack() {
+        when(queryStub.withDeadlineAfter(anyLong(), any(TimeUnit.class))).thenReturn(queryStub);
+        SearchRequestDto request = new SearchRequestDto();
+        request.setQuery("lucene vector");
+        request.setPageSize(3);
+        request.setSort(List.of(new SortDto("price", "desc"), new SortDto("year", "asc")));
+        request.setCursor("v1.payload.signature");
+
+        when(qnClientManager.nextClient()).thenReturn(queryStub);
+        when(queryStub.search(any(QueryRequest.class)))
+                .thenReturn(queryResponse().toBuilder()
+                        .setNextCursor("v1.next.signature")
+                        .build());
+
+        SearchResponseDto response = service.search(request);
+
+        assertThat(response.getNextCursor()).isEqualTo("v1.next.signature");
+
+        ArgumentCaptor<QueryRequest> requestCaptor = ArgumentCaptor.forClass(QueryRequest.class);
+        verify(queryStub).search(requestCaptor.capture());
+        QueryRequest grpcRequest = requestCaptor.getValue();
+        assertThat(grpcRequest.getCursor()).isEqualTo("v1.payload.signature");
+        assertThat(grpcRequest.getSortCount()).isEqualTo(2);
+        assertThat(grpcRequest.getSort(0).getField()).isEqualTo("price");
+        assertThat(grpcRequest.getSort(0).getOrder()).isEqualTo(SortOrder.SORT_ORDER_DESC);
+        assertThat(grpcRequest.getSort(1).getField()).isEqualTo("year");
+        assertThat(grpcRequest.getSort(1).getOrder()).isEqualTo(SortOrder.SORT_ORDER_ASC);
+    }
+
+    @Test
+    void anOrdinaryRequestCarriesNoSortOrCursor() {
+        when(queryStub.withDeadlineAfter(anyLong(), any(TimeUnit.class))).thenReturn(queryStub);
+        SearchRequestDto request = new SearchRequestDto();
+        request.setQuery("lucene vector");
+        request.setPageSize(3);
+
+        when(qnClientManager.nextClient()).thenReturn(queryStub);
+        when(queryStub.search(any(QueryRequest.class))).thenReturn(queryResponse());
+
+        SearchResponseDto response = service.search(request);
+
+        assertThat(response.getNextCursor()).isNull();
+
+        ArgumentCaptor<QueryRequest> requestCaptor = ArgumentCaptor.forClass(QueryRequest.class);
+        verify(queryStub).search(requestCaptor.capture());
+        assertThat(requestCaptor.getValue().getCursor()).isEmpty();
+        assertThat(requestCaptor.getValue().getSortCount()).isZero();
+    }
+
+    @Test
+    void searchRejectsACursorCombinedWithOffsetPagingBeforeCallingTheQueryNode() {
+        SearchRequestDto request = new SearchRequestDto();
+        request.setQuery("lucene vector");
+        request.setPageSize(10);
+        request.setPage(4);
+        request.setCursor("v1.payload.signature");
+
+        assertThatThrownBy(() -> service.search(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("mutually exclusive");
     }
 
     private static QueryResponse queryResponse() {

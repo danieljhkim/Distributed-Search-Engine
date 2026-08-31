@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
+import com.danieljhkim.dsearch.proto.common.SortField;
+import com.danieljhkim.dsearch.proto.common.SortOrder;
 import com.danieljhkim.dsearch.proto.index.Document;
 import com.danieljhkim.dsearch.proto.index.Field;
 import com.danieljhkim.dsearch.proto.query.QueryRequest;
@@ -213,5 +215,105 @@ class RequestLimitsValidatorTest {
                         .setSize(size)
                         .addNested(FacetRequest.newBuilder().setField("level-3").setSize(size)))
                 .build();
+    }
+
+    // ---------- Offset window and cursor pagination ----------
+
+    @Test
+    void offsetPagingIsBoundedByTheConfiguredResultWindow() {
+        AppConfig.RequestLimitsConfig limits = new AppConfig.RequestLimitsConfig();
+        limits.setMaxResultWindow(100);
+
+        assertDoesNotThrow(() -> RequestLimitsValidator.validateSearchWindow("q", 9, 10, limits));
+
+        IllegalArgumentException exceeded = assertThrows(
+                IllegalArgumentException.class, () -> RequestLimitsValidator.validateSearchWindow("q", 10, 10, limits));
+        assertTrue(exceeded.getMessage().contains("exceeds maximum allowed (100)"));
+        assertTrue(
+                exceeded.getMessage().contains("use cursor pagination"),
+                "the limit must point at the bounded alternative");
+    }
+
+    @Test
+    void aDeepOffsetPageIsRejectedWithoutOverflowing() {
+        AppConfig.RequestLimitsConfig limits = new AppConfig.RequestLimitsConfig();
+
+        // page * size overflows a signed int; the window check must reject rather than wrap.
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> RequestLimitsValidator.validateSearchWindow("q", Integer.MAX_VALUE, 1000, limits));
+    }
+
+    @Test
+    void aCursorPageIsNotBoundedByTheOffsetWindow() {
+        AppConfig.RequestLimitsConfig limits = new AppConfig.RequestLimitsConfig();
+        limits.setMaxResultWindow(100);
+
+        // The cursor's cost is one page per node however deep the traversal has gone, so the offset
+        // window that protects deep offset paging does not apply to it.
+        assertDoesNotThrow(() -> RequestLimitsValidator.validateQueryRequest(
+                QueryRequest.newBuilder()
+                        .setQueryString("q")
+                        .setSize(10)
+                        .setCursor("v1.payload.signature")
+                        .build(),
+                limits));
+    }
+
+    @Test
+    void aCursorCannotBeCombinedWithOffsetPaging() {
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> RequestLimitsValidator.validateQueryRequest(
+                        QueryRequest.newBuilder()
+                                .setQueryString("q")
+                                .setPage(3)
+                                .setSize(10)
+                                .setCursor("v1.payload.signature")
+                                .build(),
+                        new AppConfig.RequestLimitsConfig()));
+        assertTrue(error.getMessage().contains("mutually exclusive"));
+    }
+
+    @Test
+    void aCursorPageStillRespectsTheMaximumPageSize() {
+        AppConfig.RequestLimitsConfig limits = new AppConfig.RequestLimitsConfig();
+        limits.setMaxSize(50);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> RequestLimitsValidator.validateQueryRequest(
+                        QueryRequest.newBuilder()
+                                .setQueryString("q")
+                                .setSize(51)
+                                .setCursor("v1.payload.signature")
+                                .build(),
+                        limits));
+    }
+
+    @Test
+    void sortFieldCountIsBounded() {
+        AppConfig.PaginationConfig pagination = new AppConfig.PaginationConfig();
+        pagination.setMaxSortFields(2);
+
+        QueryRequest.Builder request =
+                QueryRequest.newBuilder().setQueryString("q").setSize(10);
+        for (int i = 0; i < 3; i++) {
+            request.addSort(SortField.newBuilder().setField("field-" + i).setOrder(SortOrder.SORT_ORDER_ASC));
+        }
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> RequestLimitsValidator.validateQueryRequest(
+                        request.build(), new AppConfig.RequestLimitsConfig(), pagination));
+        assertTrue(error.getMessage().contains("Sort field count (3) exceeds maximum allowed (2)"));
+    }
+
+    @Test
+    void aBlankSortFieldIsRejected() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> RequestLimitsValidator.validateSortFields(
+                        List.of(SortField.newBuilder().setField("  ").build()), new AppConfig.PaginationConfig()));
     }
 }

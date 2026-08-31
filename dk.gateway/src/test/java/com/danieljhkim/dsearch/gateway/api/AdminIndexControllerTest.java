@@ -35,8 +35,7 @@ class AdminIndexControllerTest {
 
     @Test
     void createInspectReindexSwapAndRollbackReturnAuditableJson() throws Exception {
-        when(adminIndexService.createIndex(any(), any()))
-                .thenReturn(audit("create-index", "movies", "movies_1", null));
+        when(adminIndexService.createIndex(any(), any())).thenReturn(audit("create-index", "movies", "movies_1", null));
         when(adminIndexService.inspectSchema(eq("movies"), any())).thenReturn(schema());
         when(adminIndexService.reindex(eq("movies"), any(), any()))
                 .thenReturn(audit("reindex", "movies", "movies_2", "movies_1"));
@@ -79,7 +78,16 @@ class AdminIndexControllerTest {
 
     private static AdminAuditResponseDto audit(String operation, String alias, String index, String previous) {
         return new AdminAuditResponseDto(
-                "audit-1", Instant.parse("2026-08-31T00:00:00Z"), operation, AdminAuthFilter.ADMIN_ACTOR, true, alias, index, previous, "ok", Map.of());
+                "audit-1",
+                Instant.parse("2026-08-31T00:00:00Z"),
+                operation,
+                AdminAuthFilter.ADMIN_ACTOR,
+                true,
+                alias,
+                index,
+                previous,
+                "ok",
+                Map.of());
     }
 
     private static InspectSchemaResponseDto schema() {

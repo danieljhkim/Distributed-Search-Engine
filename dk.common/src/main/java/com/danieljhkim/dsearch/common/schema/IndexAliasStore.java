@@ -116,7 +116,9 @@ public final class IndexAliasStore {
     public synchronized IndexAlias rollback(String alias) throws IOException {
         IndexAliasTable table = current();
         IndexAlias current = table.getAliases().get(alias);
-        if (current == null || current.getPreviousIndexName() == null || current.getPreviousIndexName().isBlank()) {
+        if (current == null
+                || current.getPreviousIndexName() == null
+                || current.getPreviousIndexName().isBlank()) {
             throw new IllegalArgumentException("No previous alias target to roll back for '" + alias + "'");
         }
         String restored = current.getPreviousIndexName();

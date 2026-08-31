@@ -4,6 +4,7 @@ import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.config.ConfigLoader;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.Filter;
+import com.danieljhkim.dsearch.proto.common.SortField;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.Document;
 import com.danieljhkim.dsearch.proto.index.IndexSearchRequest;
@@ -24,6 +25,7 @@ public final class RequestLimitsValidator {
 
     private static final Logger LOGGER = Logger.getLogger(RequestLimitsValidator.class.getName());
     private static final AppConfig.RequestLimitsConfig DEFAULT_LIMITS = loadLimits();
+    private static final AppConfig.PaginationConfig DEFAULT_PAGINATION = loadPagination();
 
     private RequestLimitsValidator() {}
 
@@ -41,6 +43,22 @@ public final class RequestLimitsValidator {
 
     public static AppConfig.RequestLimitsConfig limitsOrDefaults(AppConfig.RequestLimitsConfig limits) {
         return limits != null ? limits : DEFAULT_LIMITS;
+    }
+
+    public static AppConfig.PaginationConfig paginationOrDefaults(AppConfig.PaginationConfig pagination) {
+        return pagination != null ? pagination : DEFAULT_PAGINATION;
+    }
+
+    private static AppConfig.PaginationConfig loadPagination() {
+        try {
+            AppConfig appConfig = ConfigLoader.load();
+            if (appConfig != null && appConfig.getPagination() != null) {
+                return appConfig.getPagination();
+            }
+        } catch (IOException e) {
+            LOGGER.log(Level.WARNING, "Failed to load pagination config; using safe built-in defaults", e);
+        }
+        return new AppConfig.PaginationConfig();
     }
 
     public static void validateRequestLimits(String queryString, int pageSize) {
@@ -69,9 +87,59 @@ public final class RequestLimitsValidator {
     }
 
     public static void validateQueryRequest(QueryRequest request, AppConfig.RequestLimitsConfig limits) {
+        validateQueryRequest(request, limits, DEFAULT_PAGINATION);
+    }
+
+    public static void validateQueryRequest(
+            QueryRequest request, AppConfig.RequestLimitsConfig limits, AppConfig.PaginationConfig pagination) {
         Objects.requireNonNull(request, "request");
-        validateSearchWindow(request.getQueryString(), request.getPage(), request.getSize(), limits);
-        validateSearchStructures(request.getFiltersList(), request.getFacetsList(), limitsOrDefaults(limits));
+        AppConfig.RequestLimitsConfig effective = limitsOrDefaults(limits);
+        if (request.getCursor().isEmpty()) {
+            validateSearchWindow(request.getQueryString(), request.getPage(), request.getSize(), effective);
+        } else {
+            // A cursor already encodes the position, so offset paging must not also be requested:
+            // honouring both would be ambiguous, and silently ignoring one would skip results.
+            if (request.getPage() != 0) {
+                throw new IllegalArgumentException(
+                        "cursor and page are mutually exclusive; omit page when resuming from a cursor");
+            }
+            validateCursorWindow(request.getQueryString(), request.getSize(), effective);
+        }
+        validateSortFields(request.getSortList(), paginationOrDefaults(pagination));
+        validateSearchStructures(request.getFiltersList(), request.getFacetsList(), effective);
+    }
+
+    /**
+     * Bounds a cursor page. Deliberately not bounded by {@code maxResultWindow}: a cursor costs
+     * one page per node no matter how deep the traversal has gone, which is the whole point of
+     * offering it alongside offset paging.
+     */
+    public static void validateCursorWindow(
+            String queryString, int pageSize, AppConfig.RequestLimitsConfig configuredLimits) {
+        AppConfig.RequestLimitsConfig limits = limitsOrDefaults(configuredLimits);
+        validateQueryLength(queryString, limits.getMaxQueryLength());
+        validatePageSize(pageSize, limits.getMaxSize());
+        if (pageSize < 1) {
+            throw new IllegalArgumentException("pageSize must be greater than 0");
+        }
+    }
+
+    public static void validateSortFields(Collection<SortField> sortFields, AppConfig.PaginationConfig pagination) {
+        if (sortFields == null || sortFields.isEmpty()) {
+            return;
+        }
+        AppConfig.PaginationConfig effective = paginationOrDefaults(pagination);
+        int maxSortFields = Math.max(1, effective.getMaxSortFields());
+        if (sortFields.size() > maxSortFields) {
+            throw new IllegalArgumentException(
+                    "Sort field count (" + sortFields.size() + ") exceeds maximum allowed (" + maxSortFields + ")");
+        }
+        for (SortField sortField : sortFields) {
+            if (sortField == null || sortField.getField().isBlank()) {
+                throw new IllegalArgumentException("sort field name must not be blank");
+            }
+            validateUtf8Bytes("sort field", sortField.getField(), DEFAULT_LIMITS.getMaxFieldValueBytes());
+        }
     }
 
     public static void validateIndexSearchRequest(IndexSearchRequest request, AppConfig.RequestLimitsConfig limits) {
@@ -82,10 +150,21 @@ public final class RequestLimitsValidator {
         if (request.getFrom() < 0 || request.getSize() < 1) {
             throw new IllegalArgumentException("from must not be negative and size must be greater than 0");
         }
-        long resultEnd = Math.addExact((long) request.getFrom(), request.getSize());
-        if (resultEnd > effective.getMaxResultWindow()) {
-            throw new IllegalArgumentException("Requested result window (" + resultEnd + ") exceeds maximum allowed ("
-                    + effective.getMaxResultWindow() + ")");
+        if (request.getHasSearchAfter()) {
+            // A resuming shard search reads exactly one page, so the offset window does not apply;
+            // an offset on top of a resume point would double-count the position.
+            if (request.getFrom() != 0) {
+                throw new IllegalArgumentException("from must be 0 when search_after is set");
+            }
+            if (request.getSearchAfterCount() != request.getSortCount()) {
+                throw new IllegalArgumentException("search_after must have one value per sort field");
+            }
+        } else {
+            long resultEnd = Math.addExact((long) request.getFrom(), request.getSize());
+            if (resultEnd > effective.getMaxResultWindow()) {
+                throw new IllegalArgumentException("Requested result window (" + resultEnd
+                        + ") exceeds maximum allowed (" + effective.getMaxResultWindow() + ")");
+            }
         }
         validateSearchStructures(request.getFiltersList(), request.getFacetsList(), effective);
     }

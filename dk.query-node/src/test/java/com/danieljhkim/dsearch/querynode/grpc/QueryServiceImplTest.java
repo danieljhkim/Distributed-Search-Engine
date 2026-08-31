@@ -63,7 +63,8 @@ class QueryServiceImplTest {
                         eq(indexService),
                         anyList(),
                         anyBoolean(),
-                        anyList()))
+                        anyList(),
+                        any()))
                 .thenReturn(result(
                         List.of(new SearchHit("doc-1", "title", "content", 1.0f)),
                         new SearchResult.FanoutMetadata(2, 2, 0, 0)));
@@ -86,7 +87,8 @@ class QueryServiceImplTest {
 
     @Test
     void oneNodeFailureReturnsPartialFanoutMetadata() {
-        when(searchExecutor.search(any(), any(), anyInt(), anyInt(), any(), any(), anyList(), anyBoolean(), anyList()))
+        when(searchExecutor.search(
+                        any(), any(), anyInt(), anyInt(), any(), any(), anyList(), anyBoolean(), anyList(), any()))
                 .thenReturn(result(
                         List.of(new SearchHit("doc-1", "title", "content", 1.0f)),
                         new SearchResult.FanoutMetadata(2, 1, 1, 0)));
@@ -108,7 +110,8 @@ class QueryServiceImplTest {
 
     @Test
     void oneNodeTimeoutReturnsPartialFanoutMetadata() {
-        when(searchExecutor.search(any(), any(), anyInt(), anyInt(), any(), any(), anyList(), anyBoolean(), anyList()))
+        when(searchExecutor.search(
+                        any(), any(), anyInt(), anyInt(), any(), any(), anyList(), anyBoolean(), anyList(), any()))
                 .thenReturn(result(
                         List.of(new SearchHit("doc-1", "title", "content", 1.0f)),
                         new SearchResult.FanoutMetadata(2, 1, 0, 1)));
@@ -129,7 +132,8 @@ class QueryServiceImplTest {
 
     @Test
     void zeroActiveNodesReturnsUnavailable() {
-        when(searchExecutor.search(any(), any(), anyInt(), anyInt(), any(), any(), anyList(), anyBoolean(), anyList()))
+        when(searchExecutor.search(
+                        any(), any(), anyInt(), anyInt(), any(), any(), anyList(), anyBoolean(), anyList(), any()))
                 .thenReturn(result(List.of(), new SearchResult.FanoutMetadata(0, 0, 0, 0)));
 
         RecordingObserver observer = new RecordingObserver();
@@ -146,7 +150,8 @@ class QueryServiceImplTest {
 
     @Test
     void allAttemptedNodesFailReturnsUnavailable() {
-        when(searchExecutor.search(any(), any(), anyInt(), anyInt(), any(), any(), anyList(), anyBoolean(), anyList()))
+        when(searchExecutor.search(
+                        any(), any(), anyInt(), anyInt(), any(), any(), anyList(), anyBoolean(), anyList(), any()))
                 .thenReturn(result(List.of(), new SearchResult.FanoutMetadata(2, 0, 2, 0)));
 
         RecordingObserver observer = new RecordingObserver();
@@ -163,7 +168,8 @@ class QueryServiceImplTest {
 
     @Test
     void allAttemptedNodesTimeoutReturnsDeadlineExceeded() {
-        when(searchExecutor.search(any(), any(), anyInt(), anyInt(), any(), any(), anyList(), anyBoolean(), anyList()))
+        when(searchExecutor.search(
+                        any(), any(), anyInt(), anyInt(), any(), any(), anyList(), anyBoolean(), anyList(), any()))
                 .thenReturn(result(List.of(), new SearchResult.FanoutMetadata(2, 0, 0, 2)));
 
         RecordingObserver observer = new RecordingObserver();
@@ -205,7 +211,8 @@ class QueryServiceImplTest {
                         eq(com.danieljhkim.dsearch.proto.common.FusionStrategy.RRF),
                         anyList(),
                         anyBoolean(),
-                        anyList()))
+                        anyList(),
+                        any()))
                 .thenReturn(new SearchResult(
                         List.of(new SearchHit(
                                 "doc-1", null, null, 2.0f, Map.of("content", "highlight"), Map.of("tag", "book"))),
@@ -232,16 +239,16 @@ class QueryServiceImplTest {
     @Test
     void incompatiblePersistedSchemaIsRefusedBeforeFanout() {
         IndexSchema runtime = IndexSchema.current(
-                AnalyzerConfig.standard(),
-                List.of(),
-                EmbeddingModelIdentity.of("model-a", "PyTorch", 384));
+                AnalyzerConfig.standard(), List.of(), EmbeddingModelIdentity.of("model-a", "PyTorch", 384));
         IndexSchema persisted = IndexSchema.current(
-                AnalyzerConfig.of("keyword"),
-                List.of(),
-                EmbeddingModelIdentity.of("model-a", "PyTorch", 384));
-        when(indexService.inspectSchema("shard-a")).thenReturn(persisted);
+                AnalyzerConfig.of("keyword"), List.of(), EmbeddingModelIdentity.of("model-a", "PyTorch", 384));
+        when(indexService.inspectIndexSnapshot("shard-a"))
+                .thenReturn(new BaseIndexService.IndexSnapshot(persisted, 1L));
         QueryServiceImpl guarded = new QueryServiceImpl(
-                searchExecutor, indexService, new com.danieljhkim.dsearch.common.config.AppConfig.RequestLimitsConfig(), runtime);
+                searchExecutor,
+                indexService,
+                new com.danieljhkim.dsearch.common.config.AppConfig.RequestLimitsConfig(),
+                runtime);
 
         RecordingObserver observer = new RecordingObserver();
         guarded.search(request(SearchType.BM25), observer);
@@ -255,7 +262,8 @@ class QueryServiceImplTest {
 
     @Test
     void executorFailureIsReturnedAsParseError() {
-        when(searchExecutor.search(any(), any(), anyInt(), anyInt(), any(), any(), anyList(), anyBoolean(), anyList()))
+        when(searchExecutor.search(
+                        any(), any(), anyInt(), anyInt(), any(), any(), anyList(), anyBoolean(), anyList(), any()))
                 .thenThrow(new IllegalStateException("executor failed"));
         RecordingObserver observer = new RecordingObserver();
 

@@ -4,6 +4,7 @@ import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.common.pagination.SortOptions;
 import com.danieljhkim.dsearch.common.validation.RequestAdmissionException;
 import com.danieljhkim.dsearch.proto.common.*;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
@@ -123,9 +124,51 @@ public class SearchExecutor implements Closeable {
             List<Filter> filters,
             boolean highlight,
             List<FacetRequest> facetRequests) {
+        return searchHybrid(
+                queryString,
+                shardId,
+                page,
+                size,
+                indexService,
+                fusionStrategy,
+                filters,
+                highlight,
+                facetRequests,
+                SortOptions.NONE);
+    }
+
+    /**
+     * Hybrid search under an explicit ordering.
+     *
+     * <p>Fusion still selects the candidate set — that is what makes a hit hybrid — but when a sort
+     * is requested the fused candidates are then placed in the requested order rather than in
+     * fusion-score order. Cursor pagination is refused for hybrid upstream: the candidate set comes
+     * from two bounded per-node lists, so there is no total order over the partition to resume in.
+     */
+    public SearchResult searchHybrid(
+            String queryString,
+            String shardId,
+            int page,
+            int size,
+            BaseIndexService indexService,
+            FusionStrategy fusionStrategy,
+            List<Filter> filters,
+            boolean highlight,
+            List<FacetRequest> facetRequests,
+            SortOptions sortOptions) {
+        SortOptions effectiveSort = sortOptions == null ? SortOptions.NONE : sortOptions;
         int fetchSize = requiredForPage(page, size);
         SearchResult bm25Result = search(
-                queryString, shardId, 0, fetchSize, SearchType.BM25, indexService, filters, highlight, facetRequests);
+                queryString,
+                shardId,
+                0,
+                fetchSize,
+                SearchType.BM25,
+                indexService,
+                filters,
+                highlight,
+                facetRequests,
+                effectiveSort);
         SearchResult semanticResult = search(
                 queryString,
                 shardId,
@@ -135,9 +178,13 @@ public class SearchExecutor implements Closeable {
                 indexService,
                 filters,
                 highlight,
-                facetRequests);
+                facetRequests,
+                effectiveSort);
 
         List<SearchHit> res = HybridFusion.fuse(bm25Result, semanticResult, fusionStrategy, fetchSize, 0.5, 0.5);
+        if (effectiveSort.isSorted()) {
+            res = mergeSortedHits(List.of(new NodeHits(res)), effectiveSort);
+        }
 
         List<SearchHit> pageHits = slicePage(res, normalizePage(page), normalizeSize(size));
 
@@ -181,12 +228,45 @@ public class SearchExecutor implements Closeable {
             List<Filter> filters,
             boolean highlight,
             List<FacetRequest> facetRequests) {
+        return search(
+                queryString,
+                shardId,
+                page,
+                size,
+                searchType,
+                indexService,
+                filters,
+                highlight,
+                facetRequests,
+                SortOptions.NONE);
+    }
+
+    /**
+     * Global search across all index nodes under an explicit ordering.
+     *
+     * <p>The per-node fan-out size is where cursor pagination earns its keep. Offset paging must
+     * ask every node for {@code page * size + size} hits, because any node could own the whole
+     * page; a cursor pins an exact position in a total order, so {@code size} hits per node is
+     * provably enough — no node can contribute more than {@code size} hits to the next page.
+     */
+    public SearchResult search(
+            String queryString,
+            String shardId,
+            int page,
+            int size,
+            SearchType searchType,
+            BaseIndexService indexService,
+            List<Filter> filters,
+            boolean highlight,
+            List<FacetRequest> facetRequests,
+            SortOptions sortOptions) {
 
         page = normalizePage(page);
         size = normalizeSize(size);
+        SortOptions effectiveSort = sortOptions == null ? SortOptions.NONE : sortOptions;
 
         String requestId = MDC.get("requestId");
-        int perShardLimit = requiredForPage(page, size);
+        int perShardLimit = effectiveSort.hasSearchAfter() ? size : requiredForPage(page, size);
         Map<String, Long> nodeTimingsMs = new ConcurrentHashMap<>();
         Context requestContext = Context.current();
         Duration remainingBudget = remainingBudget(requestContext);
@@ -218,7 +298,8 @@ public class SearchExecutor implements Closeable {
                                 highlight,
                                 facetRequests,
                                 remainingBudget,
-                                nodeTimingsMs)));
+                                nodeTimingsMs,
+                                effectiveSort)));
                 submitted++;
             }
         } catch (RuntimeException e) {
@@ -250,8 +331,13 @@ public class SearchExecutor implements Closeable {
         }
 
         // Global merge + page
-        List<SearchHit> mergedHits = mergeHits(acc.nodeHits, searchType);
-        List<SearchHit> pageHits = slicePage(mergedHits, page, size);
+        List<SearchHit> mergedHits = effectiveSort.isSorted()
+                ? mergeSortedHits(acc.nodeHits, effectiveSort)
+                : mergeHits(acc.nodeHits, searchType);
+        // A resumed page starts at the cursor, so it is already the head of the merged run; only
+        // offset paging still has an offset to skip.
+        List<SearchHit> pageHits =
+                effectiveSort.hasSearchAfter() ? takeFirst(mergedHits, size) : slicePage(mergedHits, page, size);
 
         // Materialize facets in request order
         List<FacetResponse> aggregatedFacets = buildAggregatedFacets(facetRequests, acc.facetAggregation);
@@ -293,7 +379,8 @@ public class SearchExecutor implements Closeable {
             boolean highlight,
             List<FacetRequest> facetRequests,
             Duration deadline,
-            Map<String, Long> nodeTimingsMs) {
+            Map<String, Long> nodeTimingsMs,
+            SortOptions sortOptions) {
 
         FanoutPermit permit = new FanoutPermit();
         CompletableFuture<SearchResult> future = CompletableFuture.supplyAsync(
@@ -316,7 +403,8 @@ public class SearchExecutor implements Closeable {
                                 filters,
                                 highlight,
                                 facetRequests,
-                                deadline);
+                                deadline,
+                                sortOptions);
                     } finally {
                         long tookMs = (System.nanoTime() - startNanos) / 1_000_000L;
                         nodeTimingsMs.put(nodeId, tookMs);
@@ -482,6 +570,37 @@ public class SearchExecutor implements Closeable {
         }
         rankedHits.sort(COMPARABLE_SCORE_ORDER);
         return rankedHits;
+    }
+
+    /**
+     * Merges node-local runs under an explicit ordering.
+     *
+     * <p>Each node already applied the same effective sort, so this is a merge of sorted runs and
+     * the comparator is the one thing that must not drift: {@link SortOptions#spec()} compares the
+     * sort tuples the nodes reported rather than re-deriving anything locally. Because the spec
+     * ends in the unique document id, equal sort values across nodes still resolve to one stable
+     * order, which is what lets a cursor resume without repeating or dropping a tied hit.
+     *
+     * <p>Hits missing a sort tuple — an older node, or a partial response — are kept and ordered
+     * last by the tuple comparator rather than dropped, so a degraded node loses ranking quality
+     * instead of losing results.
+     */
+    private static List<SearchHit> mergeSortedHits(List<NodeHits> nodeHits, SortOptions sortOptions) {
+        Comparator<SearchHit> order = Comparator.comparing(
+                        SearchHit::getSortValues, sortOptions.spec().tupleComparator())
+                .thenComparing(SearchHit::getDocId, Comparator.nullsLast(Comparator.naturalOrder()));
+        return nodeHits.stream()
+                .flatMap(nodeResult -> nodeResult.hits().stream())
+                .filter(Objects::nonNull)
+                .sorted(order)
+                .toList();
+    }
+
+    private static List<SearchHit> takeFirst(List<SearchHit> hits, int size) {
+        if (hits == null || hits.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return hits.size() <= size ? hits : hits.subList(0, size);
     }
 
     private static long countUnfinished(List<NodeSearchTask> futures) {

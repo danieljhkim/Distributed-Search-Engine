@@ -21,6 +21,7 @@ public class GatewaySearchService {
     private final QueryResponseMapper resMapper;
     private final QueryRequestMapper reqMapper;
     private final AppConfig.RequestLimitsConfig requestLimits;
+    private final AppConfig.PaginationConfig paginationLimits;
 
     @Autowired
     public GatewaySearchService(
@@ -32,6 +33,7 @@ public class GatewaySearchService {
         this.resMapper = resMapper;
         this.reqMapper = reqMapper;
         this.requestLimits = RequestLimitsValidator.limitsOrDefaults(appConfig.getRequestLimits());
+        this.paginationLimits = RequestLimitsValidator.paginationOrDefaults(appConfig.getPagination());
     }
 
     GatewaySearchService(
@@ -42,14 +44,15 @@ public class GatewaySearchService {
         this.resMapper = resMapper;
         this.reqMapper = reqMapper;
         this.requestLimits = new AppConfig.RequestLimitsConfig();
+        this.paginationLimits = new AppConfig.PaginationConfig();
     }
 
     public SearchResponseDto search(SearchRequestDto request) {
         long startNanos = System.nanoTime();
         QueryServiceGrpc.QueryServiceBlockingStub queryStub = qnClientManager.nextClient();
-        GatewayRequestValidator.validateSearch(request, requestLimits);
+        GatewayRequestValidator.validateSearch(request, requestLimits, paginationLimits);
         QueryRequest grpcReq = reqMapper.toGrpc(request);
-        RequestLimitsValidator.validateQueryRequest(grpcReq, requestLimits);
+        RequestLimitsValidator.validateQueryRequest(grpcReq, requestLimits, paginationLimits);
         QueryResponse grpcResp = queryStub
                 .withDeadlineAfter(Math.max(1, requestLimits.getRequestTimeoutMillis()), TimeUnit.MILLISECONDS)
                 .search(grpcReq);

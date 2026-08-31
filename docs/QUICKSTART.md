@@ -87,6 +87,44 @@ curl -X POST http://localhost:8080/api/v1/search \
 
 This returns BM25 + Semantic fused results.
 
+### Sort and page with a cursor
+
+Order by any field marked `sortable` in `fieldConfigs`. A document-id tie-breaker is appended
+automatically, so the order is total and stable across requests.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "time travel romance",
+    "pageSize": 10,
+    "partitionId": "0",
+    "searchType": "BM25",
+    "sort": [{ "field": "year", "order": "desc" }]
+  }'
+```
+
+The response carries `nextCursor`. Send it back as `cursor` — with the same query, filters, sort,
+and `pageSize` — to walk forward without duplicates or gaps:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "time travel romance",
+    "pageSize": 10,
+    "partitionId": "0",
+    "searchType": "BM25",
+    "sort": [{ "field": "year", "order": "desc" }],
+    "cursor": "PASTE_NEXT_CURSOR_HERE"
+  }'
+```
+
+Stop when a response has no `nextCursor`. `cursor` cannot be combined with `page`, and changing the
+query, filters, sort, or `pageSize` mid-traversal invalidates the cursor rather than silently
+returning results from a different result set. See the README for the full rules, including why
+`SEMANTIC` and `HYBRID` search use offset paging instead.
+
 ### Stop the cluster
 
 ```bash

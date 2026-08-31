@@ -60,12 +60,13 @@ public final class SchemaProtoMapper {
                     field.getHighlightable(),
                     field.getAnalyzer()));
         }
-        int compatibilityVersion =
-                proto.getCompatibilityVersion() > 0 ? proto.getCompatibilityVersion() : IndexSchema.CURRENT_COMPATIBILITY_VERSION;
+        int compatibilityVersion = proto.getCompatibilityVersion() > 0
+                ? proto.getCompatibilityVersion()
+                : IndexSchema.CURRENT_COMPATIBILITY_VERSION;
         AnalyzerConfig analyzer = AnalyzerConfig.of(proto.getAnalyzer().getName());
         com.danieljhkim.dsearch.proto.index.EmbeddingModelIdentity embedding = proto.getEmbedding();
-        EmbeddingModelIdentity identity = EmbeddingModelIdentity.of(
-                embedding.getModelId(), embedding.getEngine(), embedding.getDimension());
+        EmbeddingModelIdentity identity =
+                EmbeddingModelIdentity.of(embedding.getModelId(), embedding.getEngine(), embedding.getDimension());
         if (!embedding.getDigest().isBlank()) {
             identity = new EmbeddingModelIdentity(
                     identity.modelId(), identity.engine(), embedding.getDigest(), identity.dimension());

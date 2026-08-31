@@ -229,6 +229,84 @@ make run-multi
 }
 ```
 
+#### Sorting and cursor pagination
+
+`sort` orders results by any field marked `sortable` in `fieldConfigs`, plus the pseudo-fields
+`_score` (relevance) and `_id` (document id). Components apply most-significant first, and `_id ASC`
+is always appended, so the ordering is **total**: no two documents ever tie, and the same query
+always returns the same order. Documents with no value for a sort field order last, in both
+directions.
+
+```json
+{
+  "query": "time travel romance",
+  "pageSize": 10,
+  "partitionId": "movies",
+  "searchType": "BM25",
+  "sort": [
+    { "field": "year", "order": "desc" },
+    { "field": "rating", "order": "asc" }
+  ]
+}
+```
+
+A sorted response carries `nextCursor`. Send it back as `cursor` to get the following page:
+
+```json
+{
+  "query": "time travel romance",
+  "pageSize": 10,
+  "partitionId": "movies",
+  "searchType": "BM25",
+  "sort": [{ "field": "year", "order": "desc" }],
+  "cursor": "v1.CgQIARAB.9tYw…"
+}
+```
+
+`cursor` and `page` are mutually exclusive. `nextCursor` is absent once a page comes back shorter
+than `pageSize`, which is how a traversal ends.
+
+**Why a cursor rather than a deeper page.** Offset paging has to ask *every* index node for
+`page × pageSize + pageSize` hits, because any one node could own the whole page; that is why
+`requestLimits.maxResultWindow` caps it. A cursor pins an exact position in a total order, so each
+node only has to return the `pageSize` hits after it. Page 500 costs exactly what page 1 costs, and
+`maxResultWindow` does not apply.
+
+**When a cursor is refused.** The cursor is opaque, versioned, and signed. It is rejected with an
+explicit error — never a plausible-looking wrong page — when it was tampered with, when the query,
+filters, sort, page size, or index schema changed since it was issued (`400 Bad Request`), or when
+an alias swap moved the partition to a different index generation (`412 Precondition Failed`).
+
+Cursor pagination requires `BM25` with a leading field sort. Two shapes cannot support it and say
+so explicitly:
+
+- **Ordering by `_score`.** Lucene computes BM25 from each node's *local* term statistics, so a
+  score boundary means something different on every node. Score ordering still works; it just
+  cannot be resumed.
+- **`SEMANTIC` and `HYBRID` search.** Both rank within a bounded per-node nearest-neighbour
+  candidate pool rather than a total order over the partition, so resuming past the pool would stop
+  returning documents that exist. Use offset paging for these.
+
+**Consistency under concurrent writes.** A traversal is not a snapshot. Each page reads whatever
+the shards have committed at the moment it runs, so a document indexed after the traversal started
+appears only if it sorts after the current cursor position, and a document deleted mid-traversal
+simply stops appearing. Because the ordering is total and the cursor names an exact position,
+concurrent writes never cause a *duplicate* or a skipped document among the rows that existed and
+kept their sort values for the whole traversal — only the newly written and deleted rows differ.
+Updating a document's sort field moves it, so it may be seen twice or not at all, exactly as it
+would with any non-snapshot cursor. `totalHits` is captured when the traversal starts and reported
+unchanged on every resumed page, so the denominator does not drift while a client pages through.
+
+**Partial failures.** If a node fails or times out mid-traversal, the page is still returned and
+`fanout` reports the shortfall; the hits that node would have contributed are missing from that page
+and are not recovered by continuing. Treat a `PARTIAL_FAILURE` fanout status during a traversal as a
+signal to restart it.
+
+**Cursor signing key.** `pagination.cursorSigningKey` must be identical on every query node: a
+gateway load-balances the pages of one traversal across nodes, so a per-node key makes page two fail
+signature verification. Leaving it blank generates a process-local key and logs a warning, which is
+fine only for a single-node cluster.
+
 #### Admin index schema and aliases
 
 Administrative create-index, inspect-schema, reindex, and atomic alias-swap
@@ -395,8 +473,17 @@ ml:
     textEmbedding:
       url: "djl://ai.djl.huggingface.pytorch/sentence-transformers/all-MiniLM-L6-v2"
       engine: "PyTorch"
+
+pagination:
+  # Must be identical on every query node, or a traversal breaks when the gateway
+  # routes page two elsewhere. Blank generates a process-local key and warns.
+  cursorSigningKey: ""
+  maxSortFields: 8
 ```
 
+- `pagination.cursorSigningKey` signs opaque search cursors. Set one shared value in any cluster
+  with more than one query node; see *Sorting and cursor pagination* above.
+- `pagination.maxSortFields` bounds sort components per request, before the id tie-breaker.
 - `indexNodes.routingStrategy` currently supports **`LEAST_LOADED`**, using per‑shard, per‑node doc counts.
 - `queryNodes.routingStrategy` currently supports **`ROUND_ROBIN`** for fan‑out queries across multiple query node instances.
 - With discovery enabled, index and query clients require a versioned coordinator response before
@@ -421,6 +508,10 @@ This project is intentionally minimal and educational. Some trade‑offs and pot
     index-node placement; they do not move or replicate Lucene documents.
   - Expired node leases are removed from coordinator discovery. Node removal, shard relocation,
     and data rebalancing remain manual operational work.
+- **Indexes created before field sorting need a reindex**
+  - The universal sort tie-breaker reads DocValues on the document id, which are written at index
+    time. Segments written before that existed have no such values, so documents in them cannot be
+    ordered or traversed reliably. Reindex through the alias workflow to pick them up.
 - **No rebalancing when the index-node list changes**
   - Adding or removing an entry under `indexNodes` reassigns part of the document ownership
     ring, and nothing moves the affected documents, so the change requires a reindex.

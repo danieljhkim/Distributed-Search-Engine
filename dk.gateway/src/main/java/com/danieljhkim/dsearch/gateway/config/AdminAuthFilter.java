@@ -52,8 +52,7 @@ public final class AdminAuthFilter extends OncePerRequestFilter {
     }
 
     private static boolean constantTimeEquals(String left, String right) {
-        return MessageDigest.isEqual(
-                left.getBytes(StandardCharsets.UTF_8), right.getBytes(StandardCharsets.UTF_8));
+        return MessageDigest.isEqual(left.getBytes(StandardCharsets.UTF_8), right.getBytes(StandardCharsets.UTF_8));
     }
 
     private static void writeError(HttpServletResponse response, HttpStatus status, String message) throws IOException {

@@ -4,6 +4,7 @@ import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.grpc.NodeClient;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.common.pagination.SortOptions;
 import com.danieljhkim.dsearch.common.schema.IndexSchema;
 import com.danieljhkim.dsearch.common.schema.SchemaProtoMapper;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
@@ -43,6 +44,12 @@ public class IndexService implements BaseIndexService {
 
     @Override
     public IndexSchema inspectSchema(String indexOrAlias) {
+        IndexSnapshot snapshot = inspectIndexSnapshot(indexOrAlias);
+        return snapshot == null ? null : snapshot.schema();
+    }
+
+    @Override
+    public IndexSnapshot inspectIndexSnapshot(String indexOrAlias) {
         StatusRuntimeException lastNotFound = null;
         for (NodeClient<IndexServiceGrpc.IndexServiceBlockingStub> client :
                 nodeClientManager.getClientMap().values()) {
@@ -51,7 +58,7 @@ public class IndexService implements BaseIndexService {
                         .inspectSchema(InspectSchemaRequest.newBuilder()
                                 .setIndexOrAlias(indexOrAlias)
                                 .build());
-                return SchemaProtoMapper.fromProto(response.getSchema());
+                return new IndexSnapshot(SchemaProtoMapper.fromProto(response.getSchema()), response.getGeneration());
             } catch (StatusRuntimeException e) {
                 if (e.getStatus().getCode() == Status.Code.NOT_FOUND) {
                     lastNotFound = e;
@@ -120,7 +127,43 @@ public class IndexService implements BaseIndexService {
             boolean highlight,
             List<FacetRequest> facetRequests,
             Duration deadline) {
-        return search(queryString, nodeId, shardId, 0, topK, searchType, filters, highlight, facetRequests, deadline);
+        return searchShardTopK(
+                queryString,
+                nodeId,
+                shardId,
+                topK,
+                searchType,
+                filters,
+                highlight,
+                facetRequests,
+                deadline,
+                SortOptions.NONE);
+    }
+
+    @Override
+    public SearchResult searchShardTopK(
+            String queryString,
+            String nodeId,
+            String shardId,
+            int topK,
+            SearchType searchType,
+            List<Filter> filters,
+            boolean highlight,
+            List<FacetRequest> facetRequests,
+            Duration deadline,
+            SortOptions sortOptions) {
+        return search(
+                queryString,
+                nodeId,
+                shardId,
+                0,
+                topK,
+                searchType,
+                filters,
+                highlight,
+                facetRequests,
+                deadline,
+                sortOptions);
     }
 
     private SearchResult search(
@@ -134,6 +177,32 @@ public class IndexService implements BaseIndexService {
             boolean highlight,
             List<FacetRequest> facetRequests,
             Duration deadline) {
+        return search(
+                queryString,
+                nodeId,
+                partitionId,
+                page,
+                size,
+                searchType,
+                filters,
+                highlight,
+                facetRequests,
+                deadline,
+                SortOptions.NONE);
+    }
+
+    private SearchResult search(
+            String queryString,
+            String nodeId,
+            String partitionId,
+            int page,
+            int size,
+            SearchType searchType,
+            List<Filter> filters,
+            boolean highlight,
+            List<FacetRequest> facetRequests,
+            Duration deadline,
+            SortOptions sortOptions) {
         if (!nodeClientManager.getClientMap().containsKey(nodeId)) {
             throw new IllegalArgumentException("Unknown nodeId: " + nodeId);
         }
@@ -151,6 +220,12 @@ public class IndexService implements BaseIndexService {
         }
         if (facetRequests != null) {
             grpcReqBuilder.addAllFacets(facetRequests);
+        }
+        if (sortOptions != null && sortOptions.isSorted()) {
+            grpcReqBuilder.addAllSort(sortOptions.spec().toProto());
+            if (sortOptions.hasSearchAfter()) {
+                grpcReqBuilder.addAllSearchAfter(sortOptions.searchAfter()).setHasSearchAfter(true);
+            }
         }
 
         IndexServiceGrpc.IndexServiceBlockingStub stub =

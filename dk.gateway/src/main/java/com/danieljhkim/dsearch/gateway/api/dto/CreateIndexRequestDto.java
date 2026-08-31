@@ -9,12 +9,7 @@ import lombok.Setter;
 @Getter
 @Setter
 public class CreateIndexRequestDto {
-    @NotBlank
-    @Size(max = 64)
-    @Pattern(regexp = "[A-Za-z0-9_-]+")
-    private String indexName;
+    @NotBlank @Size(max = 64) @Pattern(regexp = "[A-Za-z0-9_-]+") private String indexName;
 
-    @Size(max = 64)
-    @Pattern(regexp = "[A-Za-z0-9_-]+")
-    private String alias;
+    @Size(max = 64) @Pattern(regexp = "[A-Za-z0-9_-]+") private String alias;
 }

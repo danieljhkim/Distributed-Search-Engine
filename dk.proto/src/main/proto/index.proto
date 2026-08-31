@@ -7,6 +7,7 @@ option java_multiple_files = true;
 import "common/search_type.proto";
 import "common/filter.proto";
 import "common/facet.proto";
+import "common/sort.proto";
 
 message Field {
   string name = 1;
@@ -73,6 +74,16 @@ message IndexSearchRequest {
   repeated dsearch.common.Filter filters = 6;
   bool highlight = 7;
   repeated dsearch.common.FacetRequest facets = 8;
+  // Effective total ordering, already tie-broken by the caller. Empty means
+  // relevance order.
+  repeated dsearch.common.SortField sort = 9;
+  // Resume point, positionally matched to `sort`. When set the shard returns the
+  // first `size` hits strictly after this tuple, so a deep page never costs more
+  // than `size` hits per node.
+  repeated dsearch.common.SortValue search_after = 10;
+  // True when `search_after` is meaningful. Distinguishes a genuine resume from an
+  // absent tuple, since an empty repeated field is indistinguishable from unset.
+  bool has_search_after = 11;
 }
 
 message IndexHit {
@@ -84,6 +95,8 @@ message IndexHit {
   int32 rank = 6;
   map<string, string> highlighted_fields = 7;
   map<string, string> fields = 8;
+  // Sort tuple for this hit, positionally matched to IndexSearchRequest.sort.
+  repeated dsearch.common.SortValue sort_values = 9;
 }
 
 message IndexSearchResponse {
@@ -142,6 +155,9 @@ message InspectSchemaResponse {
   string index_name = 1;
   string alias = 2;
   IndexSchema schema = 3;
+  // Alias generation currently serving this index. Cursors bind to it so an alias
+  // swap or rollback invalidates them instead of resuming against a different index.
+  int64 generation = 4;
 }
 
 message RepresentativeQuery {

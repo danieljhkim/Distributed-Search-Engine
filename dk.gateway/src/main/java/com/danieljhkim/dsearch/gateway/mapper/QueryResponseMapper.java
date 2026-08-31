@@ -33,6 +33,10 @@ public class QueryResponseMapper {
             response.setFanout(toFanoutDto(grpcResp.getFanout()));
         }
 
+        if (!grpcResp.getNextCursor().isEmpty()) {
+            response.setNextCursor(grpcResp.getNextCursor());
+        }
+
         return response;
     }
 

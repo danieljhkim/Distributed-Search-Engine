@@ -7,6 +7,8 @@ import com.danieljhkim.dsearch.common.exception.ParseGoneWrongException;
 import com.danieljhkim.dsearch.common.model.SearchDocument;
 import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.common.pagination.SortOptions;
+import com.danieljhkim.dsearch.common.pagination.SortSpec;
 import com.danieljhkim.dsearch.common.schema.AnalyzerConfig;
 import com.danieljhkim.dsearch.common.schema.EmbeddingModelIdentity;
 import com.danieljhkim.dsearch.common.schema.FieldSchema;
@@ -16,11 +18,13 @@ import com.danieljhkim.dsearch.common.schema.IndexSchemaStore;
 import com.danieljhkim.dsearch.indexnode.index.facet.FacetCalculator;
 import com.danieljhkim.dsearch.indexnode.index.highlight.TextHighlighter;
 import com.danieljhkim.dsearch.indexnode.index.query.FilterQueryBuilder;
+import com.danieljhkim.dsearch.indexnode.index.query.LuceneSortBuilder;
 import com.danieljhkim.dsearch.ml.embedding.TextEmbedder;
 import com.danieljhkim.dsearch.ml.embedding.TextEmbeddingService;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.FacetResponse;
 import com.danieljhkim.dsearch.proto.common.Filter;
+import com.danieljhkim.dsearch.proto.common.SortValue;
 import java.io.Closeable;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -60,14 +64,18 @@ import org.apache.lucene.queryparser.classic.MultiFieldQueryParser;
 import org.apache.lucene.queryparser.classic.ParseException;
 import org.apache.lucene.search.BooleanClause;
 import org.apache.lucene.search.BooleanQuery;
+import org.apache.lucene.search.FieldDoc;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.KnnFloatVectorQuery;
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.SearcherManager;
+import org.apache.lucene.search.Sort;
 import org.apache.lucene.search.TopDocs;
+import org.apache.lucene.search.TopFieldDocs;
 import org.apache.lucene.search.TotalHitCountCollector;
+import org.apache.lucene.search.TotalHits;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 import org.apache.lucene.util.BytesRef;
@@ -96,6 +104,7 @@ public class ShardIndex implements Closeable {
 
     @Getter
     private final boolean serving;
+
     private final Directory directory;
     private final Analyzer analyzer;
     private final IndexWriter indexWriter;
@@ -280,6 +289,25 @@ public class ShardIndex implements Closeable {
             List<Filter> filters,
             boolean highlight,
             List<FacetRequest> facetRequests) {
+        return search(queryString, limit, from, filters, highlight, facetRequests, SortOptions.NONE);
+    }
+
+    /**
+     * Search with filters, highlighting, facets, and an explicit ordering.
+     *
+     * <p>When {@code sortOptions} carries a resume point the shard collects only {@code limit}
+     * hits strictly after it, so the cost of a page does not grow with how deep the traversal has
+     * gone. Without one it falls back to collecting {@code limit + from} and slicing, which is what
+     * legacy offset paging needs.
+     */
+    public SearchResult search(
+            String queryString,
+            int limit,
+            int from,
+            List<Filter> filters,
+            boolean highlight,
+            List<FacetRequest> facetRequests,
+            SortOptions sortOptions) {
         IndexSearcher searcher = null;
         try {
             searcher = searcherManager.acquire();
@@ -288,7 +316,8 @@ public class ShardIndex implements Closeable {
 
             // Combine text query with filters
             Query combinedQuery = combineWithFilters(textQuery, filters);
-            TopDocs topDocs = searcher.search(combinedQuery, limit + from);
+            SortOptions effectiveSort = sortOptions == null ? SortOptions.NONE : sortOptions;
+            TopDocs topDocs = collectTopDocs(searcher, combinedQuery, limit, from, effectiveSort);
             int totalHits = getTotalHits(searcher, combinedQuery);
 
             // Compute facets if requested
@@ -297,8 +326,9 @@ public class ShardIndex implements Closeable {
                 facets = facetCalculator.computeFacets(searcher, combinedQuery, facetRequests);
             }
 
-            SearchResult result =
-                    buildPagedResult(searcher, topDocs, limit, from, totalHits, highlight ? textQuery : null);
+            int sliceFrom = effectiveSort.hasSearchAfter() ? 0 : from;
+            SearchResult result = buildPagedResult(
+                    searcher, topDocs, limit, sliceFrom, totalHits, highlight ? textQuery : null, effectiveSort.spec());
             result.setFacets(facets);
             return result;
         } catch (IOException e) {
@@ -340,7 +370,6 @@ public class ShardIndex implements Closeable {
     /**
      * Semantic kNN search with filters, highlighting, and facets.
      */
-    @SuppressWarnings("all")
     public SearchResult semanticSearch(
             String queryText,
             int limit,
@@ -348,6 +377,26 @@ public class ShardIndex implements Closeable {
             List<Filter> filters,
             boolean highlight,
             List<FacetRequest> facetRequests) {
+        return semanticSearch(queryText, limit, from, filters, highlight, facetRequests, SortOptions.NONE);
+    }
+
+    /**
+     * Semantic kNN search with an explicit ordering.
+     *
+     * <p>The ordering is applied to the kNN candidate pool, not to the whole partition: kNN
+     * retrieves the nearest {@code limit + from} vectors and the sort reorders those. That is why
+     * cursor pagination is refused for semantic search upstream — resuming past the end of a fixed
+     * candidate pool would silently stop returning results that exist.
+     */
+    @SuppressWarnings("all")
+    public SearchResult semanticSearch(
+            String queryText,
+            int limit,
+            int from,
+            List<Filter> filters,
+            boolean highlight,
+            List<FacetRequest> facetRequests,
+            SortOptions sortOptions) {
         IndexSearcher searcher = null;
         try {
             float[] queryEmbedding = embeddingService.embed(queryText);
@@ -370,7 +419,8 @@ public class ShardIndex implements Closeable {
                     : new KnnFloatVectorQuery(FIELD_EMBEDDING, queryEmbedding, limit + from);
 
             searcher = searcherManager.acquire();
-            TopDocs topDocs = searcher.search(knnQuery, limit + from);
+            SortOptions effectiveSort = sortOptions == null ? SortOptions.NONE : sortOptions;
+            TopDocs topDocs = collectTopDocs(searcher, knnQuery, limit, from, effectiveSort);
             int totalHits = getTotalHits(searcher, knnQuery);
 
             Query highlightQuery = null;
@@ -389,7 +439,8 @@ public class ShardIndex implements Closeable {
                 facets = facetCalculator.computeFacets(searcher, knnQuery, facetRequests);
             }
 
-            SearchResult result = buildPagedResult(searcher, topDocs, limit, from, totalHits, highlightQuery);
+            SearchResult result =
+                    buildPagedResult(searcher, topDocs, limit, from, totalHits, highlightQuery, effectiveSort.spec());
             result.setFacets(facets);
             return result;
         } catch (IOException e) {
@@ -419,9 +470,44 @@ public class ShardIndex implements Closeable {
                 .build();
     }
 
+    /**
+     * Runs the collection phase under the requested ordering.
+     *
+     * <p>Three shapes, in increasing specificity: unsorted keeps the existing relevance path;
+     * sorted-from-the-top collects {@code limit + from} so the caller can still slice an offset
+     * page; sorted-with-a-resume-point collects exactly {@code limit}, which is what makes deep
+     * paging cost the same as the first page.
+     */
+    private TopDocs collectTopDocs(IndexSearcher searcher, Query query, int limit, int from, SortOptions sortOptions)
+            throws IOException {
+        if (!sortOptions.isSorted()) {
+            return searcher.search(query, limit + from);
+        }
+        Sort sort = LuceneSortBuilder.toLuceneSort(sortOptions.spec(), FIELD_ID, fieldConfigMap);
+        if (!sortOptions.hasSearchAfter()) {
+            // doDocScores keeps hit.score meaningful for display even when ordering ignores it.
+            return searcher.search(query, limit + from, sort, true);
+        }
+        int maxDoc = searcher.getIndexReader().maxDoc();
+        if (maxDoc == 0) {
+            // searchAfter rejects a resume marker against an empty reader, and an empty shard has
+            // nothing after any position anyway.
+            return new TopFieldDocs(new TotalHits(0, TotalHits.Relation.EQUAL_TO), new ScoreDoc[0], sort.getSort());
+        }
+        FieldDoc after = LuceneSortBuilder.toSearchAfter(
+                sortOptions.spec(), sortOptions.searchAfter(), FIELD_ID, fieldConfigMap, maxDoc);
+        return searcher.searchAfter(after, query, limit, sort, true);
+    }
+
     @SuppressWarnings("all")
     private SearchResult buildPagedResult(
-            IndexSearcher searcher, TopDocs topDocs, int limit, int from, int totalHits, Query highlightQuery)
+            IndexSearcher searcher,
+            TopDocs topDocs,
+            int limit,
+            int from,
+            int totalHits,
+            Query highlightQuery,
+            SortSpec sortSpec)
             throws IOException {
         ScoreDoc[] scoreDocs = topDocs.scoreDocs;
 
@@ -468,14 +554,27 @@ public class ShardIndex implements Closeable {
             }
 
             Map<String, String> fieldsMap = fields.isEmpty() ? null : fields;
-            if (highlightedFields != null && !highlightedFields.isEmpty()) {
-                hits.add(new SearchHit(docId, title, content, sd.score, highlightedFields, fieldsMap));
-            } else {
-                hits.add(new SearchHit(docId, title, content, sd.score, null, fieldsMap));
-            }
+            Map<String, String> highlightsMap =
+                    highlightedFields != null && !highlightedFields.isEmpty() ? highlightedFields : null;
+            List<SortValue> sortValues = extractSortValues(sortSpec, sd);
+            hits.add(new SearchHit(docId, title, content, sd.score, highlightsMap, fieldsMap, sortValues));
         }
 
         return new SearchResult(hits, totalHits);
+    }
+
+    /**
+     * Sort tuple for one collected hit, or null under relevance ordering.
+     *
+     * <p>A sorted collection always yields {@link FieldDoc}s; the defensive null keeps an
+     * unexpected collector from failing the whole page, since the tuple is only used for ordering
+     * and cursor issuance, both of which degrade safely.
+     */
+    private List<SortValue> extractSortValues(SortSpec sortSpec, ScoreDoc scoreDoc) {
+        if (sortSpec == null || sortSpec.isUnsorted() || !(scoreDoc instanceof FieldDoc fieldDoc)) {
+            return null;
+        }
+        return LuceneSortBuilder.toSortValues(sortSpec, fieldDoc, FIELD_ID, fieldConfigMap);
     }
 
     /**
@@ -569,7 +668,9 @@ public class ShardIndex implements Closeable {
         EmbeddingModelIdentity identity = embeddingService.identity();
         List<FieldSchema> fields = new ArrayList<>();
         for (FieldConfig fieldConfig : fieldConfigMap.values()) {
-            if (fieldConfig != null && fieldConfig.getName() != null && !fieldConfig.getName().isBlank()) {
+            if (fieldConfig != null
+                    && fieldConfig.getName() != null
+                    && !fieldConfig.getName().isBlank()) {
                 fields.add(FieldSchema.from(fieldConfig));
             }
         }
@@ -582,6 +683,9 @@ public class ShardIndex implements Closeable {
 
         // 1) ID: stored, not tokenized
         luceneDoc.add(new StringField(FIELD_ID, doc.getId(), Field.Store.YES));
+        // DocValues on the id back the universal sort tie-breaker. Without them no ordering could
+        // be made total, and cursor pagination would repeat or drop documents that tie.
+        luceneDoc.add(new SortedDocValuesField(FIELD_ID, new BytesRef(doc.getId())));
 
         // 2) Build combined text from all fields (excluding id)
         StringBuilder contentBuilder = new StringBuilder();

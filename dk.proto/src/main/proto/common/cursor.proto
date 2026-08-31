@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package dsearch.common;
+
+option java_package = "com.danieljhkim.dsearch.proto.common";
+option java_multiple_files = true;
+import "common/sort.proto";
+
+// Wire form of an opaque pagination cursor. Clients never see this message: it is
+// serialized, signed, and rendered as a single opaque string by SearchCursorCodec.
+message SearchCursorPayload {
+  // Cursor format version. A reader rejects any version it does not implement.
+  int32 version = 1;
+  // SHA-256 over the normalized query, partition, search type, fusion strategy,
+  // filters, effective sort, page size, and schema fingerprint. Any drift in those
+  // inputs makes the cursor unusable rather than silently wrong.
+  bytes request_fingerprint = 2;
+  // Alias generation the cursor was issued against. A swap or rollback invalidates it.
+  int64 index_generation = 3;
+  // Sort tuple of the last hit already delivered, positionally matched to the
+  // effective sort. Resuming asks each node for hits strictly after this tuple.
+  repeated SortValue sort_values = 4;
+  // Total hits observed when the cursor was issued, carried forward so a resumed
+  // page can report the same denominator it started with.
+  int64 total_hits = 5;
+}
