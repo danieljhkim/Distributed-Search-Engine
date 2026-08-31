@@ -48,6 +48,9 @@ jobs:
       - name: Benchmark harness contract
         run: make -C benchmark check
 
+      - name: Recovery manifest contract
+        run: scripts/test-dsearch-recovery-manifest.sh
+
       - name: Upload JaCoCo reports
         if: always()
         uses: actions/upload-artifact@v7
@@ -60,7 +63,7 @@ jobs:
 
   docker-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -71,8 +74,8 @@ jobs:
           DSEARCH_E2E_DIAGNOSTICS: ${{ runner.temp }}/dsearch-e2e-diagnostics
         run: scripts/docker-cluster-e2e.sh
 
-      - name: Upload Docker cluster diagnostics
-        if: failure()
+      - name: Upload Docker cluster diagnostics and recovery evidence
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: docker-cluster-diagnostics
