@@ -31,6 +31,7 @@ import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
 import io.grpc.ManagedChannel;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -169,6 +170,20 @@ class GatewayIndexServiceTest {
     }
 
     @Test
+    void indexRejectsNullFieldValuesBeforeOwnerLookup() {
+        Map<String, String> fields = new LinkedHashMap<>();
+        fields.put("title", null);
+        IndexRequestDto request = indexRequest("doc-1", fields);
+
+        assertThatThrownBy(() -> service.index(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("field value must not be null");
+
+        verify(indexNodeClientManager, never()).ownerClient(any(), any());
+        verify(indexStub, never()).indexDocument(any(IndexDocumentRequest.class));
+    }
+
+    @Test
     void deleteRoutesToTheOwnerAndDecrementsOnce() {
         ownerClient.incrementDocToShard("tenant-a");
         when(indexNodeClientManager.ownerClient("tenant-a", "doc-9")).thenReturn(ownerClient);
@@ -279,6 +294,32 @@ class GatewayIndexServiceTest {
                 .extracting(item -> item.getStatus())
                 .containsExactly("validation_failure", "success");
         verify(indexStub).bulkIndexDocument(any(BulkIndexDocumentRequest.class));
+    }
+
+    @Test
+    void bulkReportsNullFieldValuesWithoutPreventingValidItems() {
+        Map<String, String> invalidFields = new LinkedHashMap<>();
+        invalidFields.put("title", null);
+        IndexRequestDto invalid = indexRequest("doc-1", invalidFields);
+        IndexRequestDto valid = indexRequest("doc-2", Map.of("title", "valid"));
+        when(indexNodeClientManager.ownerClient("default", "doc-2")).thenReturn(ownerClient);
+        when(indexStub.bulkIndexDocument(any(BulkIndexDocumentRequest.class)))
+                .thenReturn(successfulBulkResult(0, "doc-2"));
+
+        BulkIndexResponseDto response = service.bulkIndex(bulkRequest(null, invalid, valid));
+
+        assertThat(response.isSuccess()).isFalse();
+        assertThat(response.getItems())
+                .extracting(item -> item.getStatus())
+                .containsExactly("validation_failure", "success");
+        assertThat(response.getItems().getFirst().getError()).isEqualTo("field value must not be null");
+        verify(indexNodeClientManager, never()).ownerClient("default", "doc-1");
+        ArgumentCaptor<BulkIndexDocumentRequest> requestCaptor =
+                ArgumentCaptor.forClass(BulkIndexDocumentRequest.class);
+        verify(indexStub).bulkIndexDocument(requestCaptor.capture());
+        assertThat(requestCaptor.getValue().getDocumentsList())
+                .extracting(document -> document.getId())
+                .containsExactly("doc-2");
     }
 
     @Test

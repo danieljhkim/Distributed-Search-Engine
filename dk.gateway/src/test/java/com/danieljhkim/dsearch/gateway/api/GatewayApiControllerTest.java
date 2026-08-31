@@ -106,6 +106,28 @@ class GatewayApiControllerTest {
     }
 
     @Test
+    void indexDocumentMapsNullFieldValueValidationToBadRequest() throws Exception {
+        when(indexService.index(any(IndexRequestDto.class)))
+                .thenThrow(new IllegalArgumentException("field value must not be null"));
+
+        mockMvc.perform(post("/api/v1/index")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "id": "doc-1",
+                                  "fields": {"title": null}
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").value("field value must not be null"))
+                .andExpect(jsonPath("$.path").value("/api/v1/index"));
+
+        verify(indexService).index(any(IndexRequestDto.class));
+    }
+
+    @Test
     void bulkIndexPreservesOrderedItemOutcomesAtTheVersionedEndpoint() throws Exception {
         when(indexService.bulkIndex(any(BulkIndexRequestDto.class)))
                 .thenReturn(new BulkIndexResponseDto(
