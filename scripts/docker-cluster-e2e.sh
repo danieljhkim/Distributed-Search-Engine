@@ -11,6 +11,7 @@ diagnostics_dir=${DSEARCH_E2E_DIAGNOSTICS:-"$repo_root/target/docker-e2e-diagnos
 tls_root=$(mktemp -d "${TMPDIR:-/tmp}/dsearch-e2e-tls.XXXXXX")
 compose=(docker compose --project-name "$project_name" --file "$compose_file")
 compose_started=false
+prebuilt_images=false
 
 HTTP_STATUS=
 HTTP_BODY=
@@ -67,6 +68,62 @@ done
 docker info >/dev/null
 docker compose version >/dev/null
 
+image_variables=(
+  DSEARCH_COORDINATOR_IMAGE
+  DSEARCH_GATEWAY_IMAGE
+  DSEARCH_QUERY_NODE_IMAGE
+  DSEARCH_INDEX_NODE_IMAGE
+)
+configured_image_count=0
+for variable in "${image_variables[@]}"; do
+  if [[ -n "${!variable:-}" ]]; then
+    configured_image_count=$((configured_image_count + 1))
+    [[ "${!variable}" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]] \
+      || fail "$variable must be an exact image digest reference, got: ${!variable}"
+  fi
+done
+if ((configured_image_count != 0 && configured_image_count != ${#image_variables[@]})); then
+  fail "set all four DSEARCH_*_IMAGE variables or none of them"
+fi
+if ((configured_image_count == ${#image_variables[@]})); then
+  prebuilt_images=true
+fi
+
+assert_hardened_container() {
+  local service=$1
+  local expected_image=${2:-}
+  local container_id
+  container_id=$("${compose[@]}" ps --quiet "$service")
+  [[ -n "$container_id" ]] || fail "$service container id is unavailable"
+
+  [[ "$(docker inspect --format '{{.Config.User}}' "$container_id")" == "10001:10001" ]] \
+    || fail "$service is not running as UID/GID 10001:10001"
+  [[ "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$container_id")" == "true" ]] \
+    || fail "$service root filesystem is not read-only"
+  docker inspect --format '{{json .HostConfig.CapDrop}}' "$container_id" | jq -e \
+    'map(ascii_upcase) | index("ALL") != null' >/dev/null \
+    || fail "$service does not drop all Linux capabilities"
+  docker inspect --format '{{json .HostConfig.SecurityOpt}}' "$container_id" | jq -e \
+    'map(ascii_downcase) | any(startswith("no-new-privileges"))' >/dev/null \
+    || fail "$service does not enforce no-new-privileges"
+  docker inspect --format '{{json .HostConfig.Tmpfs}}' "$container_id" | jq -e \
+    'has("/tmp")' >/dev/null \
+    || fail "$service does not use an explicit writable /tmp tmpfs"
+
+  if [[ -n "$expected_image" ]]; then
+    [[ "$(docker inspect --format '{{.Config.Image}}' "$container_id")" == "$expected_image" ]] \
+      || fail "$service did not start from the requested exact digest $expected_image"
+  fi
+}
+
+assert_writable_path() {
+  local service=$1
+  local path=$2
+  "${compose[@]}" exec --no-TTY "$service" sh -eu -c \
+    'probe="$1/.dsearch-write-probe"; : > "$probe"; rm "$probe"' sh "$path" \
+    || fail "$service cannot write its documented mount $path as the hardened user"
+}
+
 generate_ca() {
   openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 1 \
     -subj "/CN=dsearch-e2e-ca" \
@@ -99,7 +156,9 @@ generate_identity() {
     -extfile "$extension_file" \
     -out "$service_dir/tls.crt" >/dev/null 2>&1
   cp "$tls_root/ca.crt" "$service_dir/ca.crt"
-  chmod 600 "$service_dir/tls.key"
+  # The short-lived key is mounted read-only and must be readable by the fixed
+  # 10001:10001 container identity even when the host runner uses another UID.
+  chmod 0444 "$service_dir/tls.key"
 }
 
 http_request() {
@@ -247,15 +306,47 @@ generate_identity index-node-0 dsearch-index-0 spiffe://dsearch/node/index/in0
 generate_identity index-node-1 dsearch-index-1 spiffe://dsearch/node/index/in1
 export DSEARCH_TLS_DIR="$tls_root"
 
-log "Rendering Compose configuration and building every service image"
+log "Rendering Compose configuration"
 "${compose[@]}" config --quiet
-"${compose[@]}" build
+if [[ "$prebuilt_images" == "true" ]]; then
+  log "Pulling the four prebuilt release digests"
+  "${compose[@]}" pull
+else
+  log "Building every service image locally"
+  "${compose[@]}" build
+fi
 
 log "Starting the Docker topology"
 compose_started=true
 "${compose[@]}" up --detach --no-build
 await_gateway_ready 420
 await_cluster_index_count 2 30
+
+log "Verifying hardened identity, filesystems, capabilities, and exact release images"
+assert_hardened_container coordinator "${DSEARCH_COORDINATOR_IMAGE:-}"
+assert_hardened_container gateway "${DSEARCH_GATEWAY_IMAGE:-}"
+assert_hardened_container query-node-0 "${DSEARCH_QUERY_NODE_IMAGE:-}"
+assert_hardened_container index-node-0 "${DSEARCH_INDEX_NODE_IMAGE:-}"
+assert_hardened_container index-node-1 "${DSEARCH_INDEX_NODE_IMAGE:-}"
+assert_writable_path coordinator /data
+assert_writable_path query-node-0 /var/cache/dsearch
+assert_writable_path index-node-0 /data/index
+assert_writable_path index-node-0 /var/cache/dsearch
+assert_writable_path index-node-1 /data/index
+assert_writable_path index-node-1 /var/cache/dsearch
+
+log "Verifying graceful shutdown and restart under the hardened runtime"
+query_container_id=$("${compose[@]}" ps --quiet query-node-0)
+"${compose[@]}" stop --timeout 20 query-node-0
+query_exit_code=$(docker inspect --format '{{.State.ExitCode}}' "$query_container_id")
+[[ "$query_exit_code" == "0" || "$query_exit_code" == "143" ]] \
+  || fail "query-node-0 returned unexpected exit code $query_exit_code after SIGTERM"
+[[ "$(docker inspect --format '{{.State.OOMKilled}}' "$query_container_id")" == "false" ]] \
+  || fail "query-node-0 was OOM-killed during graceful shutdown"
+"${compose[@]}" logs --no-color query-node-0 | grep -F 'Shutting down QueryNode gRPC server' >/dev/null \
+  || fail "query-node-0 did not run its graceful shutdown hook"
+"${compose[@]}" start query-node-0
+await_gateway_ready 180
 
 log "Indexing the bounded end-to-end dataset"
 index_document_success doc-lucene 'Lucene cluster guide' 'distributed lucene search gateway ownership' docs 2025

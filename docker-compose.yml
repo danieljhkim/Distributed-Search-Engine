@@ -1,5 +1,3 @@
-version: "3.9"
-
 name: dsearch
 
 networks:
@@ -7,19 +5,27 @@ networks:
 
 volumes:
   coordinator-state:
+  querynode0-model-cache:
   indexnode0-data:
+  indexnode0-model-cache:
   indexnode1-data:
+  indexnode1-model-cache:
 
 services:
   coordinator:
-    # If building locally:
+    image: ${DSEARCH_COORDINATOR_IMAGE:-dsearch/dk.coordinator:local}
     build:
       context: .
       dockerfile: dk.coordinator/Dockerfile
-    # If using GHCR instead, comment build and uncomment image:
-    # image: ghcr.io/<owner>/<repo>/dk.coordinator:latest
-
     container_name: dsearch-coordinator
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
     networks:
       dsearch-net:
         aliases:
@@ -30,16 +36,25 @@ services:
       APP_CONFIG_PATH: "app-config.docker.yaml"
       COORDINATOR_STATE_FILE: "/data/coordinator-topology.properties"
     restart: unless-stopped
+    stop_grace_period: 20s
     volumes:
       - coordinator-state:/data
       - "${DSEARCH_TLS_DIR:?set DSEARCH_TLS_DIR to a directory containing per-service certificates}/coordinator:/etc/dsearch/tls:ro"
 
   gateway:
+    image: ${DSEARCH_GATEWAY_IMAGE:-dsearch/dk.gateway:local}
     build:
       context: .
       dockerfile: dk.gateway/Dockerfile
-
     container_name: dsearch-gateway
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
     networks:
       dsearch-net:
         aliases:
@@ -55,14 +70,24 @@ services:
     depends_on:
       - coordinator
     restart: unless-stopped
+    stop_grace_period: 20s
     volumes:
       - "${DSEARCH_TLS_DIR:?set DSEARCH_TLS_DIR to a directory containing per-service certificates}/gateway:/etc/dsearch/tls:ro"
 
   query-node-0:
+    image: ${DSEARCH_QUERY_NODE_IMAGE:-dsearch/dk.query-node:local}
     build:
       context: .
       dockerfile: dk.query-node/Dockerfile
     container_name: dsearch-query-0
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m
     networks:
       dsearch-net:
         aliases:
@@ -72,18 +97,30 @@ services:
       QUERY_NODE_PORT: "50052"
       QUERY_NODE_HEALTH_PORT: "8081"
       APP_CONFIG_PATH: "app-config.docker.yaml"
+      DJL_CACHE_DIR: "/var/cache/dsearch/djl"
     depends_on:
       - coordinator
       - gateway
     restart: unless-stopped
+    stop_grace_period: 20s
     volumes:
+      - querynode0-model-cache:/var/cache/dsearch
       - "${DSEARCH_TLS_DIR:?set DSEARCH_TLS_DIR to a directory containing per-service certificates}/query-node-0:/etc/dsearch/tls:ro"
 
   index-node-0:
+    image: ${DSEARCH_INDEX_NODE_IMAGE:-dsearch/dk.index-node:local}
     build:
       context: .
       dockerfile: dk.index-node/Dockerfile
     container_name: dsearch-index-0
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m
     networks:
       dsearch-net:
         aliases:
@@ -95,18 +132,30 @@ services:
       # Where Lucene shards live (your code uses baseDir; map that to this)
       INDEX_NODE_BASE_DIR: "/data/index"
       APP_CONFIG_PATH: "app-config.docker.yaml"
+      DJL_CACHE_DIR: "/var/cache/dsearch/djl"
     volumes:
       - indexnode0-data:/data/index
+      - indexnode0-model-cache:/var/cache/dsearch
       - "${DSEARCH_TLS_DIR:?set DSEARCH_TLS_DIR to a directory containing per-service certificates}/index-node-0:/etc/dsearch/tls:ro"
     depends_on:
       - coordinator
     restart: unless-stopped
+    stop_grace_period: 20s
 
   index-node-1:
+    image: ${DSEARCH_INDEX_NODE_IMAGE:-dsearch/dk.index-node:local}
     build:
       context: .
       dockerfile: dk.index-node/Dockerfile
     container_name: dsearch-index-1
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m
     networks:
       dsearch-net:
         aliases:
@@ -117,9 +166,12 @@ services:
       INDEX_NODE_HEALTH_PORT: "8090"
       INDEX_NODE_BASE_DIR: "/data/index"
       APP_CONFIG_PATH: "app-config.docker.yaml"
+      DJL_CACHE_DIR: "/var/cache/dsearch/djl"
     volumes:
       - indexnode1-data:/data/index
+      - indexnode1-model-cache:/var/cache/dsearch
       - "${DSEARCH_TLS_DIR:?set DSEARCH_TLS_DIR to a directory containing per-service certificates}/index-node-1:/etc/dsearch/tls:ro"
     depends_on:
       - coordinator
     restart: unless-stopped
+    stop_grace_period: 20s

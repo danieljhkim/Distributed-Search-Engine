@@ -5,25 +5,117 @@ on:
     tags:
       - "v*.*.*"
 
+concurrency:
+  group: docker-release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
   packages: write
+  id-token: write
+  attestations: write
+
+env:
+  REGISTRY: ghcr.io
 
 jobs:
-  publish:
+  verify-release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      image_tag: ${{ steps.release.outputs.image_tag }}
+      is_rc: ${{ steps.release.outputs.is_rc }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Verify source, Maven, and release identity
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=${GITHUB_REF_NAME}
+          version=${tag#v}
+
+          if [[ "$tag" == "$version" || -z "$version" || "$version" == */* ]]; then
+            echo "Release tags must use the v<version> form; got $tag" >&2
+            exit 1
+          fi
+
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Release tag $tag must point to a commit reachable from main" >&2
+            exit 1
+          fi
+
+          maven_version=$(mvn -B -ntp help:evaluate -Dexpression=project.version -DforceStdout -q | tail -n 1)
+          if [[ "$maven_version" == *-SNAPSHOT ]]; then
+            echo "Release tag $tag cannot publish Maven snapshot version $maven_version" >&2
+            exit 1
+          fi
+          if [[ "$version" != "$maven_version" ]]; then
+            echo "Release tag $tag does not match Maven version $maven_version" >&2
+            exit 1
+          fi
+
+          is_rc=false
+          if [[ "$version" =~ (^|[-.])[Rr][Cc]([0-9].*)?$ ]]; then
+            is_rc=true
+          fi
+          {
+            echo "version=$maven_version"
+            echo "image_tag=$maven_version"
+            echo "is_rc=$is_rc"
+          } >>"$GITHUB_OUTPUT"
+
+          mkdir -p release-evidence
+          jq -n \
+            --arg source_tag "$tag" \
+            --arg source_commit "$GITHUB_SHA" \
+            --arg maven_version "$maven_version" \
+            --arg image_tag "$maven_version" \
+            '{sourceTag:$source_tag,sourceCommit:$source_commit,mavenVersion:$maven_version,imageTag:$image_tag}' \
+            >release-evidence/release-identity.json
+
+      - name: Run Maven release verification
+        run: mvn -B -ntp spotless:check verify
+
+      - name: Record Maven evidence
+        shell: bash
+        run: |
+          jq -n --arg source_commit "$GITHUB_SHA" --arg result passed \
+            '{sourceCommit:$source_commit,mavenVerification:$result}' \
+            >release-evidence/maven-verification.json
+
+      - name: Upload release identity and Maven evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-identity
+          path: release-evidence/
+          if-no-files-found: error
+          retention-days: 90
+
+  build:
+    needs: verify-release
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         service:
           - dk.index-node
           - dk.query-node
           - dk.coordinator
           - dk.gateway
-
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -36,75 +128,274 @@ jobs:
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Verify main release identity
-        id: release
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          VERSION="${TAG#v}"
-
-          if [[ "$TAG" == "$VERSION" || -z "$VERSION" || "$VERSION" == *"/"* ]]; then
-            echo "Release tags must use the v<version> form; got $TAG" >&2
-            exit 1
-          fi
-
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "Release tag $TAG must point to a commit reachable from main" >&2
-            exit 1
-          fi
-
-          MAVEN_VERSION="$(mvn -B -ntp help:evaluate -Dexpression=project.version -DforceStdout -q | tail -n 1)"
-          if [[ "$MAVEN_VERSION" == *-SNAPSHOT ]]; then
-            echo "Release tag $TAG cannot publish Maven snapshot version $MAVEN_VERSION" >&2
-            exit 1
-          fi
-          if [[ "$VERSION" != "$MAVEN_VERSION" ]]; then
-            echo "Release tag $TAG does not match Maven version $MAVEN_VERSION" >&2
-            exit 1
-          fi
-
-          IMAGE_TAG="$MAVEN_VERSION"
-          if [[ "$IMAGE_TAG" != "$VERSION" ]]; then
-            echo "Image tag $IMAGE_TAG does not match release version $VERSION" >&2
-            exit 1
-          fi
-          echo "version=$MAVEN_VERSION" >> "$GITHUB_OUTPUT"
-          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Compute image tags
-        id: tags
-        shell: bash
-        run: |
-          TAG="${{ steps.release.outputs.image_tag }}"
-
-          # Always publish an immutable, versioned tag.
-          VERSIONED="ghcr.io/${{ github.repository }}/${{ matrix.service }}:${TAG}"
-
-          # Only publish :latest for non-RC tags.
-          # (Treat tags containing "-rc" / "-RC" as release candidates.)
-          if echo "$TAG" | grep -Eiq '(^|[-.])rc([0-9].*)?$|[-.]rc'; then
-            echo "TAGS=${VERSIONED}" >> "$GITHUB_OUTPUT"
-          else
-            LATEST="ghcr.io/${{ github.repository }}/${{ matrix.service }}:latest"
-            {
-              echo "TAGS<<EOF"
-              echo "$VERSIONED"
-              echo "$LATEST"
-              echo "EOF"
-            } >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Build and push
+      - name: Build and push one candidate image
+        id: image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./${{ matrix.service }}/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.tags.outputs.TAGS }}
+          tags: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.service }}:build-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.verify-release.outputs.version }}
+            org.opencontainers.image.title=${{ matrix.service }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Capture exact image digest
+        shell: bash
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          mkdir -p release-evidence
+          printf '%s\n' "$IMAGE_DIGEST" >"release-evidence/${{ matrix.service }}.digest"
+
+      - name: Generate SPDX SBOM for the exact image
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.service }}@${{ steps.image.outputs.digest }}
+          format: spdx-json
+          output-file: release-evidence/${{ matrix.service }}.spdx.json
+          upload-artifact: false
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.service }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest SPDX SBOM
+        uses: actions/attest-sbom@v3
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.service }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          sbom-path: release-evidence/${{ matrix.service }}.spdx.json
+          push-to-registry: true
+
+      - name: Upload per-image evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.service }}
+          path: release-evidence/
+          if-no-files-found: error
+          retention-days: 90
+
+  validate-sign-promote:
+    needs:
+      - verify-release
+      - build
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      VERSION: ${{ needs.verify-release.outputs.version }}
+      IS_RC: ${{ needs.verify-release.outputs.is_rc }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@v0.2.4
+
+      - name: Download release identity
+        uses: actions/download-artifact@v5
+        with:
+          name: release-identity
+          path: release-evidence
+
+      - name: Download image evidence
+        uses: actions/download-artifact@v5
+        with:
+          pattern: release-dk.*
+          path: release-evidence
+          merge-multiple: true
+
+      - name: Reconcile release identity and exact image subjects
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e \
+            --arg tag "$GITHUB_REF_NAME" \
+            --arg commit "$GITHUB_SHA" \
+            --arg version "$VERSION" \
+            '.sourceTag == $tag and .sourceCommit == $commit and .mavenVersion == $version and .imageTag == $version' \
+            release-evidence/release-identity.json >/dev/null
+          jq -e --arg commit "$GITHUB_SHA" \
+            '.sourceCommit == $commit and .mavenVerification == "passed"' \
+            release-evidence/maven-verification.json >/dev/null
+
+          : >release-evidence/images.env
+          : >release-evidence/release-manifest.jsonl
+          for service in dk.index-node dk.query-node dk.coordinator dk.gateway; do
+            digest=$(<"release-evidence/$service.digest")
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+              echo "Invalid or missing digest for $service: $digest" >&2
+              exit 1
+            }
+            image="$REGISTRY/$GITHUB_REPOSITORY/$service"
+            reference="$image@$digest"
+            variable=$(printf 'DSEARCH_%s_IMAGE' "${service#dk.}" | tr '[:lower:].-' '[:upper:]__')
+            printf '%s=%s\n' "$variable" "$reference" | tee -a "$GITHUB_ENV" >>release-evidence/images.env
+            jq -n \
+              --arg service "$service" \
+              --arg image "$image" \
+              --arg digest "$digest" \
+              --arg source_commit "$GITHUB_SHA" \
+              --arg release_version "$VERSION" \
+              '{service:$service,image:$image,digest:$digest,sourceCommit:$source_commit,releaseVersion:$release_version}' \
+              >>release-evidence/release-manifest.jsonl
+            jq -e '.spdxVersion | startswith("SPDX-")' "release-evidence/$service.spdx.json" >/dev/null
+          done
+          jq -s . release-evidence/release-manifest.jsonl >release-evidence/release-manifest.json
+
+      - name: Verify signed provenance and SBOM attestations
+        shell: bash
+        run: |
+          set -euo pipefail
+          source release-evidence/images.env
+          verify_args=(
+            --repo "$GITHUB_REPOSITORY"
+            --bundle-from-oci
+            --source-digest "$GITHUB_SHA"
+            --source-ref "$GITHUB_REF"
+          )
+          for reference in \
+            "$DSEARCH_INDEX_NODE_IMAGE" \
+            "$DSEARCH_QUERY_NODE_IMAGE" \
+            "$DSEARCH_COORDINATOR_IMAGE" \
+            "$DSEARCH_GATEWAY_IMAGE"; do
+            gh attestation verify "oci://$reference" \
+              "${verify_args[@]}" \
+              --predicate-type https://slsa.dev/provenance/v1
+            gh attestation verify "oci://$reference" \
+              "${verify_args[@]}" \
+              --predicate-type https://spdx.dev/Document
+          done
+
+      - name: Verify exact image labels match the release
+        shell: bash
+        run: |
+          set -euo pipefail
+          source release-evidence/images.env
+          for service in dk.index-node dk.query-node dk.coordinator dk.gateway; do
+            variable=$(printf 'DSEARCH_%s_IMAGE' "${service#dk.}" | tr '[:lower:].-' '[:upper:]__')
+            reference=${!variable}
+            docker pull "$reference"
+            docker image inspect "$reference" | jq -e \
+              --arg source "https://github.com/$GITHUB_REPOSITORY" \
+              --arg commit "$GITHUB_SHA" \
+              --arg version "$VERSION" \
+              --arg service "$service" \
+              '.[0].Config.Labels["org.opencontainers.image.source"] == $source
+                and .[0].Config.Labels["org.opencontainers.image.revision"] == $commit
+                and .[0].Config.Labels["org.opencontainers.image.version"] == $version
+                and .[0].Config.Labels["org.opencontainers.image.title"] == $service' >/dev/null
+          done
+
+      - name: Enforce vulnerability policy on exact image digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          source release-evidence/images.env
+          for service in dk.index-node dk.query-node dk.coordinator dk.gateway; do
+            variable=$(printf 'DSEARCH_%s_IMAGE' "${service#dk.}" | tr '[:lower:].-' '[:upper:]__')
+            reference=${!variable}
+            trivy image --scanners vuln --severity CRITICAL --exit-code 1 \
+              --ignorefile .trivyignore.yaml --format json \
+              --output "release-evidence/$service.trivy.json" "$reference"
+          done
+
+      - name: Run hardened Docker end-to-end gate against exact digests
+        run: scripts/docker-cluster-e2e.sh
+
+      - name: Record Docker gate evidence
+        shell: bash
+        run: |
+          jq -n \
+            --arg source_commit "$GITHUB_SHA" \
+            --arg release_version "$VERSION" \
+            --arg result passed \
+            '{sourceCommit:$source_commit,releaseVersion:$release_version,dockerEndToEnd:$result}' \
+            >release-evidence/docker-e2e.json
+
+      - name: Sign and verify exact image digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          source release-evidence/images.env
+          identity="https://github.com/$GITHUB_REPOSITORY/.github/workflows/docker-publish.yml@$GITHUB_REF"
+          for reference in \
+            "$DSEARCH_INDEX_NODE_IMAGE" \
+            "$DSEARCH_QUERY_NODE_IMAGE" \
+            "$DSEARCH_COORDINATOR_IMAGE" \
+            "$DSEARCH_GATEWAY_IMAGE"; do
+            cosign sign --yes "$reference"
+            cosign verify "$reference" \
+              --certificate-identity "$identity" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          done
+
+      - name: Promote validated manifests without rebuilding
+        shell: bash
+        run: |
+          set -euo pipefail
+          source release-evidence/images.env
+          for service in dk.index-node dk.query-node dk.coordinator dk.gateway; do
+            variable=$(printf 'DSEARCH_%s_IMAGE' "${service#dk.}" | tr '[:lower:].-' '[:upper:]__')
+            source_reference=${!variable}
+            expected_digest=${source_reference##*@}
+            versioned="$REGISTRY/$GITHUB_REPOSITORY/$service:$VERSION"
+
+            if current_manifest=$(docker buildx imagetools inspect "$versioned" --format '{{json .Manifest}}' 2>/dev/null); then
+              current_digest=$(jq -r '.digest' <<<"$current_manifest")
+              [[ "$current_digest" == "$expected_digest" ]] || {
+                echo "Refusing to move existing release tag $versioned from $current_digest to $expected_digest" >&2
+                exit 1
+              }
+            else
+              docker buildx imagetools create --tag "$versioned" "$source_reference"
+            fi
+
+            promoted_digest=$(docker buildx imagetools inspect "$versioned" --format '{{json .Manifest}}' | jq -r '.digest')
+            [[ "$promoted_digest" == "$expected_digest" ]] || {
+              echo "Promoted $versioned digest $promoted_digest disagrees with validated digest $expected_digest" >&2
+              exit 1
+            }
+
+            if [[ "$IS_RC" != "true" ]]; then
+              docker buildx imagetools create \
+                --tag "$REGISTRY/$GITHUB_REPOSITORY/$service:latest" \
+                "$source_reference"
+            fi
+          done
+
+      - name: Upload complete release evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence-${{ github.ref_name }}
+          path: release-evidence/
+          if-no-files-found: error
+          retention-days: 90
