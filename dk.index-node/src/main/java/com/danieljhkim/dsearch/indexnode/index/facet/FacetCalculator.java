@@ -8,6 +8,8 @@ import io.grpc.Context;
 import io.grpc.Status;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.BooleanSupplier;
@@ -35,7 +37,6 @@ import org.apache.lucene.search.Query;
 public class FacetCalculator {
 
     private static final Logger LOGGER = Logger.getLogger(FacetCalculator.class.getName());
-    private static final int DEFAULT_TOP_N = RequestLimitsValidator.DEFAULT_FACET_SIZE;
 
     @Getter
     private final FacetsConfig facetsConfig;
@@ -187,14 +188,21 @@ public class FacetCalculator {
     private FacetResponse computeSingleFacet(
             IndexSearcher searcher, Query query, Facets facets, FacetRequest request, FacetWorkBudget workBudget) {
         String field = request.getField();
-        int topN = request.getSize() > 0 ? request.getSize() : DEFAULT_TOP_N;
 
         try {
-            FacetResult result = facets.getTopChildren(topN, field);
+            // Node responses are intermediate distributed-aggregation inputs. Applying the
+            // requested size here can discard a bucket that is globally dominant after other
+            // nodes contribute their counts. The query node applies the public size only after
+            // merging these complete local candidate sets.
+            FacetResult result = facets.getAllChildren(field);
             FacetResponse.Builder responseBuilder = FacetResponse.newBuilder().setField(field);
 
             if (result != null && result.labelValues != null) {
-                for (LabelAndValue lv : result.labelValues) {
+                for (LabelAndValue lv : Arrays.stream(result.labelValues)
+                        .sorted(Comparator.comparingLong((LabelAndValue value) -> value.value.longValue())
+                                .reversed()
+                                .thenComparing(value -> value.label))
+                        .toList()) {
                     workBudget.expandBucket();
                     FacetBucket.Builder bucketBuilder =
                             FacetBucket.newBuilder().setValue(lv.label).setCount(lv.value.longValue());
