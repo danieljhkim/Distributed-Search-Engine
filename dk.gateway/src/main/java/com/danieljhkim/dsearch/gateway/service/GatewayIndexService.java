@@ -1,11 +1,18 @@
 package com.danieljhkim.dsearch.gateway.service;
 
 import com.danieljhkim.dsearch.common.config.AppConfig;
+import com.danieljhkim.dsearch.common.exception.NodeUnavailableException;
 import com.danieljhkim.dsearch.common.grpc.NodeClient;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.common.validation.RequestLimitsValidator;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexItemResponseDto;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexRequestDto;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
+import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentRequest;
+import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResponse;
+import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResult;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.Document;
@@ -13,11 +20,21 @@ import com.danieljhkim.dsearch.proto.index.Field;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
+import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Gateway-side entry point for document mutations.
@@ -105,6 +122,208 @@ public class GatewayIndexService {
         }
         return new IndexResponseDto(id, resp.getSuccess());
     }
+
+    /**
+     * Sends valid items to their ownership node in batches while retaining the original result order.
+     *
+     * <p>Every accepted item has a caller-provided id. It is both the routing key and Lucene upsert key,
+     * which makes a retry after a transport timeout safe even when the previous durable commit outcome is
+     * unknown. Per-item validation failures never prevent independent valid items from being attempted.
+     */
+    public BulkIndexResponseDto bulkIndex(BulkIndexRequestDto requestDto) {
+        List<IndexRequestDto> items = requestDto.getItems() == null ? List.of() : requestDto.getItems();
+        ensureBulkItemCount(items.size());
+
+        String partitionId = resolvePartitionId(requestDto.getPartitionId());
+        List<BulkIndexItemResponseDto> results = new ArrayList<>(items.size());
+        for (int index = 0; index < items.size(); index++) {
+            results.add(null);
+        }
+
+        Map<NodeClient<IndexServiceGrpc.IndexServiceBlockingStub>, List<PreparedBulkItem>> byOwner =
+                new LinkedHashMap<>();
+        Set<String> seenIds = new HashSet<>();
+        long embeddingBytes = 0;
+        for (int requestIndex = 0; requestIndex < items.size(); requestIndex++) {
+            IndexRequestDto item = items.get(requestIndex);
+            if (item == null || item.getId() == null || item.getId().isBlank()) {
+                results.set(
+                        requestIndex,
+                        validationFailure(requestIndex, item == null ? null : item.getId(), "id is required"));
+                continue;
+            }
+            if (!seenIds.add(item.getId())) {
+                results.set(
+                        requestIndex, validationFailure(requestIndex, item.getId(), "duplicate id in bulk request"));
+                continue;
+            }
+
+            try {
+                RequestLimitsValidator.validateDocument(item.getId(), item.getFields(), requestLimits);
+                embeddingBytes = Math.addExact(embeddingBytes, embeddingWorkBytes(item.getFields()));
+            } catch (IllegalArgumentException | ArithmeticException e) {
+                results.set(requestIndex, validationFailure(requestIndex, item.getId(), e.getMessage()));
+                continue;
+            }
+            ensureBulkEmbeddingBytes(embeddingBytes);
+
+            Document document = toProtoDocument(item.getId(), item.getFields());
+            try {
+                NodeClient<IndexServiceGrpc.IndexServiceBlockingStub> owner =
+                        indexNodeClientManager.ownerClient(partitionId, item.getId());
+                byOwner.computeIfAbsent(owner, ignored -> new ArrayList<>())
+                        .add(new PreparedBulkItem(requestIndex, item.getId(), document));
+            } catch (NodeUnavailableException e) {
+                results.set(requestIndex, retryableFailure(requestIndex, item.getId(), e.getMessage()));
+            }
+        }
+
+        long deadlineNanos =
+                System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(1, requestLimits.getRequestTimeoutMillis()));
+        byOwner.forEach(
+                (owner, ownerItems) -> bulkIndexOnOwner(owner, partitionId, ownerItems, results, deadlineNanos));
+        boolean success = results.stream().allMatch(result -> result != null && "success".equals(result.getStatus()));
+        return new BulkIndexResponseDto(success, results);
+    }
+
+    private void bulkIndexOnOwner(
+            NodeClient<IndexServiceGrpc.IndexServiceBlockingStub> owner,
+            String partitionId,
+            List<PreparedBulkItem> ownerItems,
+            List<BulkIndexItemResponseDto> results,
+            long deadlineNanos) {
+        try {
+            long remainingNanos = deadlineNanos - System.nanoTime();
+            if (remainingNanos <= 0) {
+                throw new StatusRuntimeException(Status.DEADLINE_EXCEEDED.withDescription("bulk deadline exhausted"));
+            }
+            BulkIndexDocumentRequest request = BulkIndexDocumentRequest.newBuilder()
+                    .setPartitionId(partitionId)
+                    .addAllDocuments(
+                            ownerItems.stream().map(PreparedBulkItem::document).toList())
+                    .build();
+            BulkIndexDocumentResponse response = owner.getStub()
+                    .withDeadlineAfter(
+                            Math.max(1, TimeUnit.NANOSECONDS.toMillis(remainingNanos)), TimeUnit.MILLISECONDS)
+                    .bulkIndexDocument(request);
+            applyOwnerResults(owner, partitionId, ownerItems, response, results);
+        } catch (StatusRuntimeException | NodeUnavailableException e) {
+            for (PreparedBulkItem item : ownerItems) {
+                results.set(item.requestIndex(), transportFailure(item.requestIndex(), item.id(), e));
+            }
+        }
+    }
+
+    private static void applyOwnerResults(
+            NodeClient<IndexServiceGrpc.IndexServiceBlockingStub> owner,
+            String partitionId,
+            List<PreparedBulkItem> ownerItems,
+            BulkIndexDocumentResponse response,
+            List<BulkIndexItemResponseDto> results) {
+        boolean[] resultSeen = new boolean[ownerItems.size()];
+        for (BulkIndexDocumentResult itemResult : response.getResultsList()) {
+            int responseIndex = itemResult.getRequestIndex();
+            if (responseIndex < 0 || responseIndex >= ownerItems.size()) {
+                continue;
+            }
+            resultSeen[responseIndex] = true;
+            PreparedBulkItem item = ownerItems.get(responseIndex);
+            if (itemResult.getSuccess()) {
+                owner.incrementDocToShard(partitionId);
+                results.set(
+                        item.requestIndex(),
+                        new BulkIndexItemResponseDto(item.requestIndex(), item.id(), "success", null));
+            } else {
+                results.set(
+                        item.requestIndex(),
+                        retryableFailure(
+                                item.requestIndex(),
+                                item.id(),
+                                itemResult.getError().isBlank() ? "durable index failed" : itemResult.getError()));
+            }
+        }
+        for (int responseIndex = 0; responseIndex < ownerItems.size(); responseIndex++) {
+            if (!resultSeen[responseIndex]) {
+                PreparedBulkItem item = ownerItems.get(responseIndex);
+                results.set(
+                        item.requestIndex(),
+                        retryableFailure(item.requestIndex(), item.id(), "owner returned no item result"));
+            }
+        }
+    }
+
+    private void ensureBulkItemCount(int itemCount) {
+        try {
+            RequestLimitsValidator.validateBulkItemCount(itemCount, requestLimits);
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, e.getMessage(), e);
+        }
+    }
+
+    private void ensureBulkEmbeddingBytes(long embeddingBytes) {
+        try {
+            RequestLimitsValidator.validateBulkEmbeddingBytes(embeddingBytes, requestLimits);
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, e.getMessage(), e);
+        }
+    }
+
+    private static long embeddingWorkBytes(Map<String, String> fields) {
+        if (fields == null) {
+            return 0;
+        }
+        long bytes = 0;
+        for (String value : fields.values()) {
+            bytes = Math.addExact(bytes, value == null ? 0 : value.getBytes(StandardCharsets.UTF_8).length);
+        }
+        return bytes;
+    }
+
+    private static Document toProtoDocument(String documentId, Map<String, String> fields) {
+        Document.Builder document = Document.newBuilder().setId(documentId);
+        if (fields != null) {
+            fields.forEach((name, value) ->
+                    document.addFields(Field.newBuilder().setName(name).setValue(value)));
+        }
+        return document.build();
+    }
+
+    private static BulkIndexItemResponseDto validationFailure(int requestIndex, String id, String error) {
+        return new BulkIndexItemResponseDto(requestIndex, id, "validation_failure", error);
+    }
+
+    private static BulkIndexItemResponseDto retryableFailure(int requestIndex, String id, String error) {
+        return new BulkIndexItemResponseDto(
+                requestIndex,
+                id,
+                "retryable_failure",
+                error + "; retry with the same id because indexing is an upsert");
+    }
+
+    private static BulkIndexItemResponseDto permanentFailure(int requestIndex, String id, String error) {
+        return new BulkIndexItemResponseDto(requestIndex, id, "permanent_failure", error);
+    }
+
+    private static BulkIndexItemResponseDto transportFailure(int requestIndex, String id, RuntimeException exception) {
+        if (exception instanceof StatusRuntimeException statusException
+                && switch (statusException.getStatus().getCode()) {
+                    case INVALID_ARGUMENT, ALREADY_EXISTS, FAILED_PRECONDITION, PERMISSION_DENIED -> true;
+                    default -> false;
+                }) {
+            return permanentFailure(requestIndex, id, retryMessage(exception));
+        }
+        return retryableFailure(requestIndex, id, retryMessage(exception));
+    }
+
+    private static String retryMessage(RuntimeException exception) {
+        if (exception instanceof StatusRuntimeException statusException
+                && statusException.getStatus().getDescription() != null) {
+            return statusException.getStatus().getDescription();
+        }
+        return exception.getMessage() == null ? "bulk transport failed" : exception.getMessage();
+    }
+
+    private record PreparedBulkItem(int requestIndex, String id, Document document) {}
 
     private static String resolvePartitionId(String partitionId) {
         return partitionId != null && !partitionId.isBlank() ? partitionId : DEFAULT_PARTITION_ID;

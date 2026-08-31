@@ -85,6 +85,9 @@ requestLimits:
   maxFieldsPerDocument: 100
   maxFieldValueBytes: 65536
   maxIndexPayloadBytes: 1048576
+  maxBulkItems: 100
+  # Sum of field-value UTF-8 bytes that can reach embedding inference in one bulk request.
+  maxBulkEmbeddingBytes: 524288
   maxFilterClauses: 100
   maxFacetCount: 20
   maxFacetDepth: 3

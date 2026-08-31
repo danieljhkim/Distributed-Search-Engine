@@ -2,6 +2,7 @@ package com.danieljhkim.dsearch.common.validation;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
@@ -121,5 +122,20 @@ class RequestLimitsValidatorTest {
                 IllegalArgumentException.class,
                 () -> RequestLimitsValidator.validateDocument(oversized, payloadLimits));
         assert exception.getMessage().contains("Index payload bytes");
+    }
+
+    @Test
+    void bulkItemAndEmbeddingWorkLimitsAreRejectedBeforeDispatch() {
+        AppConfig.RequestLimitsConfig limits = new AppConfig.RequestLimitsConfig();
+        limits.setMaxBulkItems(1);
+        limits.setMaxBulkEmbeddingBytes(4);
+
+        IllegalArgumentException itemCount = assertThrows(
+                IllegalArgumentException.class, () -> RequestLimitsValidator.validateBulkItemCount(2, limits));
+        IllegalArgumentException embeddingBytes = assertThrows(
+                IllegalArgumentException.class, () -> RequestLimitsValidator.validateBulkEmbeddingBytes(5, limits));
+
+        assertTrue(itemCount.getMessage().contains("Bulk item count"));
+        assertTrue(embeddingBytes.getMessage().contains("Bulk embedding bytes"));
     }
 }

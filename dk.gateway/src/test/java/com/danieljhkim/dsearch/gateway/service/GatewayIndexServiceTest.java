@@ -11,11 +11,17 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.exception.NodeUnavailableException;
 import com.danieljhkim.dsearch.common.grpc.NodeClient;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexRequestDto;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
+import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentRequest;
+import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResponse;
+import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResult;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.Field;
@@ -25,6 +31,7 @@ import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
 import io.grpc.ManagedChannel;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
@@ -222,5 +229,156 @@ class GatewayIndexServiceTest {
     @Test
     void deleteRejectsBlankIds() {
         assertThatThrownBy(() -> service.delete("  ", "tenant-a")).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void bulkUsesTheGrpcBulkContractAndRestoresInputOrder() {
+        IndexRequestDto first = indexRequest("doc-1", Map.of("title", "first"));
+        IndexRequestDto second = indexRequest("doc-2", Map.of("title", "second"));
+        when(indexNodeClientManager.ownerClient("tenant-a", "doc-1")).thenReturn(ownerClient);
+        when(indexNodeClientManager.ownerClient("tenant-a", "doc-2")).thenReturn(ownerClient);
+        when(indexStub.bulkIndexDocument(any(BulkIndexDocumentRequest.class)))
+                .thenReturn(BulkIndexDocumentResponse.newBuilder()
+                        .setSuccess(true)
+                        .addResults(BulkIndexDocumentResult.newBuilder()
+                                .setRequestIndex(1)
+                                .setId("doc-2")
+                                .setSuccess(true))
+                        .addResults(BulkIndexDocumentResult.newBuilder()
+                                .setRequestIndex(0)
+                                .setId("doc-1")
+                                .setSuccess(true))
+                        .build());
+
+        BulkIndexResponseDto response = service.bulkIndex(bulkRequest("tenant-a", first, second));
+
+        assertThat(response.isSuccess()).isTrue();
+        assertThat(response.getItems()).extracting(item -> item.getId()).containsExactly("doc-1", "doc-2");
+        assertThat(response.getItems()).extracting(item -> item.getStatus()).containsOnly("success");
+        ArgumentCaptor<BulkIndexDocumentRequest> requestCaptor =
+                ArgumentCaptor.forClass(BulkIndexDocumentRequest.class);
+        verify(indexStub).bulkIndexDocument(requestCaptor.capture());
+        assertThat(requestCaptor.getValue().getPartitionId()).isEqualTo("tenant-a");
+        assertThat(requestCaptor.getValue().getDocumentsList())
+                .extracting(document -> document.getId())
+                .containsExactly("doc-1", "doc-2");
+    }
+
+    @Test
+    void bulkKeepsSuccessfulWritesWhenOtherItemsFailValidation() {
+        IndexRequestDto missingId = indexRequest(null, Map.of("title", "invalid"));
+        IndexRequestDto valid = indexRequest("doc-2", Map.of("title", "valid"));
+        when(indexNodeClientManager.ownerClient("default", "doc-2")).thenReturn(ownerClient);
+        when(indexStub.bulkIndexDocument(any(BulkIndexDocumentRequest.class)))
+                .thenReturn(successfulBulkResult(0, "doc-2"));
+
+        BulkIndexResponseDto response = service.bulkIndex(bulkRequest(null, missingId, valid));
+
+        assertThat(response.isSuccess()).isFalse();
+        assertThat(response.getItems())
+                .extracting(item -> item.getStatus())
+                .containsExactly("validation_failure", "success");
+        verify(indexStub).bulkIndexDocument(any(BulkIndexDocumentRequest.class));
+    }
+
+    @Test
+    void bulkRejectsDuplicateIdsWithoutApplyingTheSecondItem() {
+        IndexRequestDto first = indexRequest("doc-1", Map.of("title", "first"));
+        IndexRequestDto duplicate = indexRequest("doc-1", Map.of("title", "second"));
+        when(indexNodeClientManager.ownerClient("default", "doc-1")).thenReturn(ownerClient);
+        when(indexStub.bulkIndexDocument(any(BulkIndexDocumentRequest.class)))
+                .thenReturn(successfulBulkResult(0, "doc-1"));
+
+        BulkIndexResponseDto response = service.bulkIndex(bulkRequest(null, first, duplicate));
+
+        assertThat(response.getItems())
+                .extracting(item -> item.getStatus())
+                .containsExactly("success", "validation_failure");
+        ArgumentCaptor<BulkIndexDocumentRequest> requestCaptor =
+                ArgumentCaptor.forClass(BulkIndexDocumentRequest.class);
+        verify(indexStub).bulkIndexDocument(requestCaptor.capture());
+        assertThat(requestCaptor.getValue().getDocumentsCount()).isOne();
+    }
+
+    @Test
+    void bulkTimeoutIsRetryableWithTheSameId() {
+        IndexRequestDto item = indexRequest("doc-1", Map.of("title", "retry"));
+        when(indexNodeClientManager.ownerClient("default", "doc-1")).thenReturn(ownerClient);
+        when(indexStub.bulkIndexDocument(any(BulkIndexDocumentRequest.class)))
+                .thenThrow(new StatusRuntimeException(Status.DEADLINE_EXCEEDED))
+                .thenReturn(successfulBulkResult(0, "doc-1"));
+
+        BulkIndexResponseDto timedOut = service.bulkIndex(bulkRequest(null, item));
+        BulkIndexResponseDto retried = service.bulkIndex(bulkRequest(null, item));
+
+        assertThat(timedOut.getItems().getFirst().getStatus()).isEqualTo("retryable_failure");
+        assertThat(retried.getItems().getFirst().getStatus()).isEqualTo("success");
+        ArgumentCaptor<BulkIndexDocumentRequest> requestCaptor =
+                ArgumentCaptor.forClass(BulkIndexDocumentRequest.class);
+        verify(indexStub, org.mockito.Mockito.times(2)).bulkIndexDocument(requestCaptor.capture());
+        assertThat(requestCaptor.getAllValues())
+                .allSatisfy(
+                        request -> assertThat(request.getDocuments(0).getId()).isEqualTo("doc-1"));
+    }
+
+    @Test
+    void bulkReportsPermanentOwnerValidationFailuresPerItem() {
+        IndexRequestDto item = indexRequest("doc-1", Map.of("title", "invalid downstream"));
+        when(indexNodeClientManager.ownerClient("default", "doc-1")).thenReturn(ownerClient);
+        when(indexStub.bulkIndexDocument(any(BulkIndexDocumentRequest.class)))
+                .thenThrow(
+                        new StatusRuntimeException(Status.INVALID_ARGUMENT.withDescription("owner validation failed")));
+
+        BulkIndexResponseDto response = service.bulkIndex(bulkRequest(null, item));
+
+        assertThat(response.getItems().getFirst().getStatus()).isEqualTo("permanent_failure");
+        assertThat(response.getItems().getFirst().getError()).isEqualTo("owner validation failed");
+    }
+
+    @Test
+    void bulkRejectsItemAndEmbeddingWorkLimitsBeforeCallingOwners() {
+        AppConfig config = new AppConfig();
+        AppConfig.RequestLimitsConfig limits = new AppConfig.RequestLimitsConfig();
+        limits.setMaxBulkItems(1);
+        limits.setMaxBulkEmbeddingBytes(2);
+        config.setRequestLimits(limits);
+        service = new GatewayIndexService(indexNodeClientManager, config);
+
+        assertThatThrownBy(() -> service.bulkIndex(
+                        bulkRequest(null, indexRequest("doc-1", Map.of()), indexRequest("doc-2", Map.of()))))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .hasMessageContaining("Bulk item count");
+        verify(indexNodeClientManager, never()).ownerClient(any(), any());
+
+        limits.setMaxBulkItems(2);
+        assertThatThrownBy(
+                        () -> service.bulkIndex(bulkRequest(null, indexRequest("doc-1", Map.of("title", "too long")))))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .hasMessageContaining("Bulk embedding bytes");
+        verify(indexNodeClientManager, never()).ownerClient(any(), any());
+    }
+
+    private static IndexRequestDto indexRequest(String id, Map<String, String> fields) {
+        IndexRequestDto request = new IndexRequestDto();
+        request.setId(id);
+        request.setFields(fields);
+        return request;
+    }
+
+    private static BulkIndexRequestDto bulkRequest(String partitionId, IndexRequestDto... items) {
+        BulkIndexRequestDto request = new BulkIndexRequestDto();
+        request.setPartitionId(partitionId);
+        request.setItems(List.of(items));
+        return request;
+    }
+
+    private static BulkIndexDocumentResponse successfulBulkResult(int requestIndex, String id) {
+        return BulkIndexDocumentResponse.newBuilder()
+                .setSuccess(true)
+                .addResults(BulkIndexDocumentResult.newBuilder()
+                        .setRequestIndex(requestIndex)
+                        .setId(id)
+                        .setSuccess(true))
+                .build();
     }
 }

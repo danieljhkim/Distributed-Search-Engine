@@ -1,6 +1,8 @@
 package com.danieljhkim.dsearch.gateway.api;
 
 import com.danieljhkim.dsearch.common.validation.PartitionIdValidator;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexRequestDto;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
 import com.danieljhkim.dsearch.gateway.service.GatewayIndexService;
@@ -41,6 +43,22 @@ public class IndexController {
                     .tag("partitionId", req.getPartitionId() != null ? req.getPartitionId() : "UNKNOWN")
                     .register(meterRegistry));
         }
+    }
+
+    /**
+     * Applies bounded, ordered document upserts.
+     *
+     * <p>Every item must carry its client-assigned id. An id is an upsert key, so clients may retry
+     * {@code retryable_failure} items, including a timeout or disconnect whose commit outcome is unknown,
+     * with the same payload and id without creating another document. Successful items are never rolled
+     * back when another item fails.
+     */
+    @Timed(
+            value = "dsearch.bulk_index.http",
+            extraTags = {"endpoint", "/api/v1/index/bulk"})
+    @PostMapping(value = "/bulk", consumes = "application/json", produces = "application/json")
+    public BulkIndexResponseDto bulkIndexDocuments(@Valid @RequestBody BulkIndexRequestDto req) {
+        return indexService.bulkIndex(req);
     }
 
     @Timed(
