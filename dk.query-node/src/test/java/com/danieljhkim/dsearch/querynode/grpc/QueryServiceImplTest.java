@@ -16,6 +16,9 @@ import static org.mockito.Mockito.when;
 
 import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.common.schema.AnalyzerConfig;
+import com.danieljhkim.dsearch.common.schema.EmbeddingModelIdentity;
+import com.danieljhkim.dsearch.common.schema.IndexSchema;
 import com.danieljhkim.dsearch.proto.common.FacetResponse;
 import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.proto.query.FanoutStatus;
@@ -224,6 +227,30 @@ class QueryServiceImplTest {
         assertEquals("highlight", observer.response.getHits(0).getHighlightedFieldsOrThrow("content"));
         assertEquals("book", observer.response.getHits(0).getFieldsOrThrow("tag"));
         assertEquals(List.of(facet), observer.response.getFacetsList());
+    }
+
+    @Test
+    void incompatiblePersistedSchemaIsRefusedBeforeFanout() {
+        IndexSchema runtime = IndexSchema.current(
+                AnalyzerConfig.standard(),
+                List.of(),
+                EmbeddingModelIdentity.of("model-a", "PyTorch", 384));
+        IndexSchema persisted = IndexSchema.current(
+                AnalyzerConfig.of("keyword"),
+                List.of(),
+                EmbeddingModelIdentity.of("model-a", "PyTorch", 384));
+        when(indexService.inspectSchema("shard-a")).thenReturn(persisted);
+        QueryServiceImpl guarded = new QueryServiceImpl(
+                searchExecutor, indexService, new com.danieljhkim.dsearch.common.config.AppConfig.RequestLimitsConfig(), runtime);
+
+        RecordingObserver observer = new RecordingObserver();
+        guarded.search(request(SearchType.BM25), observer);
+
+        assertFalse(observer.completed);
+        StatusRuntimeException error = assertInstanceOf(StatusRuntimeException.class, observer.error);
+        assertEquals(Status.Code.FAILED_PRECONDITION, error.getStatus().getCode());
+        assertTrue(error.getStatus().getDescription().contains("analyzer.name"));
+        verifyNoInteractions(searchExecutor);
     }
 
     @Test

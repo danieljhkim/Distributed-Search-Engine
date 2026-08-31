@@ -120,6 +120,8 @@ public class AppConfig {
         private String engine;
         private int predictorPoolSize = 1;
         private boolean predictorPerCall = false;
+        /** Output vector length. 0 means discover from the first embedding. */
+        private int dimension = 0;
 
         @Override
         public String toString() {
@@ -127,7 +129,8 @@ public class AppConfig {
                     + url + '\'' + ", engine='"
                     + engine + '\'' + ", predictorPoolSize="
                     + predictorPoolSize + ", predictorPerCall="
-                    + predictorPerCall + '}';
+                    + predictorPerCall + ", dimension="
+                    + dimension + '}';
         }
     }
 
@@ -138,13 +141,16 @@ public class AppConfig {
         private int maxFlushIntervalSeconds = 5;
         /** Minimum usable bytes required on the Lucene volume before this node is ready. */
         private long minimumFreeDiskBytes = 104857600L;
+        /** Analyzer name persisted as part of the index schema contract. */
+        private String analyzer = "standard";
 
         @Override
         public String toString() {
             return "IndexingConfig{" + "maxBufferedOpsPerShard="
                     + maxBufferedOpsPerShard + ", maxFlushIntervalSeconds="
                     + maxFlushIntervalSeconds + ", minimumFreeDiskBytes="
-                    + minimumFreeDiskBytes + '}';
+                    + minimumFreeDiskBytes + ", analyzer='"
+                    + analyzer + '\'' + '}';
         }
     }
 
@@ -204,6 +210,7 @@ public class AppConfig {
         private boolean sortable = false;
         private boolean facetable = false;
         private boolean highlightable = false;
+        private String analyzer = "standard";
 
         @Override
         public String toString() {
@@ -213,7 +220,8 @@ public class AppConfig {
                     + filterable + ", sortable="
                     + sortable + ", facetable="
                     + facetable + ", highlightable="
-                    + highlightable + '}';
+                    + highlightable + ", analyzer='"
+                    + analyzer + '\'' + '}';
         }
     }
 }

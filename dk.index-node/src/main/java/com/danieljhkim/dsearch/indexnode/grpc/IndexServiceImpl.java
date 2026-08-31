@@ -1,9 +1,14 @@
 package com.danieljhkim.dsearch.indexnode.grpc;
 
 import com.danieljhkim.dsearch.common.config.AppConfig;
+import com.danieljhkim.dsearch.common.exception.SchemaMismatchException;
+import com.danieljhkim.dsearch.common.exception.ShardNotFoundException;
 import com.danieljhkim.dsearch.common.model.SearchDocument;
 import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.common.schema.IndexAlias;
+import com.danieljhkim.dsearch.common.schema.IndexSchema;
+import com.danieljhkim.dsearch.common.schema.SchemaProtoMapper;
 import com.danieljhkim.dsearch.common.validation.PartitionIdValidator;
 import com.danieljhkim.dsearch.common.validation.RequestAdmissionException;
 import com.danieljhkim.dsearch.common.validation.RequestLimitsValidator;
@@ -19,12 +24,22 @@ import com.danieljhkim.dsearch.proto.index.DeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.Document;
 import com.danieljhkim.dsearch.proto.index.Field;
+import com.danieljhkim.dsearch.proto.index.CreateIndexRequest;
+import com.danieljhkim.dsearch.proto.index.CreateIndexResponse;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexHit;
 import com.danieljhkim.dsearch.proto.index.IndexSearchRequest;
 import com.danieljhkim.dsearch.proto.index.IndexSearchResponse;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
+import com.danieljhkim.dsearch.proto.index.InspectSchemaRequest;
+import com.danieljhkim.dsearch.proto.index.InspectSchemaResponse;
+import com.danieljhkim.dsearch.proto.index.ReindexRequest;
+import com.danieljhkim.dsearch.proto.index.ReindexResponse;
+import com.danieljhkim.dsearch.proto.index.RollbackAliasRequest;
+import com.danieljhkim.dsearch.proto.index.RollbackAliasResponse;
+import com.danieljhkim.dsearch.proto.index.SwapAliasRequest;
+import com.danieljhkim.dsearch.proto.index.SwapAliasResponse;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import java.io.IOException;
@@ -74,6 +89,8 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
             responseObserver.onCompleted();
         } catch (IllegalArgumentException e) {
             invalidArgument(responseObserver, e);
+        } catch (SchemaMismatchException e) {
+            failedPrecondition(responseObserver, e);
         } catch (RequestAdmissionException e) {
             resourceExhausted(responseObserver, e);
         } catch (IOException | RuntimeException e) {
@@ -114,6 +131,9 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
             } catch (RequestAdmissionException e) {
                 success = false;
                 result.setSuccess(false).setError("request admission exhausted; retry with the returned id");
+            } catch (SchemaMismatchException e) {
+                success = false;
+                result.setSuccess(false).setError(e.getMessage());
             } catch (IOException | RuntimeException e) {
                 LOGGER.log(Level.SEVERE, "BulkIndexDocument failed for request index " + requestIndex, e);
                 success = false;
@@ -143,6 +163,8 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
             responseObserver.onCompleted();
         } catch (IllegalArgumentException e) {
             invalidArgument(responseObserver, e);
+        } catch (SchemaMismatchException e) {
+            failedPrecondition(responseObserver, e);
         } catch (IOException e) {
             LOGGER.log(Level.SEVERE, "DeleteDocument failed", e);
             responseObserver.onError(Status.INTERNAL
@@ -187,12 +209,165 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
             responseObserver.onCompleted();
         } catch (IllegalArgumentException e) {
             invalidArgument(responseObserver, e);
+        } catch (SchemaMismatchException e) {
+            failedPrecondition(responseObserver, e);
         } catch (RequestAdmissionException e) {
             resourceExhausted(responseObserver, e);
         } catch (IOException e) {
             LOGGER.log(Level.SEVERE, "searchIndex failed", e);
             responseObserver.onError(Status.INTERNAL
                     .withDescription("Failed to search shard " + partitionId)
+                    .withCause(e)
+                    .asRuntimeException());
+        }
+    }
+
+    @Override
+    public void createIndex(CreateIndexRequest request, StreamObserver<CreateIndexResponse> responseObserver) {
+        try {
+            IndexSchema schema = SchemaProtoMapper.fromProto(request.getSchema());
+            String indexName = request.getIndexName().isBlank() ? request.getAlias() : request.getIndexName();
+            IndexManager.CreatedIndex created = indexManager.createIndex(indexName, request.getAlias(), schema);
+            responseObserver.onNext(CreateIndexResponse.newBuilder()
+                    .setSuccess(true)
+                    .setIndexName(created.indexName())
+                    .setAlias(created.alias())
+                    .setAuditId(newAuditId())
+                    .build());
+            responseObserver.onCompleted();
+        } catch (IllegalArgumentException e) {
+            invalidArgument(responseObserver, e);
+        } catch (SchemaMismatchException e) {
+            failedPrecondition(responseObserver, e);
+        } catch (IOException | RuntimeException e) {
+            LOGGER.log(Level.SEVERE, "CreateIndex failed", e);
+            responseObserver.onError(Status.INTERNAL
+                    .withDescription("Failed to create index")
+                    .withCause(e)
+                    .asRuntimeException());
+        }
+    }
+
+    @Override
+    public void inspectSchema(InspectSchemaRequest request, StreamObserver<InspectSchemaResponse> responseObserver) {
+        try {
+            IndexManager.InspectedSchema inspected = indexManager.inspectSchema(request.getIndexOrAlias());
+            responseObserver.onNext(InspectSchemaResponse.newBuilder()
+                    .setIndexName(inspected.indexName())
+                    .setAlias(inspected.alias())
+                    .setSchema(SchemaProtoMapper.toProto(inspected.schema()))
+                    .build());
+            responseObserver.onCompleted();
+        } catch (IllegalArgumentException e) {
+            invalidArgument(responseObserver, e);
+        } catch (ShardNotFoundException e) {
+            responseObserver.onError(Status.NOT_FOUND
+                    .withDescription(e.getMessage())
+                    .withCause(e)
+                    .asRuntimeException());
+        } catch (SchemaMismatchException e) {
+            failedPrecondition(responseObserver, e);
+        } catch (RuntimeException e) {
+            LOGGER.log(Level.SEVERE, "InspectSchema failed", e);
+            responseObserver.onError(Status.INTERNAL
+                    .withDescription("Failed to inspect schema")
+                    .withCause(e)
+                    .asRuntimeException());
+        }
+    }
+
+    @Override
+    public void reindex(ReindexRequest request, StreamObserver<ReindexResponse> responseObserver) {
+        try {
+            IndexSchema schema = SchemaProtoMapper.fromProto(request.getSchema());
+            IndexManager.ReindexResult result = indexManager.reindex(
+                    request.getSourceAlias(),
+                    request.getTargetIndex(),
+                    schema,
+                    request.getVerificationQueriesList());
+            responseObserver.onNext(ReindexResponse.newBuilder()
+                    .setSuccess(result.success())
+                    .setSourceIndex(result.sourceIndex())
+                    .setTargetIndex(result.targetIndex())
+                    .setSourceCount(result.sourceCount())
+                    .setTargetCount(result.targetCount())
+                    .setVerificationPassed(result.verificationPassed())
+                    .setAuditId(newAuditId())
+                    .setError(result.error() == null ? "" : result.error())
+                    .build());
+            responseObserver.onCompleted();
+        } catch (IllegalArgumentException e) {
+            invalidArgument(responseObserver, e);
+        } catch (ShardNotFoundException e) {
+            responseObserver.onError(Status.NOT_FOUND
+                    .withDescription(e.getMessage())
+                    .withCause(e)
+                    .asRuntimeException());
+        } catch (SchemaMismatchException e) {
+            failedPrecondition(responseObserver, e);
+        } catch (IOException | RuntimeException e) {
+            LOGGER.log(Level.SEVERE, "Reindex failed", e);
+            responseObserver.onError(Status.INTERNAL
+                    .withDescription("Failed to reindex")
+                    .withCause(e)
+                    .asRuntimeException());
+        }
+    }
+
+    @Override
+    public void swapAlias(SwapAliasRequest request, StreamObserver<SwapAliasResponse> responseObserver) {
+        try {
+            IndexAlias swapped = indexManager.swapAlias(request.getAlias(), request.getTargetIndex());
+            responseObserver.onNext(SwapAliasResponse.newBuilder()
+                    .setSuccess(true)
+                    .setAlias(swapped.getAlias())
+                    .setPreviousIndex(swapped.getPreviousIndexName() == null ? "" : swapped.getPreviousIndexName())
+                    .setCurrentIndex(swapped.getIndexName())
+                    .setAuditId(newAuditId())
+                    .build());
+            responseObserver.onCompleted();
+        } catch (IllegalArgumentException e) {
+            invalidArgument(responseObserver, e);
+        } catch (ShardNotFoundException e) {
+            responseObserver.onError(Status.NOT_FOUND
+                    .withDescription(e.getMessage())
+                    .withCause(e)
+                    .asRuntimeException());
+        } catch (SchemaMismatchException e) {
+            failedPrecondition(responseObserver, e);
+        } catch (IOException | RuntimeException e) {
+            LOGGER.log(Level.SEVERE, "SwapAlias failed", e);
+            responseObserver.onError(Status.INTERNAL
+                    .withDescription("Failed to swap alias")
+                    .withCause(e)
+                    .asRuntimeException());
+        }
+    }
+
+    @Override
+    public void rollbackAlias(RollbackAliasRequest request, StreamObserver<RollbackAliasResponse> responseObserver) {
+        try {
+            IndexAlias rolledBack = indexManager.rollbackAlias(request.getAlias());
+            responseObserver.onNext(RollbackAliasResponse.newBuilder()
+                    .setSuccess(true)
+                    .setAlias(rolledBack.getAlias())
+                    .setCurrentIndex(rolledBack.getIndexName())
+                    .setPreviousIndex(
+                            rolledBack.getPreviousIndexName() == null ? "" : rolledBack.getPreviousIndexName())
+                    .setAuditId(newAuditId())
+                    .build());
+            responseObserver.onCompleted();
+        } catch (IllegalArgumentException e) {
+            invalidArgument(responseObserver, e);
+        } catch (ShardNotFoundException e) {
+            responseObserver.onError(Status.NOT_FOUND
+                    .withDescription(e.getMessage())
+                    .withCause(e)
+                    .asRuntimeException());
+        } catch (IOException | RuntimeException e) {
+            LOGGER.log(Level.SEVERE, "RollbackAlias failed", e);
+            responseObserver.onError(Status.INTERNAL
+                    .withDescription("Failed to roll back alias")
                     .withCause(e)
                     .asRuntimeException());
         }
@@ -223,6 +398,17 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
                 .withDescription(error.getMessage())
                 .withCause(error)
                 .asRuntimeException());
+    }
+
+    private static void failedPrecondition(StreamObserver<?> responseObserver, SchemaMismatchException error) {
+        responseObserver.onError(Status.FAILED_PRECONDITION
+                .withDescription(error.getMessage())
+                .withCause(error)
+                .asRuntimeException());
+    }
+
+    private static String newAuditId() {
+        return UUID.randomUUID().toString();
     }
 
     private IndexHit toIndexHit(SearchHit hit) {

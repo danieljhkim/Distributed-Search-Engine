@@ -12,6 +12,7 @@ import java.io.IOException;
 import lombok.Getter;
 import lombok.Setter;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
@@ -67,6 +68,16 @@ public class GatewayConfig {
         registration.setFilter(new RequestAdmissionFilter(appConfig.getRequestLimits()));
         registration.addUrlPatterns("/api/*");
         registration.setOrder(1);
+        return registration;
+    }
+
+    @Bean
+    public FilterRegistrationBean<AdminAuthFilter> adminAuthFilter(
+            @Value("${dsearch.admin.token:}") String adminToken) {
+        FilterRegistrationBean<AdminAuthFilter> registration = new FilterRegistrationBean<>();
+        registration.setFilter(new AdminAuthFilter(adminToken));
+        registration.addUrlPatterns("/api/v1/admin/*");
+        registration.setOrder(0);
         return registration;
     }
 

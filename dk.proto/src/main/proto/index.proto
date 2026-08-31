@@ -93,9 +93,114 @@ message IndexSearchResponse {
   repeated dsearch.common.FacetResponse facets = 4;
 }
 
+message AnalyzerConfig {
+  string name = 1;
+}
+
+message IndexSchemaField {
+  string name = 1;
+  string type = 2;
+  bool filterable = 3;
+  bool sortable = 4;
+  bool facetable = 5;
+  bool highlightable = 6;
+  string analyzer = 7;
+}
+
+message EmbeddingModelIdentity {
+  string model_id = 1;
+  string engine = 2;
+  string digest = 3;
+  int32 dimension = 4;
+}
+
+message IndexSchema {
+  int32 compatibility_version = 1;
+  AnalyzerConfig analyzer = 2;
+  repeated IndexSchemaField fields = 3;
+  EmbeddingModelIdentity embedding = 4;
+}
+
+message CreateIndexRequest {
+  string index_name = 1;
+  string alias = 2;
+  IndexSchema schema = 3;
+}
+
+message CreateIndexResponse {
+  bool success = 1;
+  string index_name = 2;
+  string alias = 3;
+  string audit_id = 4;
+}
+
+message InspectSchemaRequest {
+  string index_or_alias = 1;
+}
+
+message InspectSchemaResponse {
+  string index_name = 1;
+  string alias = 2;
+  IndexSchema schema = 3;
+}
+
+message RepresentativeQuery {
+  string query = 1;
+  dsearch.common.SearchType search_type = 2;
+  int32 size = 3;
+}
+
+message ReindexRequest {
+  string source_alias = 1;
+  string target_index = 2;
+  IndexSchema schema = 3;
+  repeated RepresentativeQuery verification_queries = 4;
+}
+
+message ReindexResponse {
+  bool success = 1;
+  string source_index = 2;
+  string target_index = 3;
+  int64 source_count = 4;
+  int64 target_count = 5;
+  bool verification_passed = 6;
+  string audit_id = 7;
+  string error = 8;
+}
+
+message SwapAliasRequest {
+  string alias = 1;
+  string target_index = 2;
+}
+
+message SwapAliasResponse {
+  bool success = 1;
+  string alias = 2;
+  string previous_index = 3;
+  string current_index = 4;
+  string audit_id = 5;
+}
+
+message RollbackAliasRequest {
+  string alias = 1;
+}
+
+message RollbackAliasResponse {
+  bool success = 1;
+  string alias = 2;
+  string current_index = 3;
+  string previous_index = 4;
+  string audit_id = 5;
+}
+
 service IndexService {
   rpc IndexDocument(IndexDocumentRequest) returns (IndexDocumentResponse);
   rpc BulkIndexDocument(BulkIndexDocumentRequest) returns (BulkIndexDocumentResponse);
   rpc DeleteDocument(DeleteDocumentRequest) returns (DeleteDocumentResponse);
   rpc SearchIndex(IndexSearchRequest) returns (IndexSearchResponse);
+  rpc CreateIndex(CreateIndexRequest) returns (CreateIndexResponse);
+  rpc InspectSchema(InspectSchemaRequest) returns (InspectSchemaResponse);
+  rpc Reindex(ReindexRequest) returns (ReindexResponse);
+  rpc SwapAlias(SwapAliasRequest) returns (SwapAliasResponse);
+  rpc RollbackAlias(RollbackAliasRequest) returns (RollbackAliasResponse);
 }

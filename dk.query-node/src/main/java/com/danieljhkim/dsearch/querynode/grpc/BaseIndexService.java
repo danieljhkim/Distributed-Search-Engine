@@ -2,6 +2,7 @@ package com.danieljhkim.dsearch.querynode.grpc;
 
 import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.common.schema.IndexSchema;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.FacetResponse;
 import com.danieljhkim.dsearch.proto.common.Filter;
@@ -15,6 +16,10 @@ import java.util.Map;
 public interface BaseIndexService {
 
     SearchResult search(String queryString, String nodeId, String shardId, int page, int size, SearchType searchType);
+
+    default IndexSchema inspectSchema(String indexOrAlias) {
+        return null;
+    }
 
     default SearchResult search(
             String queryString,

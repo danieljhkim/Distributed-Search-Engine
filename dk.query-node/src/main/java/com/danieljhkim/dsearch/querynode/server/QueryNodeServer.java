@@ -1,6 +1,7 @@
 package com.danieljhkim.dsearch.querynode.server;
 
 import com.danieljhkim.dsearch.common.config.AppConfig;
+import com.danieljhkim.dsearch.common.schema.IndexSchema;
 import com.danieljhkim.dsearch.common.grpc.GlobalExceptionInterceptor;
 import com.danieljhkim.dsearch.common.grpc.GrpcTransportSecurity;
 import com.danieljhkim.dsearch.common.grpc.PrometheusGrpcServerInterceptor;
@@ -38,7 +39,9 @@ public class QueryNodeServer {
         AppConfig.RequestLimitsConfig requestLimits = appConfig.getRequestLimits() != null
                 ? appConfig.getRequestLimits()
                 : new AppConfig.RequestLimitsConfig();
-        QueryServiceImpl queryService = new QueryServiceImpl(searchExecutor, indexService, requestLimits);
+        IndexSchema expectedSchema = IndexSchema.fromAppConfig(
+                appConfig, IndexSchema.embeddingFrom(appConfig, 384));
+        QueryServiceImpl queryService = new QueryServiceImpl(searchExecutor, indexService, requestLimits, expectedSchema);
         ServerServiceDefinition interceptedService =
                 ServerInterceptors.intercept(queryService, new GlobalExceptionInterceptor());
 

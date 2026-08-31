@@ -2,7 +2,10 @@ package com.danieljhkim.dsearch.querynode.grpc;
 
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.exception.ParseGoneWrongException;
+import com.danieljhkim.dsearch.common.exception.SchemaMismatchException;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.common.schema.IndexSchema;
+import com.danieljhkim.dsearch.common.schema.IndexSchemaCompatibility;
 import com.danieljhkim.dsearch.common.validation.RequestAdmissionException;
 import com.danieljhkim.dsearch.common.validation.RequestLimitsValidator;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
@@ -30,16 +33,26 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
     private final SearchExecutor searchExecutor;
     private final BaseIndexService indexService;
     private final AppConfig.RequestLimitsConfig requestLimits;
+    private final IndexSchema expectedSchema;
 
     public QueryServiceImpl(SearchExecutor searchExecutor, BaseIndexService indexService) {
-        this(searchExecutor, indexService, new AppConfig.RequestLimitsConfig());
+        this(searchExecutor, indexService, new AppConfig.RequestLimitsConfig(), null);
     }
 
     public QueryServiceImpl(
             SearchExecutor searchExecutor, BaseIndexService indexService, AppConfig.RequestLimitsConfig requestLimits) {
+        this(searchExecutor, indexService, requestLimits, null);
+    }
+
+    public QueryServiceImpl(
+            SearchExecutor searchExecutor,
+            BaseIndexService indexService,
+            AppConfig.RequestLimitsConfig requestLimits,
+            IndexSchema expectedSchema) {
         this.searchExecutor = searchExecutor;
         this.indexService = indexService;
         this.requestLimits = RequestLimitsValidator.limitsOrDefaults(requestLimits);
+        this.expectedSchema = expectedSchema;
     }
 
     @Override
@@ -55,6 +68,7 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
 
         try {
             RequestLimitsValidator.validateQueryRequest(request, requestLimits);
+            refuseIncompatibleSchema(partitionId);
             SearchResult result;
             if (searchType == SearchType.HYBRID) {
                 FusionStrategy fusionStrategy = request.getFusionStrategy();
@@ -93,6 +107,11 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
                     .withDescription(e.getMessage())
                     .withCause(e)
                     .asRuntimeException());
+        } catch (SchemaMismatchException e) {
+            responseObserver.onError(Status.FAILED_PRECONDITION
+                    .withDescription(e.getMessage())
+                    .withCause(e)
+                    .asRuntimeException());
         } catch (IllegalArgumentException e) {
             responseObserver.onError(Status.INVALID_ARGUMENT
                     .withDescription(e.getMessage())
@@ -104,6 +123,17 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
             LOGGER.log(Level.WARNING, "Failed to parse query: " + queryString, e);
             responseObserver.onError(new ParseGoneWrongException("Failed to parse query: " + queryString, e));
         }
+    }
+
+    private void refuseIncompatibleSchema(String partitionId) {
+        if (expectedSchema == null || partitionId == null || partitionId.isBlank()) {
+            return;
+        }
+        IndexSchema persisted = indexService.inspectSchema(partitionId);
+        if (persisted == null) {
+            return;
+        }
+        IndexSchemaCompatibility.requireCompatible(persisted, expectedSchema);
     }
 
     private QueryResponse buildQueryResponse(SearchResult result, int page, int size) {
