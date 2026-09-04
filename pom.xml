@@ -96,6 +96,13 @@
                 <scope>import</scope>
             </dependency>
 
+            <!-- Override Spring Boot 3.5.16's vulnerable Tomcat 10.1.55 baseline. -->
+            <dependency>
+                <groupId>org.apache.tomcat.embed</groupId>
+                <artifactId>tomcat-embed-core</artifactId>
+                <version>10.1.58</version>
+            </dependency>
+
             <!-- gRPC -->
             <dependency>
                 <groupId>io.grpc</groupId>
