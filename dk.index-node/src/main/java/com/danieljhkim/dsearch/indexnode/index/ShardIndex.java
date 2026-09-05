@@ -39,8 +39,12 @@ import java.util.Set;
 import java.util.logging.Level;
 import lombok.Getter;
 import org.apache.lucene.analysis.Analyzer;
+import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.core.KeywordAnalyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
+import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
+import org.apache.lucene.analysis.tokenattributes.OffsetAttribute;
+import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.DoubleDocValuesField;
 import org.apache.lucene.document.DoublePoint;
@@ -378,6 +382,46 @@ public class ShardIndex implements Closeable {
             releaseSearcher(searcher);
         }
     }
+
+    /**
+     * Tokenizes sample text with the analyzer this shard actually indexes and queries with, so a
+     * preview never drifts from real tokenization. The stream is cut off at {@code maxTokens}
+     * rather than rejected outright, since a caller previewing tokenization benefits more from a
+     * truncated-but-useful result than an error.
+     */
+    public AnalyzedText analyze(String text, int maxTokens) {
+        List<AnalyzedToken> tokens = new ArrayList<>();
+        boolean truncated = false;
+        try (TokenStream tokenStream = analyzer.tokenStream(FIELD_CONTENT, text)) {
+            CharTermAttribute termAttribute = tokenStream.addAttribute(CharTermAttribute.class);
+            PositionIncrementAttribute positionAttribute = tokenStream.addAttribute(PositionIncrementAttribute.class);
+            OffsetAttribute offsetAttribute = tokenStream.addAttribute(OffsetAttribute.class);
+            tokenStream.reset();
+            int position = -1;
+            while (tokenStream.incrementToken()) {
+                position += positionAttribute.getPositionIncrement();
+                if (tokens.size() >= maxTokens) {
+                    truncated = true;
+                    break;
+                }
+                tokens.add(new AnalyzedToken(
+                        termAttribute.toString(),
+                        position,
+                        offsetAttribute.startOffset(),
+                        offsetAttribute.endOffset()));
+            }
+            if (!truncated) {
+                tokenStream.end();
+            }
+        } catch (IOException e) {
+            throw new IndexOperationException("I/O error analyzing text on shard " + shardId, e);
+        }
+        return new AnalyzedText(tokens, truncated);
+    }
+
+    public record AnalyzedToken(String text, int position, int startOffset, int endOffset) {}
+
+    public record AnalyzedText(List<AnalyzedToken> tokens, boolean truncated) {}
 
     /**
      * Semantic kNN search (backward compatible).

@@ -200,6 +200,15 @@ public final class RequestLimitsValidator {
         }
     }
 
+    /** Bounds sample text accepted by an analyzer token preview. */
+    public static void validateAnalyzeText(String text, AppConfig.RequestLimitsConfig limits) {
+        AppConfig.RequestLimitsConfig effective = limitsOrDefaults(limits);
+        if (text == null || text.isEmpty()) {
+            throw new IllegalArgumentException("text must not be empty");
+        }
+        validateUtf8Bytes("analyze text", text, effective.getMaxAnalyzeTextBytes());
+    }
+
     public static void validateDocument(Document document, AppConfig.RequestLimitsConfig limits) {
         Objects.requireNonNull(document, "document");
         AppConfig.RequestLimitsConfig effective = limitsOrDefaults(limits);

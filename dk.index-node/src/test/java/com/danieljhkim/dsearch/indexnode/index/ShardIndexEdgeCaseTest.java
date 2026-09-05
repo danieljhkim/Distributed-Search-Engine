@@ -1,6 +1,7 @@
 package com.danieljhkim.dsearch.indexnode.index;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -9,6 +10,9 @@ import com.danieljhkim.dsearch.common.enums.FieldType;
 import com.danieljhkim.dsearch.common.exception.ParseGoneWrongException;
 import com.danieljhkim.dsearch.common.model.SearchDocument;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.common.schema.AnalyzerConfig;
+import com.danieljhkim.dsearch.common.schema.EmbeddingModelIdentity;
+import com.danieljhkim.dsearch.common.schema.IndexSchema;
 import com.danieljhkim.dsearch.ml.embedding.TextEmbedder;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import java.io.IOException;
@@ -119,6 +123,65 @@ class ShardIndexEdgeCaseTest {
 
         try (ShardIndex index = new ShardIndex("0", base, Map.of(), FAKE_EMBEDDER)) {
             assertEquals("0", index.getShardId());
+        }
+    }
+
+    @Test
+    void standardAnalyzerPreviewSplitsOnPunctuationAndWhitespaceWithPositionsAndOffsets() throws IOException {
+        try (ShardIndex index = new ShardIndex("0", tempDir.resolve("standard"), Map.of(), FAKE_EMBEDDER)) {
+            ShardIndex.AnalyzedText analyzed = index.analyze("Café,  naïve—resumé!", 100);
+
+            assertFalse(analyzed.truncated());
+            List<String> tokens = analyzed.tokens().stream()
+                    .map(ShardIndex.AnalyzedToken::text)
+                    .toList();
+            assertEquals(List.of("café", "naïve", "resumé"), tokens);
+
+            ShardIndex.AnalyzedToken first = analyzed.tokens().get(0);
+            assertEquals(0, first.position());
+            assertEquals(0, first.startOffset());
+            assertEquals(4, first.endOffset());
+        }
+    }
+
+    @Test
+    void standardAnalyzerPreviewOfOnlyPunctuationYieldsNoTokens() throws IOException {
+        try (ShardIndex index = new ShardIndex("0", tempDir.resolve("empty-tokens"), Map.of(), FAKE_EMBEDDER)) {
+            ShardIndex.AnalyzedText analyzed = index.analyze("   ---!!!   ", 100);
+
+            assertTrue(analyzed.tokens().isEmpty());
+            assertFalse(analyzed.truncated());
+        }
+    }
+
+    @Test
+    void keywordAnalyzerPreviewReturnsWholeInputAsOneToken() throws IOException {
+        IndexSchema keywordSchema =
+                IndexSchema.current(AnalyzerConfig.of("keyword"), List.of(), EmbeddingModelIdentity.unspecified(0));
+        try (ShardIndex index =
+                new ShardIndex("0", tempDir.resolve("keyword"), Map.of(), FAKE_EMBEDDER, keywordSchema)) {
+            ShardIndex.AnalyzedText analyzed = index.analyze("Interstellar (2014)", 100);
+
+            assertEquals(1, analyzed.tokens().size());
+            assertEquals("Interstellar (2014)", analyzed.tokens().get(0).text());
+            assertEquals(0, analyzed.tokens().get(0).startOffset());
+            assertEquals(19, analyzed.tokens().get(0).endOffset());
+            assertFalse(analyzed.truncated());
+        }
+    }
+
+    @Test
+    void analyzerPreviewTruncatesAtTheConfiguredTokenLimit() throws IOException {
+        try (ShardIndex index = new ShardIndex("0", tempDir.resolve("truncated"), Map.of(), FAKE_EMBEDDER)) {
+            ShardIndex.AnalyzedText analyzed = index.analyze("one two three four five", 2);
+
+            assertEquals(2, analyzed.tokens().size());
+            assertEquals(
+                    List.of("one", "two"),
+                    analyzed.tokens().stream()
+                            .map(ShardIndex.AnalyzedToken::text)
+                            .toList());
+            assertTrue(analyzed.truncated());
         }
     }
 

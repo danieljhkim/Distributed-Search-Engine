@@ -309,10 +309,10 @@ fine only for a single-node cluster.
 
 #### Admin index schema and aliases
 
-Administrative create-index, inspect-schema, reindex, and atomic alias-swap
-operations require `Authorization: Bearer $DSEARCH_ADMIN_TOKEN`. Each call
-returns an auditable result (`auditId`, actor, operation, from/to index, status)
-and appends a JSON line to `dsearch.admin.audit-log`.
+Administrative create-index, inspect-schema, analyze, reindex, and atomic
+alias-swap operations require `Authorization: Bearer $DSEARCH_ADMIN_TOKEN`.
+Each call returns an auditable result (`auditId`, actor, operation, from/to
+index, status) and appends a JSON line to `dsearch.admin.audit-log`.
 
 ```bash
 # Create a named index and alias
@@ -324,6 +324,14 @@ curl -H "Authorization: Bearer $DSEARCH_ADMIN_TOKEN" \
 # Inspect the persisted schema (fields, analyzer, embedding identity/digest/dimension)
 curl -H "Authorization: Bearer $DSEARCH_ADMIN_TOKEN" \
   http://localhost:8080/api/v1/admin/indexes/movies/schema
+
+# Preview how the index's actual analyzer tokenizes sample text (read-only;
+# bounded by requestLimits.maxAnalyzeTextBytes/maxAnalyzeTokens; sample text is
+# never logged or persisted to the audit log)
+curl -H "Authorization: Bearer $DSEARCH_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Interstellar (2014)"}' \
+  http://localhost:8080/api/v1/admin/indexes/movies/analyze
 
 # Rebuild into a distinct target, verify counts and representative queries.
 # The source alias stays live until swap succeeds.

@@ -10,8 +10,12 @@ import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.grpc.NodeClient;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.gateway.api.dto.AliasSwapRequestDto;
+import com.danieljhkim.dsearch.gateway.api.dto.AnalyzeRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.CreateIndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.ReindexRequestDto;
+import com.danieljhkim.dsearch.proto.index.AnalyzeIndexRequest;
+import com.danieljhkim.dsearch.proto.index.AnalyzeIndexResponse;
+import com.danieljhkim.dsearch.proto.index.AnalyzeToken;
 import com.danieljhkim.dsearch.proto.index.CreateIndexRequest;
 import com.danieljhkim.dsearch.proto.index.CreateIndexResponse;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
@@ -109,5 +113,35 @@ class GatewayAdminIndexServiceTest {
 
         String audit = Files.readString(tempDir.resolve("audit.jsonl"));
         assertThat(audit).contains("create-index").contains("alias-swap").contains("alias-rollback");
+    }
+
+    @Test
+    void analyzeTextReturnsTokensAndOmitsSampleTextFromTheAuditLog() throws Exception {
+        when(indexStub.analyzeIndex(any(AnalyzeIndexRequest.class)))
+                .thenReturn(AnalyzeIndexResponse.newBuilder()
+                        .setIndexName("movies_1")
+                        .setAlias("movies")
+                        .setAnalyzer("standard")
+                        .addTokens(AnalyzeToken.newBuilder()
+                                .setToken("secret")
+                                .setPosition(0)
+                                .setStartOffset(0)
+                                .setEndOffset(6)
+                                .build())
+                        .setTruncated(false)
+                        .build());
+
+        AnalyzeRequestDto request = new AnalyzeRequestDto();
+        request.setText("classified sample text that must never be logged");
+
+        var response = service.analyzeText("movies", request, "admin");
+        assertThat(response.getAnalyzer()).isEqualTo("standard");
+        assertThat(response.getTokens()).hasSize(1);
+        assertThat(response.getTokens().get(0).getToken()).isEqualTo("secret");
+        assertThat(response.isTruncated()).isFalse();
+
+        String audit = Files.readString(tempDir.resolve("audit.jsonl"));
+        assertThat(audit).contains("\"operation\":\"analyze\"");
+        assertThat(audit).doesNotContain("classified sample text");
     }
 }

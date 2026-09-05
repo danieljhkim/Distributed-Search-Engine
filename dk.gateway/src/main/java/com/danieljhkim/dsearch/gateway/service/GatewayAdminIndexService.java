@@ -6,10 +6,15 @@ import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.common.validation.RequestLimitsValidator;
 import com.danieljhkim.dsearch.gateway.api.dto.AdminAuditResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.AliasSwapRequestDto;
+import com.danieljhkim.dsearch.gateway.api.dto.AnalyzeRequestDto;
+import com.danieljhkim.dsearch.gateway.api.dto.AnalyzeResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.CreateIndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.InspectSchemaResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.ReindexRequestDto;
 import com.danieljhkim.dsearch.proto.common.SearchType;
+import com.danieljhkim.dsearch.proto.index.AnalyzeIndexRequest;
+import com.danieljhkim.dsearch.proto.index.AnalyzeIndexResponse;
+import com.danieljhkim.dsearch.proto.index.AnalyzeToken;
 import com.danieljhkim.dsearch.proto.index.CreateIndexRequest;
 import com.danieljhkim.dsearch.proto.index.CreateIndexResponse;
 import com.danieljhkim.dsearch.proto.index.IndexSchemaField;
@@ -121,6 +126,47 @@ public class GatewayAdminIndexService {
                 "inspected schema",
                 Map.of("compatibilityVersion", dto.getCompatibilityVersion()));
         dto.setAuditId(audit.getAuditId());
+        return dto;
+    }
+
+    /**
+     * Read-only admin preview of how the resolved index's actual analyzer tokenizes sample text.
+     * Uses {@link #first} rather than {@link #fanout}: a preview must not create or mutate state on
+     * every node, only read one node's answer. The audit record deliberately omits the sample text
+     * itself, recording only token count and analyzer identity.
+     */
+    public AnalyzeResponseDto analyzeText(String indexOrAlias, AnalyzeRequestDto request, String actor) {
+        AnalyzeIndexResponse response = first(stub -> stub.analyzeIndex(AnalyzeIndexRequest.newBuilder()
+                .setIndexOrAlias(indexOrAlias)
+                .setText(request.getText())
+                .build()));
+        AnalyzeResponseDto dto = new AnalyzeResponseDto();
+        dto.setIndexName(response.getIndexName());
+        dto.setAlias(response.getAlias());
+        dto.setAnalyzer(response.getAnalyzer());
+        dto.setTruncated(response.getTruncated());
+        List<AnalyzeResponseDto.AnalyzedTokenDto> tokens = new ArrayList<>();
+        for (AnalyzeToken token : response.getTokensList()) {
+            AnalyzeResponseDto.AnalyzedTokenDto tokenDto = new AnalyzeResponseDto.AnalyzedTokenDto();
+            tokenDto.setToken(token.getToken());
+            tokenDto.setPosition(token.getPosition());
+            tokenDto.setStartOffset(token.getStartOffset());
+            tokenDto.setEndOffset(token.getEndOffset());
+            tokens.add(tokenDto);
+        }
+        dto.setTokens(tokens);
+        audit(
+                "analyze",
+                actor,
+                true,
+                response.getAlias(),
+                response.getIndexName(),
+                null,
+                "analyzed sample text",
+                Map.of(
+                        "analyzer", response.getAnalyzer(),
+                        "tokenCount", tokens.size(),
+                        "truncated", response.getTruncated()));
         return dto;
     }
 

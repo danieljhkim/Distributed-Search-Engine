@@ -316,4 +316,33 @@ class RequestLimitsValidatorTest {
                 () -> RequestLimitsValidator.validateSortFields(
                         List.of(SortField.newBuilder().setField("  ").build()), new AppConfig.PaginationConfig()));
     }
+
+    @Test
+    void analyzeTextWithinLimitPasses() {
+        assertDoesNotThrow(
+                () -> RequestLimitsValidator.validateAnalyzeText("hello world", new AppConfig.RequestLimitsConfig()));
+    }
+
+    @Test
+    void emptyAnalyzeTextIsRejected() {
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> RequestLimitsValidator.validateAnalyzeText("", new AppConfig.RequestLimitsConfig()));
+        assertTrue(error.getMessage().contains("must not be empty"));
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> RequestLimitsValidator.validateAnalyzeText(null, new AppConfig.RequestLimitsConfig()));
+    }
+
+    @Test
+    void analyzeTextExceedingConfiguredBytesIsRejected() {
+        AppConfig.RequestLimitsConfig limits = new AppConfig.RequestLimitsConfig();
+        limits.setMaxAnalyzeTextBytes(10);
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> RequestLimitsValidator.validateAnalyzeText("this text is far too long", limits));
+        assertTrue(error.getMessage().contains("analyze text bytes"));
+    }
 }

@@ -173,6 +173,10 @@ public class AppConfig {
         private int maxFilterClauses = 100;
         private int maxFacetCount = 20;
         private int maxFacetDepth = 3;
+        /** Maximum UTF-8 bytes of sample text accepted by an analyzer token preview. */
+        private int maxAnalyzeTextBytes = 8192;
+        /** Maximum tokens returned by an analyzer token preview; the stream is truncated beyond it. */
+        private int maxAnalyzeTokens = 256;
         /**
          * Maximum deterministic upper bound for all facet buckets expanded across a recursive
          * request tree. Each level contributes the product of its size and every ancestor size.
@@ -194,6 +198,7 @@ public class AppConfig {
                     + ", maxBulkEmbeddingBytes=" + maxBulkEmbeddingBytes + ", maxFilterClauses=" + maxFilterClauses
                     + ", maxFacetCount=" + maxFacetCount + ", maxFacetDepth=" + maxFacetDepth
                     + ", maxFacetExpandedBuckets=" + maxFacetExpandedBuckets
+                    + ", maxAnalyzeTextBytes=" + maxAnalyzeTextBytes + ", maxAnalyzeTokens=" + maxAnalyzeTokens
                     + ", maxConcurrentHttpRequests=" + maxConcurrentHttpRequests + ", maxConcurrentFanoutCalls="
                     + maxConcurrentFanoutCalls + ", retryAfterMillis=" + retryAfterMillis + '}';
         }

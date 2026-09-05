@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.danieljhkim.dsearch.gateway.api.dto.AdminAuditResponseDto;
+import com.danieljhkim.dsearch.gateway.api.dto.AnalyzeResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.InspectSchemaResponseDto;
 import com.danieljhkim.dsearch.gateway.config.AdminAuthFilter;
 import com.danieljhkim.dsearch.gateway.service.GatewayAdminIndexService;
@@ -37,6 +38,7 @@ class AdminIndexControllerTest {
     void createInspectReindexSwapAndRollbackReturnAuditableJson() throws Exception {
         when(adminIndexService.createIndex(any(), any())).thenReturn(audit("create-index", "movies", "movies_1", null));
         when(adminIndexService.inspectSchema(eq("movies"), any())).thenReturn(schema());
+        when(adminIndexService.analyzeText(eq("movies"), any(), any())).thenReturn(analyzed());
         when(adminIndexService.reindex(eq("movies"), any(), any()))
                 .thenReturn(audit("reindex", "movies", "movies_2", "movies_1"));
         when(adminIndexService.swapAlias(any(), any()))
@@ -56,6 +58,14 @@ class AdminIndexControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.compatibilityVersion").value(1))
                 .andExpect(jsonPath("$.embedding.dimension").value(384));
+
+        mockMvc.perform(post("/api/v1/admin/indexes/movies/analyze")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"text\":\"Interstellar\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.analyzer").value("standard"))
+                .andExpect(jsonPath("$.tokens[0].token").value("interstellar"))
+                .andExpect(jsonPath("$.truncated").value(false));
 
         mockMvc.perform(post("/api/v1/admin/indexes/movies/reindex")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -88,6 +98,21 @@ class AdminIndexControllerTest {
                 previous,
                 "ok",
                 Map.of());
+    }
+
+    private static AnalyzeResponseDto analyzed() {
+        AnalyzeResponseDto dto = new AnalyzeResponseDto();
+        dto.setIndexName("movies_1");
+        dto.setAlias("movies");
+        dto.setAnalyzer("standard");
+        dto.setTruncated(false);
+        AnalyzeResponseDto.AnalyzedTokenDto token = new AnalyzeResponseDto.AnalyzedTokenDto();
+        token.setToken("interstellar");
+        token.setPosition(0);
+        token.setStartOffset(0);
+        token.setEndOffset(12);
+        dto.setTokens(List.of(token));
+        return dto;
     }
 
     private static InspectSchemaResponseDto schema() {
