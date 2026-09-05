@@ -16,6 +16,8 @@ import com.danieljhkim.dsearch.ml.embedding.TextEmbedder;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.Filter;
 import com.danieljhkim.dsearch.proto.common.SearchType;
+import com.danieljhkim.dsearch.proto.index.AnalyzeIndexRequest;
+import com.danieljhkim.dsearch.proto.index.AnalyzeIndexResponse;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentRequest;
@@ -572,6 +574,64 @@ class IndexServiceImplTest {
                     search);
             assertEquals(Status.Code.INTERNAL, status(search.error).getStatus().getCode());
             assertFalse(search.completed);
+        }
+    }
+
+    @Test
+    void analyzeIndexReturnsAnalyzerIdentityTokensPositionsAndOffsets() throws IOException {
+        try (IndexManager manager = manager("analyze")) {
+            IndexServiceImpl service = new IndexServiceImpl(manager);
+            service.indexDocument(
+                    IndexDocumentRequest.newBuilder()
+                            .setPartitionId("0")
+                            .setDocument(document("doc-1", "seed content"))
+                            .build(),
+                    new RecordingObserver<>());
+
+            RecordingObserver<AnalyzeIndexResponse> observer = new RecordingObserver<>();
+            service.analyzeIndex(
+                    AnalyzeIndexRequest.newBuilder()
+                            .setIndexOrAlias("0")
+                            .setText("Café naïve")
+                            .build(),
+                    observer);
+
+            assertNull(observer.error);
+            assertTrue(observer.completed);
+            assertEquals("standard", observer.value.getAnalyzer());
+            assertEquals("0", observer.value.getIndexName());
+            assertEquals(2, observer.value.getTokensCount());
+            assertEquals("café", observer.value.getTokens(0).getToken());
+            assertEquals(0, observer.value.getTokens(0).getPosition());
+            assertEquals("naïve", observer.value.getTokens(1).getToken());
+            assertEquals(1, observer.value.getTokens(1).getPosition());
+            assertFalse(observer.value.getTruncated());
+        }
+    }
+
+    @Test
+    void analyzeIndexRejectsBlankTextAndUnknownIndex() throws IOException {
+        try (IndexManager manager = manager("analyze-errors")) {
+            IndexServiceImpl service = new IndexServiceImpl(manager);
+
+            RecordingObserver<AnalyzeIndexResponse> blank = new RecordingObserver<>();
+            service.analyzeIndex(
+                    AnalyzeIndexRequest.newBuilder()
+                            .setIndexOrAlias("0")
+                            .setText("")
+                            .build(),
+                    blank);
+            assertInvalidArgument(blank.error);
+
+            RecordingObserver<AnalyzeIndexResponse> unknown = new RecordingObserver<>();
+            service.analyzeIndex(
+                    AnalyzeIndexRequest.newBuilder()
+                            .setIndexOrAlias("missing")
+                            .setText("hello")
+                            .build(),
+                    unknown);
+            assertEquals(
+                    Status.Code.NOT_FOUND, status(unknown.error).getStatus().getCode());
         }
     }
 

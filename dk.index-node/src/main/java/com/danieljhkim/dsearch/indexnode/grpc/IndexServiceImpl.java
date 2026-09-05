@@ -20,6 +20,9 @@ import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.Filter;
 import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.proto.common.SortValue;
+import com.danieljhkim.dsearch.proto.index.AnalyzeIndexRequest;
+import com.danieljhkim.dsearch.proto.index.AnalyzeIndexResponse;
+import com.danieljhkim.dsearch.proto.index.AnalyzeToken;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentResult;
@@ -348,6 +351,51 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
             LOGGER.log(Level.SEVERE, "InspectSchema failed", e);
             responseObserver.onError(Status.INTERNAL
                     .withDescription("Failed to inspect schema")
+                    .withCause(e)
+                    .asRuntimeException());
+        }
+    }
+
+    /**
+     * Read-only admin preview: tokenizes sample text with the analyzer the resolved index actually
+     * uses for indexing and query parsing. Never logs {@code request.getText()}, since sample text
+     * is caller-supplied content, not an identifier safe to persist in logs or audit output.
+     */
+    @Override
+    public void analyzeIndex(AnalyzeIndexRequest request, StreamObserver<AnalyzeIndexResponse> responseObserver) {
+        try {
+            RequestLimitsValidator.validateAnalyzeText(request.getText(), requestLimits);
+            int maxTokens = Math.max(1, requestLimits.getMaxAnalyzeTokens());
+            IndexManager.AnalyzedIndex analyzed =
+                    indexManager.analyzeText(request.getIndexOrAlias(), request.getText(), maxTokens);
+            AnalyzeIndexResponse.Builder builder = AnalyzeIndexResponse.newBuilder()
+                    .setIndexName(analyzed.indexName())
+                    .setAlias(analyzed.alias())
+                    .setAnalyzer(analyzed.analyzer())
+                    .setTruncated(analyzed.truncated());
+            for (ShardIndex.AnalyzedToken token : analyzed.tokens()) {
+                builder.addTokens(AnalyzeToken.newBuilder()
+                        .setToken(token.text())
+                        .setPosition(token.position())
+                        .setStartOffset(token.startOffset())
+                        .setEndOffset(token.endOffset())
+                        .build());
+            }
+            responseObserver.onNext(builder.build());
+            responseObserver.onCompleted();
+        } catch (IllegalArgumentException e) {
+            invalidArgument(responseObserver, e);
+        } catch (ShardNotFoundException e) {
+            responseObserver.onError(Status.NOT_FOUND
+                    .withDescription(e.getMessage())
+                    .withCause(e)
+                    .asRuntimeException());
+        } catch (SchemaMismatchException e) {
+            failedPrecondition(responseObserver, e);
+        } catch (RuntimeException e) {
+            LOGGER.log(Level.SEVERE, "AnalyzeIndex failed for index " + request.getIndexOrAlias(), e);
+            responseObserver.onError(Status.INTERNAL
+                    .withDescription("Failed to analyze text")
                     .withCause(e)
                     .asRuntimeException());
         }

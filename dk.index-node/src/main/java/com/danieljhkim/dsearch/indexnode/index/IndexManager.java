@@ -615,10 +615,37 @@ public class IndexManager implements Closeable {
             throw new ShardNotFoundException(physicalIndex);
         }
         IndexAlias alias = aliasStore.getAlias(indexOrAlias);
-        String aliasName =
-                alias != null ? alias.getAlias() : indexOrAlias.equals(physicalIndex) ? physicalIndex : indexOrAlias;
+        String aliasName = resolveAliasName(indexOrAlias, physicalIndex, alias);
         long generation = alias != null ? alias.getGeneration() : 1L;
         return new InspectedSchema(physicalIndex, aliasName, shardIndex.getSchema(), generation);
+    }
+
+    /**
+     * Tokenizes sample text with the analyzer actually configured for the resolved index's
+     * persisted schema. Read-only: it never creates a shard, so an unknown index/alias fails with
+     * {@link ShardNotFoundException} rather than silently provisioning one.
+     */
+    public AnalyzedIndex analyzeText(String indexOrAlias, String text, int maxTokens) {
+        PartitionIdValidator.validate(indexOrAlias);
+        String physicalIndex = resolvePhysicalIndex(indexOrAlias);
+        ensureServable(physicalIndex);
+        ShardIndex shardIndex = shardIndexes.get(physicalIndex);
+        if (shardIndex == null) {
+            throw new ShardNotFoundException(physicalIndex);
+        }
+        IndexAlias alias = aliasStore.getAlias(indexOrAlias);
+        String aliasName = resolveAliasName(indexOrAlias, physicalIndex, alias);
+        ShardIndex.AnalyzedText analyzed = shardIndex.analyze(text, maxTokens);
+        return new AnalyzedIndex(
+                physicalIndex,
+                aliasName,
+                shardIndex.getSchema().analyzer().name(),
+                analyzed.tokens(),
+                analyzed.truncated());
+    }
+
+    private static String resolveAliasName(String indexOrAlias, String physicalIndex, IndexAlias alias) {
+        return alias != null ? alias.getAlias() : indexOrAlias.equals(physicalIndex) ? physicalIndex : indexOrAlias;
     }
 
     public ReindexResult reindex(
@@ -761,6 +788,17 @@ public class IndexManager implements Closeable {
      *     different physical index
      */
     public record InspectedSchema(String indexName, String alias, IndexSchema schema, long generation) {}
+
+    /**
+     * @param analyzer name of the analyzer actually used by the resolved index's persisted schema
+     * @param truncated true when the token stream was cut short by the caller's token limit
+     */
+    public record AnalyzedIndex(
+            String indexName,
+            String alias,
+            String analyzer,
+            List<ShardIndex.AnalyzedToken> tokens,
+            boolean truncated) {}
 
     public record ReindexResult(
             boolean success,

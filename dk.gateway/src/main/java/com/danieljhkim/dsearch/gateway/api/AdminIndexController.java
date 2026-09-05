@@ -3,6 +3,8 @@ package com.danieljhkim.dsearch.gateway.api;
 import com.danieljhkim.dsearch.common.validation.PartitionIdValidator;
 import com.danieljhkim.dsearch.gateway.api.dto.AdminAuditResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.AliasSwapRequestDto;
+import com.danieljhkim.dsearch.gateway.api.dto.AnalyzeRequestDto;
+import com.danieljhkim.dsearch.gateway.api.dto.AnalyzeResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.CreateIndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.InspectSchemaResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.ReindexRequestDto;
@@ -37,6 +39,15 @@ public class AdminIndexController {
     public InspectSchemaResponseDto inspectSchema(@PathVariable("name") String name, HttpServletRequest httpRequest) {
         PartitionIdValidator.validate(name);
         return adminIndexService.inspectSchema(name, actor(httpRequest));
+    }
+
+    @PostMapping(value = "/indexes/{name}/analyze", consumes = "application/json", produces = "application/json")
+    public AnalyzeResponseDto analyze(
+            @PathVariable("name") String name,
+            @Valid @RequestBody AnalyzeRequestDto request,
+            HttpServletRequest httpRequest) {
+        PartitionIdValidator.validate(name);
+        return adminIndexService.analyzeText(name, request, actor(httpRequest));
     }
 
     @PostMapping(value = "/indexes/{name}/reindex", consumes = "application/json", produces = "application/json")

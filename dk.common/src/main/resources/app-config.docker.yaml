@@ -69,6 +69,8 @@ requestLimits:
   maxFilterClauses: 100
   maxFacetCount: 20
   maxFacetDepth: 3
+  maxAnalyzeTextBytes: 8192
+  maxAnalyzeTokens: 256
   maxConcurrentHttpRequests: 128
   maxConcurrentFanoutCalls: 64
   retryAfterMillis: 100
