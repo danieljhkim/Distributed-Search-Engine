@@ -156,6 +156,32 @@ public class SearchExecutor implements Closeable {
             boolean highlight,
             List<FacetRequest> facetRequests,
             SortOptions sortOptions) {
+        return searchHybrid(
+                queryString,
+                shardId,
+                page,
+                size,
+                indexService,
+                fusionStrategy,
+                filters,
+                highlight,
+                facetRequests,
+                sortOptions,
+                null);
+    }
+
+    public SearchResult searchHybrid(
+            String queryString,
+            String shardId,
+            int page,
+            int size,
+            BaseIndexService indexService,
+            FusionStrategy fusionStrategy,
+            List<Filter> filters,
+            boolean highlight,
+            List<FacetRequest> facetRequests,
+            SortOptions sortOptions,
+            List<String> storedFields) {
         SortOptions effectiveSort = sortOptions == null ? SortOptions.NONE : sortOptions;
         int fetchSize = requiredForPage(page, size);
         SearchResult bm25Result = search(
@@ -168,7 +194,8 @@ public class SearchExecutor implements Closeable {
                 filters,
                 highlight,
                 facetRequests,
-                effectiveSort);
+                effectiveSort,
+                storedFields);
         SearchResult semanticResult = search(
                 queryString,
                 shardId,
@@ -179,7 +206,8 @@ public class SearchExecutor implements Closeable {
                 filters,
                 highlight,
                 facetRequests,
-                effectiveSort);
+                effectiveSort,
+                storedFields);
 
         List<SearchHit> res = HybridFusion.fuse(bm25Result, semanticResult, fusionStrategy, fetchSize, 0.5, 0.5);
         if (effectiveSort.isSorted()) {
@@ -260,6 +288,32 @@ public class SearchExecutor implements Closeable {
             boolean highlight,
             List<FacetRequest> facetRequests,
             SortOptions sortOptions) {
+        return search(
+                queryString,
+                shardId,
+                page,
+                size,
+                searchType,
+                indexService,
+                filters,
+                highlight,
+                facetRequests,
+                sortOptions,
+                null);
+    }
+
+    public SearchResult search(
+            String queryString,
+            String shardId,
+            int page,
+            int size,
+            SearchType searchType,
+            BaseIndexService indexService,
+            List<Filter> filters,
+            boolean highlight,
+            List<FacetRequest> facetRequests,
+            SortOptions sortOptions,
+            List<String> storedFields) {
 
         page = normalizePage(page);
         size = normalizeSize(size);
@@ -299,7 +353,8 @@ public class SearchExecutor implements Closeable {
                                 facetRequests,
                                 remainingBudget,
                                 nodeTimingsMs,
-                                effectiveSort)));
+                                effectiveSort,
+                                storedFields)));
                 submitted++;
             }
         } catch (RuntimeException e) {
@@ -380,7 +435,8 @@ public class SearchExecutor implements Closeable {
             List<FacetRequest> facetRequests,
             Duration deadline,
             Map<String, Long> nodeTimingsMs,
-            SortOptions sortOptions) {
+            SortOptions sortOptions,
+            List<String> storedFields) {
 
         FanoutPermit permit = new FanoutPermit();
         CompletableFuture<SearchResult> future = CompletableFuture.supplyAsync(
@@ -404,7 +460,8 @@ public class SearchExecutor implements Closeable {
                                 highlight,
                                 facetRequests,
                                 deadline,
-                                sortOptions);
+                                sortOptions,
+                                storedFields);
                     } finally {
                         long tookMs = (System.nanoTime() - startNanos) / 1_000_000L;
                         nodeTimingsMs.put(nodeId, tookMs);

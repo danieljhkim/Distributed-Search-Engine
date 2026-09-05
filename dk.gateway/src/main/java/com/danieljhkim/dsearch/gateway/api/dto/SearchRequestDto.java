@@ -35,6 +35,13 @@ public class SearchRequestDto {
     private Boolean highlight = true;
 
     /**
+     * Optional stored-field allowlist for each hit. {@code null} preserves the legacy full hit;
+     * an empty list returns only identity, score, and traversal metadata. {@code title} and
+     * {@code content} govern their legacy top-level hit properties and their highlights too.
+     */
+    private List<String> storedFields;
+
+    /**
      * Ordering, most significant component first. Empty means relevance order. A deterministic
      * document-id tie-breaker is always appended server-side, so the order is total.
      */

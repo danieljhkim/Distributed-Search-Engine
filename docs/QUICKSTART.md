@@ -87,6 +87,43 @@ curl -X POST http://localhost:8080/api/v1/search \
 
 This returns BM25 + Semantic fused results.
 
+### Select stored fields in each hit
+
+Use `storedFields` as an explicit allowlist when result cards do not need the complete stored
+document. `title` and `content` select the legacy top-level hit properties with those names;
+highlights are returned only for selected fields. Other selected values appear under `fields`.
+Unknown or missing stored fields are simply absent.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "time travel romance",
+    "partitionId": "0",
+    "pageSize": 10,
+    "storedFields": ["title", "year"]
+  }'
+```
+
+The three request shapes are deliberately distinct:
+
+- omit `storedFields` to preserve the legacy response containing every stored user field;
+- send `"storedFields": []` to return only each hit's `docId`, `score`, and internal traversal
+  metadata, while response totals, facets, fanout status, and cursors remain available;
+- send names to return only those stored fields.
+
+The same contract is available to gRPC callers through
+`QueryRequest.stored_field_selection` and `IndexSearchRequest.stored_field_selection`. The wrapper
+message is presence-aware: omit it for legacy behavior or send an empty wrapper for no user
+fields. A selection is bounded by `requestLimits.maxFieldsPerDocument` (100 by default); names must
+be non-blank, unique, and no larger than `requestLimits.maxFieldValueBytes` in UTF-8. Invalid
+selections return HTTP 400 or gRPC `INVALID_ARGUMENT` with the applicable bound.
+
+Projection is a response-shaping option, not part of ranking. Sorting, filtering, facets, hit
+order, `totalHits`, and cursor traversal therefore do not change when fields are excluded. A
+caller may change `storedFields` between cursor pages; the query, filters, sort, search type,
+fusion strategy, page size, schema, and index generation remain cursor-bound.
+
 ### Sort and page with a cursor
 
 Order by any field marked `sortable` in `fieldConfigs`. A document-id tie-breaker is appended

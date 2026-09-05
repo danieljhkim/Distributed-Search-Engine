@@ -85,6 +85,9 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
         List<Filter> filters = request.getFiltersList();
         boolean highlight = request.getHighlight();
         List<FacetRequest> facetRequests = request.getFacetsList();
+        List<String> storedFields = request.hasStoredFieldSelection()
+                ? List.copyOf(request.getStoredFieldSelection().getFieldsList())
+                : null;
 
         try {
             RequestLimitsValidator.validateQueryRequest(request, requestLimits, paginationConfig);
@@ -137,29 +140,55 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
             SearchResult result;
             if (searchType == SearchType.HYBRID) {
                 FusionStrategy fusionStrategy = request.getFusionStrategy();
-                result = searchExecutor.searchHybrid(
-                        queryString,
-                        partitionId,
-                        page,
-                        size,
-                        indexService,
-                        fusionStrategy,
-                        filters,
-                        highlight,
-                        facetRequests,
-                        sortOptions);
+                result = storedFields == null
+                        ? searchExecutor.searchHybrid(
+                                queryString,
+                                partitionId,
+                                page,
+                                size,
+                                indexService,
+                                fusionStrategy,
+                                filters,
+                                highlight,
+                                facetRequests,
+                                sortOptions)
+                        : searchExecutor.searchHybrid(
+                                queryString,
+                                partitionId,
+                                page,
+                                size,
+                                indexService,
+                                fusionStrategy,
+                                filters,
+                                highlight,
+                                facetRequests,
+                                sortOptions,
+                                storedFields);
             } else {
-                result = searchExecutor.search(
-                        queryString,
-                        partitionId,
-                        page,
-                        size,
-                        searchType,
-                        indexService,
-                        filters,
-                        highlight,
-                        facetRequests,
-                        sortOptions);
+                result = storedFields == null
+                        ? searchExecutor.search(
+                                queryString,
+                                partitionId,
+                                page,
+                                size,
+                                searchType,
+                                indexService,
+                                filters,
+                                highlight,
+                                facetRequests,
+                                sortOptions)
+                        : searchExecutor.search(
+                                queryString,
+                                partitionId,
+                                page,
+                                size,
+                                searchType,
+                                indexService,
+                                filters,
+                                highlight,
+                                facetRequests,
+                                sortOptions,
+                                storedFields);
             }
             SearchResult.FanoutMetadata fanoutMetadata = result.getFanoutMetadata();
             if (isTotalFanoutFailure(fanoutMetadata)) {

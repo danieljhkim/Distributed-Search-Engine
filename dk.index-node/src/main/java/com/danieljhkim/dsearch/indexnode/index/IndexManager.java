@@ -545,6 +545,22 @@ public class IndexManager implements Closeable {
             List<FacetRequest> facetRequests,
             SortOptions sortOptions)
             throws IOException {
+        return searchDocument(
+                partitionId, query, limit, from, searchType, filters, highlight, facetRequests, sortOptions, null);
+    }
+
+    public SearchResult searchDocument(
+            String partitionId,
+            String query,
+            int limit,
+            int from,
+            SearchType searchType,
+            List<Filter> filters,
+            boolean highlight,
+            List<FacetRequest> facetRequests,
+            SortOptions sortOptions,
+            List<String> storedFields)
+            throws IOException {
         String physicalIndex = resolvePhysicalIndex(partitionId);
         ensureServable(physicalIndex);
         ShardIndex shardIndex = shardIndexes.get(physicalIndex);
@@ -557,8 +573,10 @@ public class IndexManager implements Closeable {
         }
         return switch (searchType) {
             case SearchType.SEMANTIC ->
-                shardIndex.semanticSearch(query, limit, from, filters, highlight, facetRequests, effectiveSort);
-            default -> shardIndex.search(query, limit, from, filters, highlight, facetRequests, effectiveSort);
+                shardIndex.semanticSearch(
+                        query, limit, from, filters, highlight, facetRequests, effectiveSort, storedFields);
+            default ->
+                shardIndex.search(query, limit, from, filters, highlight, facetRequests, effectiveSort, storedFields);
         };
     }
 

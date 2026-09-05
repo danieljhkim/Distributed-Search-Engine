@@ -308,6 +308,18 @@ public class ShardIndex implements Closeable {
             boolean highlight,
             List<FacetRequest> facetRequests,
             SortOptions sortOptions) {
+        return search(queryString, limit, from, filters, highlight, facetRequests, sortOptions, null);
+    }
+
+    public SearchResult search(
+            String queryString,
+            int limit,
+            int from,
+            List<Filter> filters,
+            boolean highlight,
+            List<FacetRequest> facetRequests,
+            SortOptions sortOptions,
+            List<String> storedFields) {
         IndexSearcher searcher = null;
         try {
             searcher = searcherManager.acquire();
@@ -328,7 +340,14 @@ public class ShardIndex implements Closeable {
 
             int sliceFrom = effectiveSort.hasSearchAfter() ? 0 : from;
             SearchResult result = buildPagedResult(
-                    searcher, topDocs, limit, sliceFrom, totalHits, highlight ? textQuery : null, effectiveSort.spec());
+                    searcher,
+                    topDocs,
+                    limit,
+                    sliceFrom,
+                    totalHits,
+                    highlight ? textQuery : null,
+                    effectiveSort.spec(),
+                    storedFields);
             result.setFacets(facets);
             return result;
         } catch (IOException e) {
@@ -397,6 +416,19 @@ public class ShardIndex implements Closeable {
             boolean highlight,
             List<FacetRequest> facetRequests,
             SortOptions sortOptions) {
+        return semanticSearch(queryText, limit, from, filters, highlight, facetRequests, sortOptions, null);
+    }
+
+    @SuppressWarnings("all")
+    public SearchResult semanticSearch(
+            String queryText,
+            int limit,
+            int from,
+            List<Filter> filters,
+            boolean highlight,
+            List<FacetRequest> facetRequests,
+            SortOptions sortOptions,
+            List<String> storedFields) {
         IndexSearcher searcher = null;
         try {
             float[] queryEmbedding = embeddingService.embed(queryText);
@@ -439,8 +471,8 @@ public class ShardIndex implements Closeable {
                 facets = facetCalculator.computeFacets(searcher, knnQuery, facetRequests);
             }
 
-            SearchResult result =
-                    buildPagedResult(searcher, topDocs, limit, from, totalHits, highlightQuery, effectiveSort.spec());
+            SearchResult result = buildPagedResult(
+                    searcher, topDocs, limit, from, totalHits, highlightQuery, effectiveSort.spec(), storedFields);
             result.setFacets(facets);
             return result;
         } catch (IOException e) {
@@ -507,7 +539,8 @@ public class ShardIndex implements Closeable {
             int from,
             int totalHits,
             Query highlightQuery,
-            SortSpec sortSpec)
+            SortSpec sortSpec,
+            List<String> storedFields)
             throws IOException {
         ScoreDoc[] scoreDocs = topDocs.scoreDocs;
 
@@ -517,10 +550,16 @@ public class ShardIndex implements Closeable {
         }
 
         List<SearchHit> hits = new ArrayList<>(end - from);
+        Set<String> fieldsToLoad = null;
+        if (storedFields != null) {
+            fieldsToLoad = new HashSet<>(storedFields);
+            fieldsToLoad.add(FIELD_ID);
+        }
         for (int i = from; i < end; i++) {
             ScoreDoc sd = scoreDocs[i];
             StoredFields storedField = searcher.storedFields();
-            Document doc = storedField.document(sd.doc);
+            Document doc =
+                    fieldsToLoad == null ? storedField.document(sd.doc) : storedField.document(sd.doc, fieldsToLoad);
             String docId = doc.get(FIELD_ID);
             if (docId == null) {
                 continue;

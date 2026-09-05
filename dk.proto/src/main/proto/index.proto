@@ -84,14 +84,21 @@ message IndexSearchRequest {
   // True when `search_after` is meaningful. Distinguishes a genuine resume from an
   // absent tuple, since an empty repeated field is indistinguishable from unset.
   bool has_search_after = 11;
+  // Optional response projection forwarded by the query node. Presence is
+  // significant: an empty selection requests no user stored fields.
+  StoredFieldSelection stored_field_selection = 12;
+}
+
+message StoredFieldSelection {
+  repeated string fields = 1;
 }
 
 message IndexHit {
   string partition_id = 1;
   string doc_id = 2;
   float score = 3;
-  string content = 4;
-  string title = 5;
+  optional string content = 4;
+  optional string title = 5;
   int32 rank = 6;
   map<string, string> highlighted_fields = 7;
   map<string, string> fields = 8;

@@ -1,5 +1,6 @@
 package com.danieljhkim.dsearch.gateway.api.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import java.util.List;
 import java.util.Map;
 import lombok.Getter;
@@ -42,6 +43,7 @@ public class SearchResponseDto {
 
     @Setter
     @Getter
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class SearchHitDto {
         private String docId;
         private double score;

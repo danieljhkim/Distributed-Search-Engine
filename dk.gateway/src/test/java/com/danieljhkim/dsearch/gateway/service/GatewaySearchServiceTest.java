@@ -63,6 +63,7 @@ class GatewaySearchServiceTest {
         request.setSearchType(SearchType.HYBRID);
         request.setFusionStrategy(FusionStrategy.WEIGHTED);
         request.setHighlight(false);
+        request.setStoredFields(List.of("title", "category"));
         request.setFilters(List.of(new FilterDto("category", FilterOperator.IN, List.of("docs", "guides"))));
         request.setFacets(List.of(new FacetRequestDto("author", 5, null, List.of(new FacetRequestDto("tag", 3)))));
 
@@ -96,6 +97,8 @@ class GatewaySearchServiceTest {
         assertThat(grpcRequest.getSearchType()).isEqualTo(SearchType.HYBRID);
         assertThat(grpcRequest.getFusionStrategy()).isEqualTo(FusionStrategy.WEIGHTED);
         assertThat(grpcRequest.getHighlight()).isFalse();
+        assertThat(grpcRequest.hasStoredFieldSelection()).isTrue();
+        assertThat(grpcRequest.getStoredFieldSelection().getFieldsList()).containsExactly("title", "category");
         assertThat(grpcRequest.getFiltersCount()).isEqualTo(1);
         assertThat(grpcRequest.getFilters(0).getField()).isEqualTo("category");
         assertThat(grpcRequest.getFilters(0).getOperator()).isEqualTo(FilterOperator.IN);
@@ -168,6 +171,55 @@ class GatewaySearchServiceTest {
         verify(queryStub).search(requestCaptor.capture());
         assertThat(requestCaptor.getValue().getCursor()).isEmpty();
         assertThat(requestCaptor.getValue().getSortCount()).isZero();
+        assertThat(requestCaptor.getValue().hasStoredFieldSelection()).isFalse();
+    }
+
+    @Test
+    void explicitEmptyStoredFieldSelectionRemainsPresentOnTheWire() {
+        when(queryStub.withDeadlineAfter(anyLong(), any(TimeUnit.class))).thenReturn(queryStub);
+        SearchRequestDto request = new SearchRequestDto();
+        request.setQuery("lucene vector");
+        request.setPageSize(3);
+        request.setStoredFields(List.of());
+        when(qnClientManager.nextClient()).thenReturn(queryStub);
+        when(queryStub.search(any(QueryRequest.class)))
+                .thenReturn(QueryResponse.newBuilder()
+                        .addHits(SearchHit.newBuilder().setDocId("doc-identity").setScore(4.0))
+                        .setTotalHits(1)
+                        .build());
+
+        SearchResponseDto response = service.search(request);
+
+        ArgumentCaptor<QueryRequest> requestCaptor = ArgumentCaptor.forClass(QueryRequest.class);
+        verify(queryStub).search(requestCaptor.capture());
+        assertThat(requestCaptor.getValue().hasStoredFieldSelection()).isTrue();
+        assertThat(requestCaptor.getValue().getStoredFieldSelection().getFieldsCount())
+                .isZero();
+        assertThat(response.getHits().getFirst().getDocId()).isEqualTo("doc-identity");
+        assertThat(response.getHits().getFirst().getScore()).isEqualTo(4.0);
+        assertThat(response.getHits().getFirst().getTitle()).isNull();
+        assertThat(response.getHits().getFirst().getContent()).isNull();
+        assertThat(response.getHits().getFirst().getFields()).isNull();
+        assertThat(response.getHits().getFirst().getHighlightedFields()).isNull();
+    }
+
+    @Test
+    void invalidStoredFieldSelectionsAreRejectedBeforeFanout() {
+        SearchRequestDto blank = new SearchRequestDto();
+        blank.setQuery("lucene");
+        blank.setStoredFields(List.of(" "));
+        assertThatThrownBy(() -> service.search(blank))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("stored field name must not be blank");
+
+        SearchRequestDto oversized = new SearchRequestDto();
+        oversized.setQuery("lucene");
+        oversized.setStoredFields(java.util.stream.IntStream.range(0, 101)
+                .mapToObj(i -> "field-" + i)
+                .toList());
+        assertThatThrownBy(() -> service.search(oversized))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("selection count (101) exceeds maximum allowed (100)");
     }
 
     @Test

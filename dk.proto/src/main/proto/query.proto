@@ -27,13 +27,21 @@ message QueryRequest {
   // Opaque cursor from a previous QueryResponse.next_cursor. Mutually exclusive
   // with a non-zero `page`.
   string cursor = 12;
+  // Optional response projection. Absence preserves the legacy full stored-field
+  // response; a present message with no fields returns only hit identity, score,
+  // ordering metadata, facets, fanout metadata, and cursors.
+  StoredFieldSelection stored_field_selection = 13;
+}
+
+message StoredFieldSelection {
+  repeated string fields = 1;
 }
 
 message SearchHit {
   string doc_id = 1;
   double score = 2;
-  string content = 3;
-  string title = 4;
+  optional string content = 3;
+  optional string title = 4;
   map<string, string> highlighted_fields = 5;
   map<string, string> fields = 6;
   // Sort tuple for this hit, positionally matched to QueryRequest.sort plus the
