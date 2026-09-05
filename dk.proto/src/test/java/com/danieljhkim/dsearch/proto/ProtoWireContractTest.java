@@ -24,6 +24,7 @@ import com.danieljhkim.dsearch.proto.query.FanoutStatus;
 import com.danieljhkim.dsearch.proto.query.QueryRequest;
 import com.danieljhkim.dsearch.proto.query.QueryResponse;
 import com.danieljhkim.dsearch.proto.query.SearchHit;
+import com.danieljhkim.dsearch.proto.query.StoredFieldSelection;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.CodedOutputStream;
 import com.google.protobuf.DescriptorProtos.DescriptorProto;
@@ -57,6 +58,29 @@ class ProtoWireContractTest {
             Path.of("target", "generated-resources", "protobuf", "descriptor-sets", "dsearch.pb");
     private static final int UNKNOWN_FIELD_NUMBER = 19001;
     private static final ByteString UNKNOWN_VALUE = ByteString.copyFromUtf8("contract-test");
+
+    @Test
+    void storedFieldSelectionDistinguishesOmittedEmptyAndNamedRequests() {
+        QueryRequest omitted = QueryRequest.newBuilder().build();
+        QueryRequest empty = QueryRequest.newBuilder()
+                .setStoredFieldSelection(StoredFieldSelection.getDefaultInstance())
+                .build();
+        QueryRequest named = QueryRequest.newBuilder()
+                .setStoredFieldSelection(
+                        StoredFieldSelection.newBuilder().addFields("title").addFields("category"))
+                .build();
+
+        assertFalse(omitted.hasStoredFieldSelection());
+        assertTrue(empty.hasStoredFieldSelection());
+        assertEquals(0, empty.getStoredFieldSelection().getFieldsCount());
+        assertEquals(
+                List.of("title", "category"), named.getStoredFieldSelection().getFieldsList());
+
+        SearchHit projected =
+                SearchHit.newBuilder().setDocId("doc-1").setScore(1.0).build();
+        assertFalse(projected.hasTitle());
+        assertFalse(projected.hasContent());
+    }
 
     @Test
     void compiledDescriptorContainsTheExpectedPublicSurface() throws Exception {

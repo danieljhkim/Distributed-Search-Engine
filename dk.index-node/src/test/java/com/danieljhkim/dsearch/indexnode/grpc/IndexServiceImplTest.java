@@ -25,6 +25,7 @@ import com.danieljhkim.dsearch.proto.index.IndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexSearchRequest;
 import com.danieljhkim.dsearch.proto.index.IndexSearchResponse;
+import com.danieljhkim.dsearch.proto.index.StoredFieldSelection;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.grpc.stub.StreamObserver;
@@ -230,6 +231,90 @@ class IndexServiceImplTest {
             assertEquals(0, observer.value.getTotalHits());
             assertEquals(0, observer.value.getHitsCount());
         }
+    }
+
+    @Test
+    void storedFieldProjectionIsPresenceAwareAndReducesLargeHitPayloads() throws IOException {
+        try (IndexManager manager = manager("projection")) {
+            IndexServiceImpl service = new IndexServiceImpl(manager);
+            String largeContent = "needle " + "payload ".repeat(6000);
+            RecordingObserver<IndexDocumentResponse> indexed = new RecordingObserver<>();
+            service.indexDocument(
+                    IndexDocumentRequest.newBuilder()
+                            .setPartitionId("0")
+                            .setDocument(Document.newBuilder()
+                                    .setId("doc-large")
+                                    .addFields(Field.newBuilder()
+                                            .setName(ShardIndex.FIELD_TITLE)
+                                            .setValue("Needle title"))
+                                    .addFields(Field.newBuilder()
+                                            .setName(ShardIndex.FIELD_CONTENT)
+                                            .setValue(largeContent)))
+                            .build(),
+                    indexed);
+            assertTrue(indexed.completed);
+
+            IndexSearchResponse full = search(
+                    service,
+                    IndexSearchRequest.newBuilder()
+                            .setPartitionId("0")
+                            .setQuery("needle")
+                            .setSize(10)
+                            .setSearchType(SearchType.BM25)
+                            .setHighlight(true)
+                            .build());
+            IndexSearchResponse selected = search(
+                    service,
+                    IndexSearchRequest.newBuilder()
+                            .setPartitionId("0")
+                            .setQuery("needle")
+                            .setSize(10)
+                            .setSearchType(SearchType.BM25)
+                            .setHighlight(true)
+                            .setStoredFieldSelection(StoredFieldSelection.newBuilder()
+                                    .addFields(ShardIndex.FIELD_TITLE)
+                                    .addFields("missing"))
+                            .build());
+            IndexSearchResponse empty = search(
+                    service,
+                    IndexSearchRequest.newBuilder()
+                            .setPartitionId("0")
+                            .setQuery("needle")
+                            .setSize(10)
+                            .setSearchType(SearchType.BM25)
+                            .setHighlight(true)
+                            .setStoredFieldSelection(StoredFieldSelection.getDefaultInstance())
+                            .build());
+
+            assertTrue(full.getHits(0).hasTitle());
+            assertTrue(full.getHits(0).hasContent());
+            assertTrue(selected.getHits(0).hasTitle());
+            assertFalse(selected.getHits(0).hasContent());
+            assertTrue(selected.getHits(0).getFieldsMap().isEmpty());
+            assertTrue(
+                    selected.getHits(0).getHighlightedFieldsMap().keySet().stream()
+                            .allMatch(ShardIndex.FIELD_TITLE::equals),
+                    "excluded content must not leak through highlights");
+            assertFalse(empty.getHits(0).hasTitle());
+            assertFalse(empty.getHits(0).hasContent());
+            assertTrue(empty.getHits(0).getFieldsMap().isEmpty());
+            assertTrue(empty.getHits(0).getHighlightedFieldsMap().isEmpty());
+            assertEquals(full.getTotalHits(), selected.getTotalHits());
+            assertEquals(full.getHits(0).getDocId(), empty.getHits(0).getDocId());
+            assertEquals(full.getHits(0).getScore(), empty.getHits(0).getScore());
+            assertTrue(
+                    selected.getSerializedSize() * 20 < full.getSerializedSize(),
+                    "fixed large-content fixture should reduce response bytes by more than 95%; full="
+                            + full.getSerializedSize() + ", selected=" + selected.getSerializedSize());
+        }
+    }
+
+    private static IndexSearchResponse search(IndexServiceImpl service, IndexSearchRequest request) {
+        RecordingObserver<IndexSearchResponse> observer = new RecordingObserver<>();
+        service.searchIndex(request, observer);
+        assertNull(observer.error);
+        assertTrue(observer.completed);
+        return observer.value;
     }
 
     @Test

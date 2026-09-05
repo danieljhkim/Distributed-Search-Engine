@@ -218,6 +218,32 @@ class ShardIndexSortPaginationTest {
         }
     }
 
+    @Test
+    void sortingAndCursorMetadataRemainAvailableWhenTheSortFieldIsExcluded() throws IOException {
+        try (ShardIndex index = index()) {
+            write(index, doc("high", 90.0, 2002, "x"), doc("low", 10.0, 2001, "x"));
+            SortSpec spec = sort("price", SortOrder.SORT_ORDER_ASC);
+
+            List<SearchHit> hits = index.search(
+                            QUERY,
+                            10,
+                            0,
+                            null,
+                            false,
+                            null,
+                            SortOptions.sortedBy(spec),
+                            List.of(ShardIndex.FIELD_CONTENT, "category"))
+                    .getHits();
+
+            assertEquals(List.of("low", "high"), ids(hits));
+            assertTrue(hits.stream()
+                    .allMatch(hit -> hit.getFields() == null || !hit.getFields().containsKey("price")));
+            assertTrue(hits.stream().allMatch(hit -> "x".equals(hit.getFields().get("category"))));
+            assertTrue(hits.stream().allMatch(hit -> hit.getContent() != null));
+            assertTrue(hits.stream().allMatch(hit -> hit.getSortValues() != null));
+        }
+    }
+
     private ShardIndex index() {
         return new ShardIndex(SHARD_ID, tempDir, fieldConfigMap(), FAKE_EMBEDDER);
     }

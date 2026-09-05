@@ -192,12 +192,27 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
         List<Filter> filters = request.getFiltersList();
         boolean highlight = request.getHighlight();
         List<FacetRequest> facetRequests = request.getFacetsList();
+        List<String> storedFields = request.hasStoredFieldSelection()
+                ? List.copyOf(request.getStoredFieldSelection().getFieldsList())
+                : null;
 
         try {
             RequestLimitsValidator.validateIndexSearchRequest(request, requestLimits);
             SortOptions sortOptions = toSortOptions(request);
-            SearchResult res = indexManager.searchDocument(
-                    partitionId, query, size, from, protoType, filters, highlight, facetRequests, sortOptions);
+            SearchResult res = storedFields == null
+                    ? indexManager.searchDocument(
+                            partitionId, query, size, from, protoType, filters, highlight, facetRequests, sortOptions)
+                    : indexManager.searchDocument(
+                            partitionId,
+                            query,
+                            size,
+                            from,
+                            protoType,
+                            filters,
+                            highlight,
+                            facetRequests,
+                            sortOptions,
+                            storedFields);
             IndexSearchResponse.Builder respBuilder =
                     IndexSearchResponse.newBuilder().setTotalHits(res.getTotalHits());
             for (SearchHit hit : res.getHits()) {

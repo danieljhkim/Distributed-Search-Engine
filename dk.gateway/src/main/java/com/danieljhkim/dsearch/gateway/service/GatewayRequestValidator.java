@@ -34,6 +34,9 @@ final class GatewayRequestValidator {
                     request.getQuery(), request.getPage(), request.getPageSize(), limits);
         }
         validateSort(request, paginationLimits);
+        if (request.getStoredFields() != null) {
+            RequestLimitsValidator.validateStoredFieldSelection(request.getStoredFields(), limits);
+        }
         int filterClauses =
                 request.getFilters() == null ? 0 : request.getFilters().size();
         if (filterClauses > limits.getMaxFilterClauses()) {

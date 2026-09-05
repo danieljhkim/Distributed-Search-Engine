@@ -28,6 +28,7 @@ import com.danieljhkim.dsearch.proto.common.SortOrder;
 import com.danieljhkim.dsearch.proto.common.SortValue;
 import com.danieljhkim.dsearch.proto.query.QueryRequest;
 import com.danieljhkim.dsearch.proto.query.QueryResponse;
+import com.danieljhkim.dsearch.proto.query.StoredFieldSelection;
 import com.danieljhkim.dsearch.querynode.search.SearchExecutor;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
@@ -114,6 +115,42 @@ class QueryServiceCursorTest {
                 sortedRequest(SearchType.BM25, 2).toBuilder().setCursor(cursor).build());
 
         assertEquals(25, resumed.getTotalHits());
+    }
+
+    @Test
+    void storedFieldSelectionMayVaryAcrossCursorPages() {
+        snapshot(GENERATION);
+        when(searchExecutor.search(
+                        any(),
+                        any(),
+                        anyInt(),
+                        anyInt(),
+                        any(),
+                        any(),
+                        anyList(),
+                        anyBoolean(),
+                        anyList(),
+                        any(),
+                        anyList()))
+                .thenReturn(new SearchResult(
+                        page(hit("doc-a", 1.0), hit("doc-b", 2.0)),
+                        25,
+                        0,
+                        null,
+                        new SearchResult.FanoutMetadata(2, 2, 0, 0)))
+                .thenReturn(new SearchResult(
+                        page(hit("doc-c", 3.0)), 25, 0, null, new SearchResult.FanoutMetadata(2, 2, 0, 0)));
+
+        QueryResponse first = search(sortedRequest(SearchType.BM25, 2).toBuilder()
+                .setStoredFieldSelection(StoredFieldSelection.newBuilder().addFields("title"))
+                .build());
+        QueryResponse second = search(sortedRequest(SearchType.BM25, 2).toBuilder()
+                .setCursor(first.getNextCursor())
+                .setStoredFieldSelection(StoredFieldSelection.getDefaultInstance())
+                .build());
+
+        assertEquals(1, second.getHitsCount());
+        assertEquals("doc-c", second.getHits(0).getDocId());
     }
 
     @Test

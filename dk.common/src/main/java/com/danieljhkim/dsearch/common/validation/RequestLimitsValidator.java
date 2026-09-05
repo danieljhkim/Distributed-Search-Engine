@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.logging.Level;
@@ -106,6 +107,9 @@ public final class RequestLimitsValidator {
             validateCursorWindow(request.getQueryString(), request.getSize(), effective);
         }
         validateSortFields(request.getSortList(), paginationOrDefaults(pagination));
+        if (request.hasStoredFieldSelection()) {
+            validateStoredFieldSelection(request.getStoredFieldSelection().getFieldsList(), effective);
+        }
         validateSearchStructures(request.getFiltersList(), request.getFacetsList(), effective);
     }
 
@@ -166,7 +170,34 @@ public final class RequestLimitsValidator {
                         + ") exceeds maximum allowed (" + effective.getMaxResultWindow() + ")");
             }
         }
+        if (request.hasStoredFieldSelection()) {
+            validateStoredFieldSelection(request.getStoredFieldSelection().getFieldsList(), effective);
+        }
         validateSearchStructures(request.getFiltersList(), request.getFacetsList(), effective);
+    }
+
+    /** Bounds and validates an explicitly present stored-field response projection. */
+    public static void validateStoredFieldSelection(
+            Collection<String> fields, AppConfig.RequestLimitsConfig configuredLimits) {
+        AppConfig.RequestLimitsConfig limits = limitsOrDefaults(configuredLimits);
+        int count = fields == null ? 0 : fields.size();
+        if (count > limits.getMaxFieldsPerDocument()) {
+            throw new IllegalArgumentException("Stored field selection count (" + count + ") exceeds maximum allowed ("
+                    + limits.getMaxFieldsPerDocument() + ")");
+        }
+        if (fields == null) {
+            return;
+        }
+        HashSet<String> seen = new HashSet<>();
+        for (String field : fields) {
+            if (field == null || field.isBlank()) {
+                throw new IllegalArgumentException("stored field name must not be blank");
+            }
+            validateUtf8Bytes("stored field name", field, limits.getMaxFieldValueBytes());
+            if (!seen.add(field)) {
+                throw new IllegalArgumentException("stored field selection must not contain duplicates: " + field);
+            }
+        }
     }
 
     public static void validateDocument(Document document, AppConfig.RequestLimitsConfig limits) {

@@ -9,6 +9,7 @@ import com.danieljhkim.dsearch.proto.common.Filter;
 import com.danieljhkim.dsearch.proto.common.SortField;
 import com.danieljhkim.dsearch.proto.common.SortOrder;
 import com.danieljhkim.dsearch.proto.query.QueryRequest;
+import com.danieljhkim.dsearch.proto.query.StoredFieldSelection;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -32,6 +33,9 @@ public class QueryRequestMapper {
         }
         if (request.getSort() != null) {
             request.getSort().forEach(sort -> b.addSort(mapSort(sort)));
+        }
+        if (request.getStoredFields() != null) {
+            b.setStoredFieldSelection(StoredFieldSelection.newBuilder().addAllFields(request.getStoredFields()));
         }
 
         // Collections: treat null as empty

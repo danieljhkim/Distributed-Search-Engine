@@ -65,7 +65,12 @@ public class QueryResponseMapper {
         Map<String, String> fieldsMap = fields.isEmpty() ? null : fields;
 
         return new SearchResponseDto.SearchHitDto(
-                hit.getDocId(), hit.getTitle(), hit.getContent(), hit.getScore(), highlightedFieldsMap, fieldsMap);
+                hit.getDocId(),
+                hit.hasTitle() ? hit.getTitle() : null,
+                hit.hasContent() ? hit.getContent() : null,
+                hit.getScore(),
+                highlightedFieldsMap,
+                fieldsMap);
     }
 
     private FacetResponseDto toFacetDto(FacetResponse facetResponse) {

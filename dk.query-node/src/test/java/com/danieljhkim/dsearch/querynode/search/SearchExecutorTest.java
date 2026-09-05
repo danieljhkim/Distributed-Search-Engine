@@ -116,6 +116,35 @@ class SearchExecutorTest {
     }
 
     @Test
+    void hybridProjectionIsForwardedToEveryBm25AndSemanticNodeCall() {
+        RecordingIndexService indexService = new RecordingIndexService()
+                .success("1", result(List.of(hit("doc-a", 2.0f)), 1, null))
+                .success("2", result(List.of(hit("doc-b", 1.0f)), 1, null));
+
+        SearchResult result = searchExecutor(node("1", true), node("2", true))
+                .searchHybrid(
+                        "coffee",
+                        "shard-a",
+                        0,
+                        10,
+                        indexService,
+                        FusionStrategy.RRF,
+                        List.of(),
+                        true,
+                        List.of(),
+                        com.danieljhkim.dsearch.common.pagination.SortOptions.NONE,
+                        List.of("title", "category"));
+
+        assertDocIds(List.of("doc-a", "doc-b"), result);
+        assertEquals(4, indexService.calls().size());
+        assertEquals(
+                Set.of(SearchType.BM25, SearchType.SEMANTIC),
+                indexService.calls().stream().map(SearchCall::searchType).collect(java.util.stream.Collectors.toSet()));
+        assertTrue(indexService.calls().stream()
+                .allMatch(call -> call.storedFields().equals(List.of("title", "category"))));
+    }
+
+    @Test
     void successfulNodeAndFailingNodeReturnPartialMetadataAndSkipInactiveNodes() {
         RecordingIndexService indexService = new RecordingIndexService()
                 .success("1", result(hit("doc-1", 2.0f)))
@@ -718,7 +747,8 @@ class SearchExecutorTest {
             List<Filter> filters,
             boolean highlight,
             List<FacetRequest> facetRequests,
-            Duration deadline) {}
+            Duration deadline,
+            List<String> storedFields) {}
 
     private interface NodeBehavior {
         SearchResult execute();
@@ -778,9 +808,37 @@ class SearchExecutorTest {
                 boolean highlight,
                 List<FacetRequest> facetRequests,
                 Duration deadline) {
+            return searchShardTopK(
+                    queryString,
+                    nodeId,
+                    shardId,
+                    topK,
+                    searchType,
+                    filters,
+                    highlight,
+                    facetRequests,
+                    deadline,
+                    com.danieljhkim.dsearch.common.pagination.SortOptions.NONE,
+                    null);
+        }
+
+        @Override
+        public SearchResult searchShardTopK(
+                String queryString,
+                String nodeId,
+                String shardId,
+                int topK,
+                SearchType searchType,
+                List<Filter> filters,
+                boolean highlight,
+                List<FacetRequest> facetRequests,
+                Duration deadline,
+                com.danieljhkim.dsearch.common.pagination.SortOptions sortOptions,
+                List<String> storedFields) {
             calledNodes.add(nodeId);
             deadlines.add(deadline);
-            calls.add(new SearchCall(nodeId, shardId, topK, searchType, filters, highlight, facetRequests, deadline));
+            calls.add(new SearchCall(
+                    nodeId, shardId, topK, searchType, filters, highlight, facetRequests, deadline, storedFields));
             NodeBehavior behavior = typedBehaviors.get(new RequestKey(nodeId, searchType));
             if (behavior == null) {
                 behavior = nodeBehaviors.get(nodeId);

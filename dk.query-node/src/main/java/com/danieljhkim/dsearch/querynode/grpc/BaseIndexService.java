@@ -132,6 +132,35 @@ public interface BaseIndexService {
                 queryString, nodeId, shardId, topK, searchType, filters, highlight, facetRequests, deadline);
     }
 
+    /**
+     * Node-local top-K with an optional stored-field response projection. A null projection keeps
+     * legacy behavior; an empty list requests identity and traversal metadata only.
+     */
+    default SearchResult searchShardTopK(
+            String queryString,
+            String nodeId,
+            String shardId,
+            int topK,
+            SearchType searchType,
+            List<Filter> filters,
+            boolean highlight,
+            List<FacetRequest> facetRequests,
+            Duration deadline,
+            SortOptions sortOptions,
+            List<String> storedFields) {
+        return searchShardTopK(
+                queryString,
+                nodeId,
+                shardId,
+                topK,
+                searchType,
+                filters,
+                highlight,
+                facetRequests,
+                deadline,
+                sortOptions);
+    }
+
     default SearchResult mapToSearchResult(IndexSearchResponse grpcResp, int page) {
         List<SearchHit> hits = new ArrayList<>();
         for (com.danieljhkim.dsearch.proto.index.IndexHit hit : grpcResp.getHitsList()) {
@@ -142,8 +171,8 @@ public interface BaseIndexService {
             List<SortValue> sortValues = hit.getSortValuesCount() == 0 ? null : hit.getSortValuesList();
             hits.add(new SearchHit(
                     hit.getDocId(),
-                    hit.getTitle(),
-                    hit.getContent(),
+                    hit.hasTitle() ? hit.getTitle() : null,
+                    hit.hasContent() ? hit.getContent() : null,
                     hit.getScore(),
                     highlightedFieldsMap,
                     fieldsMap,
