@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.model.SearchDocument;
 import com.danieljhkim.dsearch.common.model.SearchResult;
 import com.danieljhkim.dsearch.common.validation.RequestAdmissionException;
@@ -15,6 +16,8 @@ import com.danieljhkim.dsearch.ml.embedding.TextEmbedder;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.Filter;
 import com.danieljhkim.dsearch.proto.common.SearchType;
+import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentRequest;
+import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentRequest;
@@ -150,6 +153,184 @@ class IndexServiceImplTest {
             assertTrue(thirdResult.getSuccess());
             assertEquals("doc-3", thirdResult.getId());
             assertEquals(java.util.List.of(firstResult.getId(), "doc-3"), observer.value.getIdsList());
+        }
+    }
+
+    @Test
+    void bulkDeleteReturnsOneResultPerIdAndCompletesEvenWhenEmpty() throws IOException {
+        try (IndexManager manager = manager("bulk-delete")) {
+            IndexServiceImpl service = new IndexServiceImpl(manager);
+            RecordingObserver<IndexDocumentResponse> indexed1 = new RecordingObserver<>();
+            service.indexDocument(
+                    IndexDocumentRequest.newBuilder()
+                            .setPartitionId("0")
+                            .setDocument(document("doc-1", "first content"))
+                            .build(),
+                    indexed1);
+            RecordingObserver<IndexDocumentResponse> indexed2 = new RecordingObserver<>();
+            service.indexDocument(
+                    IndexDocumentRequest.newBuilder()
+                            .setPartitionId("0")
+                            .setDocument(document("doc-2", "second content"))
+                            .build(),
+                    indexed2);
+
+            RecordingObserver<BulkDeleteDocumentResponse> observer = new RecordingObserver<>();
+            service.bulkDeleteDocument(
+                    BulkDeleteDocumentRequest.newBuilder()
+                            .setPartitionId("0")
+                            .addIds("doc-1")
+                            .addIds("doc-2")
+                            .build(),
+                    observer);
+
+            assertNull(observer.error);
+            assertTrue(observer.completed);
+            assertTrue(observer.value.getSuccess());
+            assertEquals(2, observer.value.getResultsCount());
+            assertTrue(observer.value.getResultsList().stream().allMatch(result -> result.getSuccess()));
+            assertEquals(0, observer.value.getResults(0).getRequestIndex());
+            assertEquals("doc-1", observer.value.getResults(0).getId());
+            assertEquals(1, observer.value.getResults(1).getRequestIndex());
+            assertEquals("doc-2", observer.value.getResults(1).getId());
+
+            RecordingObserver<BulkDeleteDocumentResponse> emptyObserver = new RecordingObserver<>();
+            service.bulkDeleteDocument(
+                    BulkDeleteDocumentRequest.newBuilder().setPartitionId("0").build(), emptyObserver);
+            assertTrue(emptyObserver.completed);
+            assertTrue(emptyObserver.value.getSuccess());
+            assertEquals(0, emptyObserver.value.getResultsCount());
+        }
+    }
+
+    @Test
+    void bulkDeleteMakesDocumentsImmediatelyAbsentFromSearchAndIsIdempotentOnRetry() throws IOException {
+        try (IndexManager manager = manager("bulk-delete-visibility")) {
+            IndexServiceImpl service = new IndexServiceImpl(manager);
+            service.indexDocument(
+                    IndexDocumentRequest.newBuilder()
+                            .setPartitionId("0")
+                            .setDocument(document("doc-1", "durable content"))
+                            .build(),
+                    new RecordingObserver<>());
+            service.indexDocument(
+                    IndexDocumentRequest.newBuilder()
+                            .setPartitionId("0")
+                            .setDocument(document("doc-2", "durable content"))
+                            .build(),
+                    new RecordingObserver<>());
+
+            RecordingObserver<BulkDeleteDocumentResponse> firstDelete = new RecordingObserver<>();
+            service.bulkDeleteDocument(
+                    BulkDeleteDocumentRequest.newBuilder()
+                            .setPartitionId("0")
+                            .addIds("doc-1")
+                            .addIds("doc-2")
+                            .addIds("doc-1") // duplicate: preserved as its own ordered outcome
+                            .addIds("never-existed")
+                            .build(),
+                    firstDelete);
+
+            assertTrue(firstDelete.completed);
+            assertTrue(firstDelete.value.getSuccess());
+            assertEquals(4, firstDelete.value.getResultsCount());
+            assertTrue(firstDelete.value.getResultsList().stream().allMatch(result -> result.getSuccess()));
+
+            assertEquals(
+                    0,
+                    manager.searchDocument("0", "durable", 10, 0, SearchType.BM25)
+                            .getTotalHits());
+
+            RecordingObserver<BulkDeleteDocumentResponse> retryDelete = new RecordingObserver<>();
+            service.bulkDeleteDocument(
+                    BulkDeleteDocumentRequest.newBuilder()
+                            .setPartitionId("0")
+                            .addIds("doc-1")
+                            .addIds("doc-2")
+                            .build(),
+                    retryDelete);
+            assertTrue(retryDelete.completed);
+            assertTrue(retryDelete.value.getSuccess());
+            assertTrue(retryDelete.value.getResultsList().stream().allMatch(result -> result.getSuccess()));
+        }
+    }
+
+    @Test
+    void bulkDeleteAdmissionExhaustionReturnsPartialResultsForPriorCommits() throws IOException {
+        try (IndexManager manager = new AdmissionExhaustingDeleteManager(tempDir.resolve("bulk-delete-admission"), 2)) {
+            RecordingObserver<BulkDeleteDocumentResponse> observer = new RecordingObserver<>();
+
+            new IndexServiceImpl(manager)
+                    .bulkDeleteDocument(
+                            BulkDeleteDocumentRequest.newBuilder()
+                                    .setPartitionId("0")
+                                    .addIds("doc-1")
+                                    .addIds("doc-2")
+                                    .addIds("doc-3")
+                                    .build(),
+                            observer);
+
+            assertNull(observer.error);
+            assertTrue(observer.completed);
+            assertFalse(observer.value.getSuccess());
+            assertEquals(3, observer.value.getResultsCount());
+
+            var firstResult = observer.value.getResults(0);
+            assertTrue(firstResult.getSuccess());
+            assertEquals("doc-1", firstResult.getId());
+
+            var admissionResult = observer.value.getResults(1);
+            assertFalse(admissionResult.getSuccess());
+            assertEquals("doc-2", admissionResult.getId());
+            assertTrue(admissionResult.getError().contains("retry with the same id"));
+
+            var thirdResult = observer.value.getResults(2);
+            assertTrue(thirdResult.getSuccess());
+            assertEquals("doc-3", thirdResult.getId());
+        }
+    }
+
+    @Test
+    void bulkDeleteDurableFailureMarksOnlyThatItemWhileCommittingOthers() throws IOException {
+        try (IndexManager manager = new FailingDeleteManager(tempDir.resolve("bulk-delete-failure"), 2)) {
+            RecordingObserver<BulkDeleteDocumentResponse> observer = new RecordingObserver<>();
+
+            new IndexServiceImpl(manager)
+                    .bulkDeleteDocument(
+                            BulkDeleteDocumentRequest.newBuilder()
+                                    .setPartitionId("0")
+                                    .addIds("doc-1")
+                                    .addIds("doc-2")
+                                    .addIds("doc-3")
+                                    .build(),
+                            observer);
+
+            assertTrue(observer.completed);
+            assertFalse(observer.value.getSuccess());
+            assertTrue(observer.value.getResults(0).getSuccess());
+            assertFalse(observer.value.getResults(1).getSuccess());
+            assertTrue(observer.value.getResults(1).getError().contains("retry with the same id"));
+            assertTrue(observer.value.getResults(2).getSuccess());
+        }
+    }
+
+    @Test
+    void bulkDeleteRejectsOverBudgetItemCountBeforeAnyDelete() throws IOException {
+        try (IndexManager manager = manager("bulk-delete-budget")) {
+            AppConfig.RequestLimitsConfig limits = new AppConfig.RequestLimitsConfig();
+            limits.setMaxBulkItems(1);
+            IndexServiceImpl service = new IndexServiceImpl(manager, limits);
+            RecordingObserver<BulkDeleteDocumentResponse> observer = new RecordingObserver<>();
+
+            service.bulkDeleteDocument(
+                    BulkDeleteDocumentRequest.newBuilder()
+                            .setPartitionId("0")
+                            .addIds("doc-1")
+                            .addIds("doc-2")
+                            .build(),
+                    observer);
+
+            assertInvalidArgument(observer.error);
         }
     }
 
@@ -338,6 +519,14 @@ class IndexServiceImplTest {
                     bulk);
             assertInvalidArgument(bulk.error);
 
+            RecordingObserver<BulkDeleteDocumentResponse> bulkDelete = new RecordingObserver<>();
+            service.bulkDeleteDocument(
+                    BulkDeleteDocumentRequest.newBuilder()
+                            .setPartitionId("bad/path")
+                            .build(),
+                    bulkDelete);
+            assertInvalidArgument(bulkDelete.error);
+
             RecordingObserver<DeleteDocumentResponse> delete = new RecordingObserver<>();
             service.deleteDocument(
                     DeleteDocumentRequest.newBuilder()
@@ -448,6 +637,42 @@ class IndexServiceImplTest {
                 throw new RequestAdmissionException("embedding predictor", 100);
             }
             super.indexDocumentDurably(partitionId, document);
+        }
+    }
+
+    private static final class AdmissionExhaustingDeleteManager extends IndexManager {
+        private final int failingCall;
+        private int calls;
+
+        AdmissionExhaustingDeleteManager(Path baseDir, int failingCall) {
+            super(baseDir, 10, Duration.ofHours(1), null, FAKE_EMBEDDER);
+            this.failingCall = failingCall;
+        }
+
+        @Override
+        public void deleteDocumentDurably(String partitionId, String docId) throws IOException {
+            if (++calls == failingCall) {
+                throw new RequestAdmissionException("delete admission", 100);
+            }
+            super.deleteDocumentDurably(partitionId, docId);
+        }
+    }
+
+    private static final class FailingDeleteManager extends IndexManager {
+        private final int failingCall;
+        private int calls;
+
+        FailingDeleteManager(Path baseDir, int failingCall) {
+            super(baseDir, 10, Duration.ofHours(1), null, FAKE_EMBEDDER);
+            this.failingCall = failingCall;
+        }
+
+        @Override
+        public void deleteDocumentDurably(String partitionId, String docId) throws IOException {
+            if (++calls == failingCall) {
+                throw new IOException("delete failure for " + docId);
+            }
+            super.deleteDocumentDurably(partitionId, docId);
         }
     }
 

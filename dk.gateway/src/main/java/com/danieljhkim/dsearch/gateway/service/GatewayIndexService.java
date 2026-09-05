@@ -5,11 +5,17 @@ import com.danieljhkim.dsearch.common.exception.NodeUnavailableException;
 import com.danieljhkim.dsearch.common.grpc.NodeClient;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.common.validation.RequestLimitsValidator;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteItemResponseDto;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteRequestDto;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexItemResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
+import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentRequest;
+import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentResponse;
+import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentResult;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResult;
@@ -186,6 +192,124 @@ public class GatewayIndexService {
         return new BulkIndexResponseDto(success, results);
     }
 
+    /**
+     * Deletes explicit ids from their ownership node in batches while retaining the original result
+     * order, including duplicates.
+     *
+     * <p>Deleting an id is idempotent: a missing document deletes successfully, exactly like single
+     * delete. Duplicate ids are therefore never rejected as a conflict the way a duplicate upsert id
+     * is; each occurrence is routed and reported independently.
+     */
+    public BulkDeleteResponseDto bulkDelete(BulkDeleteRequestDto requestDto) {
+        List<String> ids = requestDto.getIds() == null ? List.of() : requestDto.getIds();
+        ensureBulkItemCount(ids.size());
+
+        String partitionId = resolvePartitionId(requestDto.getPartitionId());
+        List<BulkDeleteItemResponseDto> results = new ArrayList<>(ids.size());
+        for (int index = 0; index < ids.size(); index++) {
+            results.add(null);
+        }
+
+        Map<NodeClient<IndexServiceGrpc.IndexServiceBlockingStub>, List<PreparedBulkDeleteItem>> byOwner =
+                new LinkedHashMap<>();
+        for (int requestIndex = 0; requestIndex < ids.size(); requestIndex++) {
+            String id = ids.get(requestIndex);
+            if (id == null || id.isBlank()) {
+                results.set(requestIndex, deleteValidationFailure(requestIndex, id, "id must not be blank"));
+                continue;
+            }
+            try {
+                RequestLimitsValidator.validateDocumentId(id, requestLimits);
+            } catch (IllegalArgumentException e) {
+                results.set(requestIndex, deleteValidationFailure(requestIndex, id, e.getMessage()));
+                continue;
+            }
+
+            try {
+                NodeClient<IndexServiceGrpc.IndexServiceBlockingStub> owner =
+                        indexNodeClientManager.ownerClient(partitionId, id);
+                byOwner.computeIfAbsent(owner, ignored -> new ArrayList<>())
+                        .add(new PreparedBulkDeleteItem(requestIndex, id));
+            } catch (NodeUnavailableException e) {
+                results.set(requestIndex, deleteRetryableFailure(requestIndex, id, e.getMessage()));
+            }
+        }
+
+        long deadlineNanos =
+                System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(1, requestLimits.getRequestTimeoutMillis()));
+        byOwner.forEach(
+                (owner, ownerItems) -> bulkDeleteOnOwner(owner, partitionId, ownerItems, results, deadlineNanos));
+        boolean success = results.stream().allMatch(result -> result != null && "success".equals(result.getStatus()));
+        return new BulkDeleteResponseDto(success, results);
+    }
+
+    private void bulkDeleteOnOwner(
+            NodeClient<IndexServiceGrpc.IndexServiceBlockingStub> owner,
+            String partitionId,
+            List<PreparedBulkDeleteItem> ownerItems,
+            List<BulkDeleteItemResponseDto> results,
+            long deadlineNanos) {
+        try {
+            long remainingNanos = deadlineNanos - System.nanoTime();
+            if (remainingNanos <= 0) {
+                throw new StatusRuntimeException(
+                        Status.DEADLINE_EXCEEDED.withDescription("bulk delete deadline exhausted"));
+            }
+            BulkDeleteDocumentRequest request = BulkDeleteDocumentRequest.newBuilder()
+                    .setPartitionId(partitionId)
+                    .addAllIds(
+                            ownerItems.stream().map(PreparedBulkDeleteItem::id).toList())
+                    .build();
+            BulkDeleteDocumentResponse response = owner.getStub()
+                    .withDeadlineAfter(
+                            Math.max(1, TimeUnit.NANOSECONDS.toMillis(remainingNanos)), TimeUnit.MILLISECONDS)
+                    .bulkDeleteDocument(request);
+            applyOwnerDeleteResults(owner, partitionId, ownerItems, response, results);
+        } catch (StatusRuntimeException | NodeUnavailableException e) {
+            for (PreparedBulkDeleteItem item : ownerItems) {
+                results.set(item.requestIndex(), deleteTransportFailure(item.requestIndex(), item.id(), e));
+            }
+        }
+    }
+
+    private static void applyOwnerDeleteResults(
+            NodeClient<IndexServiceGrpc.IndexServiceBlockingStub> owner,
+            String partitionId,
+            List<PreparedBulkDeleteItem> ownerItems,
+            BulkDeleteDocumentResponse response,
+            List<BulkDeleteItemResponseDto> results) {
+        boolean[] resultSeen = new boolean[ownerItems.size()];
+        for (BulkDeleteDocumentResult itemResult : response.getResultsList()) {
+            int responseIndex = itemResult.getRequestIndex();
+            if (responseIndex < 0 || responseIndex >= ownerItems.size()) {
+                continue;
+            }
+            resultSeen[responseIndex] = true;
+            PreparedBulkDeleteItem item = ownerItems.get(responseIndex);
+            if (itemResult.getSuccess()) {
+                owner.decrementDocFromShard(partitionId);
+                results.set(
+                        item.requestIndex(),
+                        new BulkDeleteItemResponseDto(item.requestIndex(), item.id(), "success", null));
+            } else {
+                results.set(
+                        item.requestIndex(),
+                        deleteRetryableFailure(
+                                item.requestIndex(),
+                                item.id(),
+                                itemResult.getError().isBlank() ? "durable delete failed" : itemResult.getError()));
+            }
+        }
+        for (int responseIndex = 0; responseIndex < ownerItems.size(); responseIndex++) {
+            if (!resultSeen[responseIndex]) {
+                PreparedBulkDeleteItem item = ownerItems.get(responseIndex);
+                results.set(
+                        item.requestIndex(),
+                        deleteRetryableFailure(item.requestIndex(), item.id(), "owner returned no item result"));
+            }
+        }
+    }
+
     private void bulkIndexOnOwner(
             NodeClient<IndexServiceGrpc.IndexServiceBlockingStub> owner,
             String partitionId,
@@ -324,6 +448,36 @@ public class GatewayIndexService {
     }
 
     private record PreparedBulkItem(int requestIndex, String id, Document document) {}
+
+    private record PreparedBulkDeleteItem(int requestIndex, String id) {}
+
+    private static BulkDeleteItemResponseDto deleteValidationFailure(int requestIndex, String id, String error) {
+        return new BulkDeleteItemResponseDto(requestIndex, id, "validation_failure", error);
+    }
+
+    private static BulkDeleteItemResponseDto deleteRetryableFailure(int requestIndex, String id, String error) {
+        return new BulkDeleteItemResponseDto(
+                requestIndex,
+                id,
+                "retryable_failure",
+                error + "; retry with the same id because deletion is idempotent");
+    }
+
+    private static BulkDeleteItemResponseDto deletePermanentFailure(int requestIndex, String id, String error) {
+        return new BulkDeleteItemResponseDto(requestIndex, id, "permanent_failure", error);
+    }
+
+    private static BulkDeleteItemResponseDto deleteTransportFailure(
+            int requestIndex, String id, RuntimeException exception) {
+        if (exception instanceof StatusRuntimeException statusException
+                && switch (statusException.getStatus().getCode()) {
+                    case INVALID_ARGUMENT, ALREADY_EXISTS, FAILED_PRECONDITION, PERMISSION_DENIED -> true;
+                    default -> false;
+                }) {
+            return deletePermanentFailure(requestIndex, id, retryMessage(exception));
+        }
+        return deleteRetryableFailure(requestIndex, id, retryMessage(exception));
+    }
 
     private static String resolvePartitionId(String partitionId) {
         return partitionId != null && !partitionId.isBlank() ? partitionId : DEFAULT_PARTITION_ID;

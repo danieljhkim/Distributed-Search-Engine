@@ -65,6 +65,32 @@ message DeleteDocumentResponse {
   bool success = 1;
 }
 
+message BulkDeleteDocumentRequest {
+  string partition_id = 1;
+  // Explicit ids to delete, in caller order. Duplicates are preserved positionally rather
+  // than collapsed, since deleting the same id twice is a harmless idempotent no-op.
+  repeated string ids = 2;
+}
+
+message BulkDeleteDocumentResult {
+  // Zero-based position in BulkDeleteDocumentRequest.ids.
+  int32 request_index = 1;
+  string id = 2;
+  // True once this id's delete has been durably committed to the shard's Lucene index,
+  // including when the id had no matching document: deleting a missing document is the
+  // same idempotent success as single delete.
+  bool success = 3;
+  // Non-empty when success is false.
+  string error = 4;
+}
+
+message BulkDeleteDocumentResponse {
+  // One result per request id, in request order, including duplicates.
+  repeated BulkDeleteDocumentResult results = 1;
+  // True only when every result is durably acknowledged.
+  bool success = 2;
+}
+
 message IndexSearchRequest {
   string partition_id = 1;
   string query = 2;
@@ -220,6 +246,7 @@ service IndexService {
   rpc IndexDocument(IndexDocumentRequest) returns (IndexDocumentResponse);
   rpc BulkIndexDocument(BulkIndexDocumentRequest) returns (BulkIndexDocumentResponse);
   rpc DeleteDocument(DeleteDocumentRequest) returns (DeleteDocumentResponse);
+  rpc BulkDeleteDocument(BulkDeleteDocumentRequest) returns (BulkDeleteDocumentResponse);
   rpc SearchIndex(IndexSearchRequest) returns (IndexSearchResponse);
   rpc CreateIndex(CreateIndexRequest) returns (CreateIndexResponse);
   rpc InspectSchema(InspectSchemaRequest) returns (InspectSchemaResponse);

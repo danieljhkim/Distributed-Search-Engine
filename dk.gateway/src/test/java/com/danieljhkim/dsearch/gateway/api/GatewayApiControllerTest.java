@@ -15,6 +15,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.danieljhkim.dsearch.common.cluster.NodeGroup;
 import com.danieljhkim.dsearch.common.cluster.NodeGroupManager;
 import com.danieljhkim.dsearch.common.config.AppConfig;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteItemResponseDto;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteRequestDto;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexItemResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexResponseDto;
@@ -161,6 +164,41 @@ class GatewayApiControllerTest {
         assertThat(requestCaptor.getValue().getItems())
                 .extracting(IndexRequestDto::getId)
                 .containsExactly("doc-1", "doc-2");
+    }
+
+    @Test
+    void bulkDeletePreservesOrderedItemOutcomesAtTheVersionedEndpoint() throws Exception {
+        when(indexService.bulkDelete(any(BulkDeleteRequestDto.class)))
+                .thenReturn(new BulkDeleteResponseDto(
+                        false,
+                        List.of(
+                                new BulkDeleteItemResponseDto(0, "doc-1", "success", null),
+                                new BulkDeleteItemResponseDto(1, "doc-2", "retryable_failure", "retry same id"),
+                                new BulkDeleteItemResponseDto(2, "doc-1", "success", null))));
+
+        mockMvc.perform(post("/api/v1/index/bulk-delete")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "partitionId": "tenant-a",
+                                  "ids": ["doc-1", "doc-2", "doc-1"]
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.items[0].requestIndex").value(0))
+                .andExpect(jsonPath("$.items[0].id").value("doc-1"))
+                .andExpect(jsonPath("$.items[0].status").value("success"))
+                .andExpect(jsonPath("$.items[1].requestIndex").value(1))
+                .andExpect(jsonPath("$.items[1].status").value("retryable_failure"))
+                .andExpect(jsonPath("$.items[2].requestIndex").value(2))
+                .andExpect(jsonPath("$.items[2].id").value("doc-1"))
+                .andExpect(jsonPath("$.items[2].status").value("success"));
+
+        ArgumentCaptor<BulkDeleteRequestDto> requestCaptor = ArgumentCaptor.forClass(BulkDeleteRequestDto.class);
+        verify(indexService).bulkDelete(requestCaptor.capture());
+        assertThat(requestCaptor.getValue().getPartitionId()).isEqualTo("tenant-a");
+        assertThat(requestCaptor.getValue().getIds()).containsExactly("doc-1", "doc-2", "doc-1");
     }
 
     @Test
