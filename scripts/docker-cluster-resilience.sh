@@ -527,6 +527,7 @@ run_burst() {
   seq 1 "$concurrency" | xargs -P "$concurrency" -I{} sh -c '
     index=$1; out=$2; url=$3; payload=$4
     if ! curl --silent --show-error --connect-timeout 5 --max-time 30 \
+      --retry 3 --retry-delay 1 --retry-max-time 15 --retry-connrefused --retry-all-errors \
       --header "Content-Type: application/json" --data-binary "@$payload" \
       --output "$out/body-$index.json" --dump-header "$out/head-$index.txt" \
       --write-out "%{http_code} %{time_total}\n" \
