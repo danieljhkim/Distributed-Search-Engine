@@ -20,6 +20,9 @@ import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.Filter;
 import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.proto.common.SortValue;
+import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentRequest;
+import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentResponse;
+import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentResult;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResult;
@@ -175,6 +178,60 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
                     .withCause(e)
                     .asRuntimeException());
         }
+    }
+
+    /**
+     * Applies bounded, ordered document deletions.
+     *
+     * <p>Each id is deleted independently via {@link IndexManager#deleteDocumentDurably}, which is
+     * idempotent: a missing document deletes successfully, exactly like single delete. A per-item
+     * failure never prevents independent ids in the same request from being attempted.
+     */
+    @Override
+    public void bulkDeleteDocument(
+            BulkDeleteDocumentRequest request, StreamObserver<BulkDeleteDocumentResponse> responseObserver) {
+        String partitionId = request.getPartitionId();
+        if (!validatePartition(partitionId, responseObserver)) {
+            return;
+        }
+        try {
+            RequestLimitsValidator.validateBulkItemCount(request.getIdsCount(), requestLimits);
+        } catch (IllegalArgumentException e) {
+            invalidArgument(responseObserver, e);
+            return;
+        }
+        BulkDeleteDocumentResponse.Builder respBuilder = BulkDeleteDocumentResponse.newBuilder();
+        boolean success = true;
+        for (int requestIndex = 0; requestIndex < request.getIdsCount(); requestIndex++) {
+            String docId = request.getIds(requestIndex);
+            BulkDeleteDocumentResult.Builder result = BulkDeleteDocumentResult.newBuilder()
+                    .setRequestIndex(requestIndex)
+                    .setId(docId);
+            try {
+                RequestLimitsValidator.validateDocumentId(docId, requestLimits);
+                indexManager.deleteDocumentDurably(partitionId, docId);
+                result.setSuccess(true);
+            } catch (IllegalArgumentException e) {
+                success = false;
+                result.setSuccess(false).setError(e.getMessage());
+            } catch (RequestAdmissionException e) {
+                success = false;
+                result.setSuccess(false).setError("request admission exhausted; retry with the same id");
+            } catch (SchemaMismatchException e) {
+                success = false;
+                result.setSuccess(false).setError(e.getMessage());
+            } catch (IOException | RuntimeException e) {
+                LOGGER.log(Level.SEVERE, "BulkDeleteDocument failed for request index " + requestIndex, e);
+                success = false;
+                result.setSuccess(false)
+                        .setError("durable delete failed; retry with the same id because delete is idempotent");
+            }
+            respBuilder.addResults(result);
+        }
+
+        respBuilder.setSuccess(success);
+        responseObserver.onNext(respBuilder.build());
+        responseObserver.onCompleted();
     }
 
     @Override

@@ -1,6 +1,8 @@
 package com.danieljhkim.dsearch.gateway.api;
 
 import com.danieljhkim.dsearch.common.validation.PartitionIdValidator;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteRequestDto;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
@@ -77,5 +79,21 @@ public class IndexController {
                     .tag("partitionId", partitionId != null ? partitionId : "UNKNOWN")
                     .register(meterRegistry));
         }
+    }
+
+    /**
+     * Applies bounded, ordered document deletions by explicit id.
+     *
+     * <p>Every item is an id to remove from the partition. Deletion is idempotent, so a missing
+     * document, a duplicate id, or a retried {@code retryable_failure} item (including a timeout or
+     * disconnect whose commit outcome is unknown) all resolve to the same durable {@code success}
+     * outcome without side effects on already-deleted documents.
+     */
+    @Timed(
+            value = "dsearch.bulk_delete.http",
+            extraTags = {"endpoint", "/api/v1/index/bulk-delete"})
+    @PostMapping(value = "/bulk-delete", consumes = "application/json", produces = "application/json")
+    public BulkDeleteResponseDto bulkDeleteDocuments(@Valid @RequestBody BulkDeleteRequestDto req) {
+        return indexService.bulkDelete(req);
     }
 }

@@ -15,10 +15,15 @@ import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.exception.NodeUnavailableException;
 import com.danieljhkim.dsearch.common.grpc.NodeClient;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteRequestDto;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
+import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentRequest;
+import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentResponse;
+import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentResult;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResult;
@@ -397,6 +402,146 @@ class GatewayIndexServiceTest {
                 .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
                 .hasMessageContaining("Bulk embedding bytes");
         verify(indexNodeClientManager, never()).ownerClient(any(), any());
+    }
+
+    @Test
+    void bulkDeleteRoutesAcrossMultipleOwnersAndPreservesOrder() {
+        IndexServiceGrpc.IndexServiceBlockingStub secondStub = mock(IndexServiceGrpc.IndexServiceBlockingStub.class);
+        NodeClient<IndexServiceGrpc.IndexServiceBlockingStub> secondOwner =
+                new NodeClient<>("2", secondStub, mock(ManagedChannel.class), "localhost", 5102);
+        lenient()
+                .when(secondStub.withDeadlineAfter(anyLong(), any(TimeUnit.class)))
+                .thenReturn(secondStub);
+        when(indexNodeClientManager.ownerClient("tenant-a", "doc-1")).thenReturn(ownerClient);
+        when(indexNodeClientManager.ownerClient("tenant-a", "doc-2")).thenReturn(secondOwner);
+        when(indexStub.bulkDeleteDocument(any(BulkDeleteDocumentRequest.class)))
+                .thenReturn(successfulBulkDeleteResult(0, "doc-1"));
+        when(secondStub.bulkDeleteDocument(any(BulkDeleteDocumentRequest.class)))
+                .thenReturn(successfulBulkDeleteResult(0, "doc-2"));
+
+        BulkDeleteResponseDto response = service.bulkDelete(bulkDeleteRequest("tenant-a", "doc-1", "doc-2"));
+
+        assertThat(response.isSuccess()).isTrue();
+        assertThat(response.getItems()).extracting(item -> item.getId()).containsExactly("doc-1", "doc-2");
+        assertThat(response.getItems()).extracting(item -> item.getStatus()).containsOnly("success");
+        ArgumentCaptor<BulkDeleteDocumentRequest> firstCaptor =
+                ArgumentCaptor.forClass(BulkDeleteDocumentRequest.class);
+        verify(indexStub).bulkDeleteDocument(firstCaptor.capture());
+        assertThat(firstCaptor.getValue().getIdsList()).containsExactly("doc-1");
+        ArgumentCaptor<BulkDeleteDocumentRequest> secondCaptor =
+                ArgumentCaptor.forClass(BulkDeleteDocumentRequest.class);
+        verify(secondStub).bulkDeleteDocument(secondCaptor.capture());
+        assertThat(secondCaptor.getValue().getIdsList()).containsExactly("doc-2");
+    }
+
+    @Test
+    void bulkDeletePropagatesOwnerUnavailabilityAsRetryableWithoutHidingOtherOutcomes() {
+        when(indexNodeClientManager.ownerClient("tenant-a", "doc-1"))
+                .thenThrow(new NodeUnavailableException("1", "owner down"));
+        when(indexNodeClientManager.ownerClient("tenant-a", "doc-2")).thenReturn(ownerClient);
+        when(indexStub.bulkDeleteDocument(any(BulkDeleteDocumentRequest.class)))
+                .thenReturn(successfulBulkDeleteResult(0, "doc-2"));
+
+        BulkDeleteResponseDto response = service.bulkDelete(bulkDeleteRequest("tenant-a", "doc-1", "doc-2"));
+
+        assertThat(response.isSuccess()).isFalse();
+        assertThat(response.getItems())
+                .extracting(item -> item.getStatus())
+                .containsExactly("retryable_failure", "success");
+        assertThat(response.getItems().getFirst().getError()).contains("owner down");
+        verify(indexStub, never()).deleteDocument(any(DeleteDocumentRequest.class));
+    }
+
+    @Test
+    void bulkDeleteTimeoutIsRetryableWithTheSameIdAndRetryCommitsDurably() {
+        when(indexNodeClientManager.ownerClient("default", "doc-1")).thenReturn(ownerClient);
+        when(indexStub.bulkDeleteDocument(any(BulkDeleteDocumentRequest.class)))
+                .thenThrow(new StatusRuntimeException(Status.DEADLINE_EXCEEDED))
+                .thenReturn(successfulBulkDeleteResult(0, "doc-1"));
+
+        BulkDeleteResponseDto timedOut = service.bulkDelete(bulkDeleteRequest(null, "doc-1"));
+        BulkDeleteResponseDto retried = service.bulkDelete(bulkDeleteRequest(null, "doc-1"));
+
+        assertThat(timedOut.getItems().getFirst().getStatus()).isEqualTo("retryable_failure");
+        assertThat(timedOut.getItems().getFirst().getError()).contains("idempotent");
+        assertThat(retried.getItems().getFirst().getStatus()).isEqualTo("success");
+        verify(indexStub, org.mockito.Mockito.times(2)).bulkDeleteDocument(any(BulkDeleteDocumentRequest.class));
+    }
+
+    @Test
+    void bulkDeletePreservesDuplicateIdsAsIndependentOrderedOutcomes() {
+        ownerClient.incrementDocToShard("default");
+        ownerClient.incrementDocToShard("default");
+        when(indexNodeClientManager.ownerClient("default", "doc-1")).thenReturn(ownerClient);
+        when(indexStub.bulkDeleteDocument(any(BulkDeleteDocumentRequest.class)))
+                .thenReturn(BulkDeleteDocumentResponse.newBuilder()
+                        .setSuccess(true)
+                        .addResults(BulkDeleteDocumentResult.newBuilder()
+                                .setRequestIndex(0)
+                                .setId("doc-1")
+                                .setSuccess(true))
+                        .addResults(BulkDeleteDocumentResult.newBuilder()
+                                .setRequestIndex(1)
+                                .setId("doc-1")
+                                .setSuccess(true))
+                        .build());
+
+        BulkDeleteResponseDto response = service.bulkDelete(bulkDeleteRequest(null, "doc-1", "doc-1"));
+
+        assertThat(response.isSuccess()).isTrue();
+        assertThat(response.getItems()).hasSize(2);
+        assertThat(response.getItems()).extracting(item -> item.getStatus()).containsExactly("success", "success");
+        ArgumentCaptor<BulkDeleteDocumentRequest> requestCaptor =
+                ArgumentCaptor.forClass(BulkDeleteDocumentRequest.class);
+        verify(indexStub).bulkDeleteDocument(requestCaptor.capture());
+        assertThat(requestCaptor.getValue().getIdsList()).containsExactly("doc-1", "doc-1");
+        assertThat(ownerClient.getShardDocCount("default")).isZero();
+    }
+
+    @Test
+    void bulkDeleteReportsBlankIdsAsValidationFailureWithoutHidingOtherOutcomes() {
+        when(indexNodeClientManager.ownerClient("default", "doc-2")).thenReturn(ownerClient);
+        when(indexStub.bulkDeleteDocument(any(BulkDeleteDocumentRequest.class)))
+                .thenReturn(successfulBulkDeleteResult(0, "doc-2"));
+
+        BulkDeleteResponseDto response = service.bulkDelete(bulkDeleteRequest(null, "  ", "doc-2"));
+
+        assertThat(response.isSuccess()).isFalse();
+        assertThat(response.getItems())
+                .extracting(item -> item.getStatus())
+                .containsExactly("validation_failure", "success");
+        verify(indexNodeClientManager, never()).ownerClient("default", "  ");
+    }
+
+    @Test
+    void bulkDeleteRejectsItemCountOverBudgetBeforeAnyOwnerCall() {
+        AppConfig config = new AppConfig();
+        AppConfig.RequestLimitsConfig limits = new AppConfig.RequestLimitsConfig();
+        limits.setMaxBulkItems(1);
+        config.setRequestLimits(limits);
+        service = new GatewayIndexService(indexNodeClientManager, config);
+
+        assertThatThrownBy(() -> service.bulkDelete(bulkDeleteRequest(null, "doc-1", "doc-2")))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .hasMessageContaining("Bulk item count");
+        verify(indexNodeClientManager, never()).ownerClient(any(), any());
+    }
+
+    private static BulkDeleteRequestDto bulkDeleteRequest(String partitionId, String... ids) {
+        BulkDeleteRequestDto request = new BulkDeleteRequestDto();
+        request.setPartitionId(partitionId);
+        request.setIds(List.of(ids));
+        return request;
+    }
+
+    private static BulkDeleteDocumentResponse successfulBulkDeleteResult(int requestIndex, String id) {
+        return BulkDeleteDocumentResponse.newBuilder()
+                .setSuccess(true)
+                .addResults(BulkDeleteDocumentResult.newBuilder()
+                        .setRequestIndex(requestIndex)
+                        .setId(id)
+                        .setSuccess(true))
+                .build();
     }
 
     private static IndexRequestDto indexRequest(String id, Map<String, String> fields) {

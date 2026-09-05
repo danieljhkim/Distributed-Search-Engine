@@ -124,6 +124,44 @@ order, `totalHits`, and cursor traversal therefore do not change when fields are
 caller may change `storedFields` between cursor pages; the query, filters, sort, search type,
 fusion strategy, page size, schema, and index generation remain cursor-bound.
 
+### Delete documents in bulk
+
+`POST /api/v1/index/bulk-delete` accepts a bounded list of explicit document ids and returns one
+ordered outcome per id, including duplicates:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/index/bulk-delete \
+  -H "Content-Type: application/json" \
+  -d '{
+    "partitionId": "0",
+    "ids": ["doc-1", "doc-2", "doc-1"]
+  }'
+```
+
+```json
+{
+  "success": true,
+  "items": [
+    { "requestIndex": 0, "id": "doc-1", "status": "success", "error": null },
+    { "requestIndex": 1, "id": "doc-2", "status": "success", "error": null },
+    { "requestIndex": 2, "id": "doc-1", "status": "success", "error": null }
+  ]
+}
+```
+
+Deletion is idempotent, exactly like `DELETE /api/v1/index/{id}`: a missing document deletes as a
+`success`, a duplicate id is never rejected as a conflict, and each occurrence is reported
+independently. A durably deleted document is immediately absent from subsequent search.
+
+The list is bounded by `requestLimits.maxBulkItems` (100 by default, shared with
+`/api/v1/index/bulk`); an over-budget request returns HTTP 413 before any document is deleted. A
+blank or oversized id is reported per item as `validation_failure` without blocking the rest of the
+batch. An item whose owning node is unavailable, or whose delete outcome is unknown because of a
+timeout, is reported `retryable_failure` — retry it with the same id: deletion is idempotent, so a
+retry after a timeout or an already-deleted id never fails or double-deletes. Reaching the shared
+request deadline (`requestLimits.requestTimeoutMillis`) marks every unattempted item
+`retryable_failure` too, while items already durably committed keep their `success` outcome.
+
 ### Sort and page with a cursor
 
 Order by any field marked `sortable` in `fieldConfigs`. A document-id tie-breaker is appended
