@@ -42,6 +42,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -53,6 +54,7 @@ public class GatewayAdminIndexService {
     private final Path auditLog;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
+    @Autowired
     public GatewayAdminIndexService(
             NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> indexNodeClientManager,
             AppConfig appConfig,
