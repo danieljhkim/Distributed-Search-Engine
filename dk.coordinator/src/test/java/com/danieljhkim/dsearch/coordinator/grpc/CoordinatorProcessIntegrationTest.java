@@ -9,6 +9,7 @@ import com.danieljhkim.dsearch.proto.cluster.ClusterServiceGrpc;
 import com.danieljhkim.dsearch.proto.cluster.GetShardMapRequest;
 import com.danieljhkim.dsearch.proto.cluster.GetShardMapResponse;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
+import com.danieljhkim.dsearch.proto.cluster.RegisterNodeRequest;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Status;
@@ -89,10 +90,26 @@ class CoordinatorProcessIntegrationTest {
             assertEquals(
                     "index/process-index-0", afterRejoin.getShardLocations(0).getShardId());
 
+            long observedVersion = afterRejoin.getTopologyVersion();
+            client.registerNode(RegisterNodeRequest.newBuilder()
+                    .setNodeId("process-index-1")
+                    .setHost("localhost")
+                    .setPort(5001)
+                    .setHealthPort(5101)
+                    .setRole(NodeRole.NODE_ROLE_INDEX)
+                    .setObservedTopologyEpoch(afterRejoin.getTopologyEpoch())
+                    .setObservedTopologyVersion(observedVersion)
+                    .build());
+
+            GetShardMapResponse afterControlledAdvance = client.getShardMap(GetShardMapRequest.newBuilder()
+                    .setMinTopologyVersion(observedVersion)
+                    .build());
+            assertTrue(afterControlledAdvance.getTopologyVersion() > observedVersion);
+
             StatusRuntimeException stale = assertThrows(
                     StatusRuntimeException.class,
                     () -> client.getShardMap(GetShardMapRequest.newBuilder()
-                            .setMinTopologyVersion(afterRejoin.getTopologyVersion() + 1)
+                            .setMinTopologyVersion(afterControlledAdvance.getTopologyVersion() + 1)
                             .build()));
             assertEquals(Status.Code.FAILED_PRECONDITION, stale.getStatus().getCode());
         } finally {
