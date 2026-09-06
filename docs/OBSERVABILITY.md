@@ -10,6 +10,7 @@ before the monthly error budget is exhausted.
 | Mutation durability | 99.9% of accepted mutations receive a durable Lucene acknowledgement; no successful acknowledgement follows a failed commit | `dsearch_lucene_commit_outcomes_total`, `dsearch_lucene_last_successful_commit_timestamp_seconds` |
 | Search latency | 99% of successful gateway searches complete within 1 s | Gateway `http_server_requests_seconds_bucket` |
 | Recovery | most recent valid snapshot is younger than 24 h; a restore success is recorded for every drill | recovery textfile metrics described below |
+| Replica convergence | every configured copy is eligible only after manifest equality; repair traffic remains within configured bounds | `dsearch_replica_repair_outcomes_total`, `dsearch_replica_repair_duration_seconds`, `dsearch_replica_repairs_active`, `dsearch_replica_repairs_remaining` |
 
 ## Bounded dimensions
 
@@ -19,7 +20,8 @@ request, request ids, or model URLs. The only application labels are closed enum
 (`index`, `query`, `coordinator`), topology `state` (`total`, `healthy`), gRPC protobuf service
 and method names, and gRPC status codes. Gateway partition latency is capped at 100 validated
 values plus `__overflow__`; the controller test prevents a request stream from creating an
-unbounded series.
+unbounded series. Replica repair metrics also use only the bounded `operation` and `outcome`
+dimensions; repair, shard, and node identifiers are carried in the operator RPC instead of labels.
 
 ## Signals and operator actions
 

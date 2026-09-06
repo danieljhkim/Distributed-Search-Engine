@@ -44,8 +44,8 @@ The system is composed of three primary components:
 - **Coordinator Node**  
   Optional, durable membership and topology authority. It atomically persists the topology epoch,
   version, membership, health, and leases to `serviceDiscovery.coordinatorStateFile` (plus a
-  backup), exposes health-aware discovery, and removes expired non-coordinator leases. It does not
-  replicate data or move existing Lucene documents.
+  backup), exposes health-aware discovery, removes expired non-coordinator leases, and runs the
+  bounded replica-repair loop described below.
 
 ### Sharding & Load Balancing
 
@@ -73,8 +73,9 @@ not multiply hits, totals, or facets.
 The coordinator exposes a versioned, health-aware node registry. `RegisterNode` creates or updates
 membership, `Heartbeat` renews a previously registered node's lease without creating membership,
 and `GetShardMap` returns the generation-fenced primary and replicas for each logical `index/<nodeId>` range. Those
-RPCs return the durable topology epoch and monotonic version so clients can reject stale state;
-they do not provide automatic repair, rebalancing, or document movement.
+    RPCs return the durable topology epoch and monotonic version so clients can reject stale state.
+    For replicated layouts, the coordinator also compares committed manifests and transfers a
+    verified snapshot before a restarted or divergent node is returned to discovery.
 
 This design intentionally keeps the system:
 - **Simple to operate** (few moving parts)
@@ -490,6 +491,14 @@ pagination:
   # routes page two elsewhere. Blank generates a process-local key and warns.
   cursorSigningKey: ""
   maxSortFields: 8
+
+replicaRepair:
+  enabled: true
+  intervalSeconds: 15
+  chunkBytes: 262144
+  maxSnapshotBytes: 1073741824
+  bandwidthBytesPerSecond: 10485760
+  maxConcurrentRepairs: 1
 ```
 
 - `pagination.cursorSigningKey` signs opaque search cursors. Set one shared value in any cluster
@@ -502,8 +511,8 @@ pagination:
   `maxStalenessSeconds`; they do not silently return to the configured static node list.
 - The coordinator persists its membership/topology state at `coordinatorStateFile` (or the
   `COORDINATOR_STATE_FILE` override), supports registration, lease heartbeats, health checks,
-  expiry, discovery, and the replicated logical shard-map RPC. It exposes placement and failover
-  state but does not run background repair or rebalance Lucene data.
+  expiry, discovery, the replicated logical shard-map RPC, and bounded replica repair. Range
+  rebalancing after changing the configured ownership ring remains a separate operator workflow.
 
 ---
 
@@ -511,12 +520,12 @@ pagination:
 
 This project is intentionally minimal and educational. Some trade‑offs and potential future work:
 
-- **Replica repair is a separate workflow**
-  - Writes use explicit synchronous placement and acknowledgement, while a lagging or restored
-    replica remains under-replicated until the repair workflow verifies its committed position.
-- **Coordinator membership is not a data rebalancer**
-  - Heartbeat and shard-map RPCs are implemented for durable, versioned membership and logical
-    index-node placement; they do not perform background copy or repair.
+- **Replica repair does not rebalance the ownership ring**
+  - The coordinator repairs missing, lagging, wrong-generation, and checksum-divergent copies of
+    an existing replica set. Adding/removing ownership nodes still requires explicit range handoff.
+- **Coordinator membership remains the placement authority**
+  - Heartbeat and shard-map RPCs provide durable membership and eligibility; a repaired target is
+    published only after its committed position and canonical content checksum match the source.
   - Expired node leases are removed from coordinator discovery. Node removal, shard relocation,
     and data rebalancing remain manual operational work.
 - **Indexes created before field sorting need a reindex**

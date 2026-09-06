@@ -4,6 +4,8 @@ import com.danieljhkim.dsearch.common.cluster.NodeGroup;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.shard.ReplicaPlacement;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
+import com.danieljhkim.dsearch.proto.cluster.ReplicaRepairState;
+import com.danieljhkim.dsearch.proto.cluster.ReplicaRepairStatus;
 import io.prometheus.client.Counter;
 import io.prometheus.client.Gauge;
 import java.io.ByteArrayOutputStream;
@@ -74,6 +76,9 @@ public class ClusterMembershipService {
     private final int replicationFactor;
     private final ReplicaPlacement.DurabilityPolicy durabilityPolicy;
     private final ReplicaPlacement.ReadConsistency readConsistency;
+    private final Map<String, ReplicaRepairState> replicaNodeStates = new HashMap<>();
+    private final Map<String, ReplicaRepairStatus> repairStatuses = new HashMap<>();
+    private boolean repairsPaused;
 
     private String topologyEpoch;
     private long topologyVersion;
@@ -105,6 +110,13 @@ public class ClusterMembershipService {
         }
         this.durabilityPolicy = ReplicaPlacement.DurabilityPolicy.parse(configuredIndexNodes.getDurabilityPolicy());
         this.readConsistency = ReplicaPlacement.ReadConsistency.parse(configuredIndexNodes.getReadConsistency());
+        placementNodes
+                .keySet()
+                .forEach(nodeId -> replicaNodeStates.put(
+                        nodeId,
+                        replicationFactor <= 1
+                                ? ReplicaRepairState.REPLICA_REPAIR_STATE_READY
+                                : ReplicaRepairState.REPLICA_REPAIR_STATE_CHECKING));
         if (readConsistency == ReplicaPlacement.ReadConsistency.ACKNOWLEDGED
                 && durabilityPolicy != ReplicaPlacement.DurabilityPolicy.ALL) {
             throw new IllegalArgumentException(
@@ -148,6 +160,13 @@ public class ClusterMembershipService {
         NodeGroup.NodeInfo healthyNode = copyWithHealth(nodeInfo, true);
         if (role == NodeRole.NODE_ROLE_INDEX) {
             placementNodes.putIfAbsent(nodeInfo.getNodeId(), healthyNode);
+            if (existing == null || !existing.isHealthy()) {
+                replicaNodeStates.put(
+                        nodeInfo.getNodeId(),
+                        replicationFactor <= 1
+                                ? ReplicaRepairState.REPLICA_REPAIR_STATE_READY
+                                : ReplicaRepairState.REPLICA_REPAIR_STATE_CHECKING);
+            }
         }
         boolean topologyChanged = existing == null || !sameMember(existing, healthyNode) || !existing.isHealthy();
         group.addOrUpdateNode(healthyNode);
@@ -289,6 +308,7 @@ public class ClusterMembershipService {
     public synchronized List<NodeGroup.NodeInfo> healthyNodes(NodeRole role) {
         return requireGroup(role).getAllNodes().stream()
                 .filter(NodeGroup.NodeInfo::isHealthy)
+                .filter(node -> role != NodeRole.NODE_ROLE_INDEX || isReplicaEligible(node.getNodeId()))
                 .sorted(Comparator.comparing(NodeGroup.NodeInfo::getNodeId))
                 .toList();
     }
@@ -339,7 +359,71 @@ public class ClusterMembershipService {
 
     public synchronized boolean isReplicaEligible(String nodeId) {
         NodeGroup.NodeInfo node = indexGroup.getNode(nodeId);
+        return node != null
+                && node.isHealthy()
+                && (replicationFactor <= 1
+                        || replicaNodeStates.getOrDefault(nodeId, ReplicaRepairState.REPLICA_REPAIR_STATE_CHECKING)
+                                == ReplicaRepairState.REPLICA_REPAIR_STATE_READY);
+    }
+
+    public synchronized boolean isIndexNodeHealthy(String nodeId) {
+        NodeGroup.NodeInfo node = indexGroup.getNode(nodeId);
         return node != null && node.isHealthy();
+    }
+
+    public synchronized ReplicaRepairState replicaRepairState(String nodeId) {
+        return replicaNodeStates.getOrDefault(nodeId, ReplicaRepairState.REPLICA_REPAIR_STATE_CHECKING);
+    }
+
+    public synchronized void updateReplicaNodeState(String nodeId, ReplicaRepairState state) {
+        Objects.requireNonNull(state, "state must not be null");
+        boolean wasEligible = isReplicaEligible(nodeId);
+        replicaNodeStates.put(nodeId, state);
+        boolean nowEligible = isReplicaEligible(nodeId);
+        persistMutation(wasEligible != nowEligible);
+        updateMembershipMetrics();
+    }
+
+    public synchronized void recordRepairStatus(ReplicaRepairStatus status) {
+        repairStatuses.put(status.getRepairId(), status);
+        if (repairStatuses.size() > 256) {
+            repairStatuses.values().stream()
+                    .min(Comparator.comparing(ReplicaRepairStatus::getUpdatedAtEpochMillis))
+                    .ifPresent(oldest -> repairStatuses.remove(oldest.getRepairId()));
+        }
+    }
+
+    public synchronized List<ReplicaRepairStatus> repairStatuses() {
+        return repairStatuses.values().stream()
+                .sorted(Comparator.comparing(ReplicaRepairStatus::getUpdatedAtEpochMillis)
+                        .reversed())
+                .limit(256)
+                .toList();
+    }
+
+    public synchronized boolean repairsPaused() {
+        return repairsPaused;
+    }
+
+    public synchronized void setRepairsPaused(boolean paused) {
+        repairsPaused = paused;
+        persistMutation(false);
+    }
+
+    public synchronized boolean retryRepair(String repairId) {
+        ReplicaRepairStatus current = repairStatuses.get(repairId);
+        if (current == null) {
+            return false;
+        }
+        repairStatuses.put(
+                repairId,
+                current.toBuilder()
+                        .setState(ReplicaRepairState.REPLICA_REPAIR_STATE_CHECKING)
+                        .setLastError("")
+                        .setUpdatedAtEpochMillis(clock.millis())
+                        .build());
+        replicaNodeStates.put(current.getTargetNodeId(), ReplicaRepairState.REPLICA_REPAIR_STATE_CHECKING);
+        return true;
     }
 
     public NodeGroup.NodeInfo configuredPlacementNode(String nodeId) {
@@ -404,6 +488,7 @@ public class ClusterMembershipService {
             validateStateFormat(properties);
             this.topologyEpoch = required(properties, "topology.epoch");
             this.topologyVersion = Long.parseLong(required(properties, "topology.version"));
+            this.repairsPaused = Boolean.parseBoolean(properties.getProperty("repairs.paused", "false"));
             int memberCount = Integer.parseInt(required(properties, "member.count"));
             for (int i = 0; i < memberCount; i++) {
                 String prefix = "member." + i + ".";
@@ -436,6 +521,7 @@ public class ClusterMembershipService {
         properties.setProperty(STATE_FORMAT_VERSION_KEY, Integer.toString(CONTRACT_VERSION));
         properties.setProperty("topology.epoch", topologyEpoch);
         properties.setProperty("topology.version", Long.toString(topologyVersion));
+        properties.setProperty("repairs.paused", Boolean.toString(repairsPaused));
         List<MemberKey> members = new ArrayList<>(lastSeenMillis.keySet());
         members.sort(
                 Comparator.comparing((MemberKey key) -> key.role().getNumber()).thenComparing(MemberKey::nodeId));

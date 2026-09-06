@@ -19,6 +19,7 @@ public class AppConfig {
     private MlConfig ml;
     private RequestLimitsConfig requestLimits;
     private PaginationConfig pagination = new PaginationConfig();
+    private ReplicaRepairConfig replicaRepair = new ReplicaRepairConfig();
     private List<FieldConfig> fieldConfigs;
 
     @Setter
@@ -229,6 +230,18 @@ public class AppConfig {
                     + (cursorSigningKey == null || cursorSigningKey.isBlank() ? "<generated>" : "<configured>")
                     + ", maxSortFields=" + maxSortFields + '}';
         }
+    }
+
+    @Setter
+    @Getter
+    public static class ReplicaRepairConfig {
+        private boolean enabled = true;
+        private int intervalSeconds = 15;
+        private int rpcDeadlineMillis = 5000;
+        private int chunkBytes = 262144;
+        private long maxSnapshotBytes = 1073741824L;
+        private long bandwidthBytesPerSecond = 10485760L;
+        private int maxConcurrentRepairs = 1;
     }
 
     /**

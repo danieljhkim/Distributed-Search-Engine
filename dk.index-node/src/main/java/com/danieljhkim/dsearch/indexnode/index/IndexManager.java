@@ -25,9 +25,13 @@ import io.prometheus.client.Histogram;
 import java.io.Closeable;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -55,6 +59,8 @@ public class IndexManager implements Closeable {
     private static final String MUTATION_COMMIT_FORMAT = MUTATION_COMMIT_PREFIX + "format";
     private static final String MUTATION_COMMIT_COUNT = MUTATION_COMMIT_PREFIX + "count";
     private static final String MUTATION_COMMIT_ENTRY_PREFIX = MUTATION_COMMIT_PREFIX + "mutation.";
+    private static final String MUTATION_COMMIT_LOGICAL_PARTITION = MUTATION_COMMIT_PREFIX + "logicalPartition";
+    private static final String MUTATION_COMMIT_PRIMARY_NODE = MUTATION_COMMIT_PREFIX + "primaryNode";
     private static final String MUTATION_COMMIT_FORMAT_VERSION = "1";
     private static final Counter LUCENE_COMMIT_OUTCOMES = Counter.build()
             .name("dsearch_lucene_commit_outcomes_total")
@@ -106,6 +112,8 @@ public class IndexManager implements Closeable {
     private final IndexAliasStore aliasStore;
     private final Map<String, SchemaMismatchException> unservableIndexes = new ConcurrentHashMap<>();
     private final Map<String, AppliedMutation> appliedMutations = new ConcurrentHashMap<>();
+    private final Map<String, ReplicaIdentity> replicaIdentities = new ConcurrentHashMap<>();
+    private final Set<String> repairingShards = ConcurrentHashMap.newKeySet();
     private final Path legacyMutationStateFile;
     private volatile MutationFaultInjector mutationFaultInjector = (physicalIndex, stage) -> {};
     private volatile boolean closed;
@@ -418,6 +426,10 @@ public class IndexManager implements Closeable {
         return aliasStore;
     }
 
+    Path baseDirectory() {
+        return baseDir;
+    }
+
     public String resolvePhysicalIndex(String aliasOrIndex) {
         return aliasStore.resolve(aliasOrIndex);
     }
@@ -449,6 +461,7 @@ public class IndexManager implements Closeable {
      */
     public void indexDocument(String partitionId, SearchDocument doc) throws IOException {
         String physicalIndex = resolvePhysicalIndex(partitionId);
+        ensureNotRepairing(physicalIndex);
         ShardIndex shardIndex = getOrCreateShard(physicalIndex);
         ShardBuffer buffer = getBuffer(physicalIndex);
 
@@ -474,6 +487,7 @@ public class IndexManager implements Closeable {
      */
     public void indexDocumentDurably(String partitionId, SearchDocument doc) throws IOException {
         String physicalIndex = resolvePhysicalIndex(partitionId);
+        ensureNotRepairing(physicalIndex);
         ShardIndex shardIndex = getOrCreateShard(physicalIndex);
         ShardBuffer buffer = getBuffer(physicalIndex);
 
@@ -493,6 +507,7 @@ public class IndexManager implements Closeable {
      */
     public void deleteDocument(String partitionId, String docId) throws IOException {
         String physicalIndex = resolvePhysicalIndex(partitionId);
+        ensureNotRepairing(physicalIndex);
         ShardIndex shardIndex = getOrCreateShard(physicalIndex);
         ShardBuffer buffer = getBuffer(physicalIndex);
         buffer.lock.lock();
@@ -517,6 +532,7 @@ public class IndexManager implements Closeable {
      */
     public void deleteDocumentDurably(String partitionId, String docId) throws IOException {
         String physicalIndex = resolvePhysicalIndex(partitionId);
+        ensureNotRepairing(physicalIndex);
         ShardIndex shardIndex = getOrCreateShard(physicalIndex);
         ShardBuffer buffer = getBuffer(physicalIndex);
 
@@ -538,12 +554,27 @@ public class IndexManager implements Closeable {
             long operationGeneration,
             long placementGeneration)
             throws IOException {
+        return applyReplicatedIndex(
+                partitionId, doc, operationId, operationGeneration, placementGeneration, partitionId, "");
+    }
+
+    public MutationResult applyReplicatedIndex(
+            String partitionId,
+            SearchDocument doc,
+            String operationId,
+            long operationGeneration,
+            long placementGeneration,
+            String logicalPartitionId,
+            String primaryNodeId)
+            throws IOException {
         return applyReplicatedMutation(
                 partitionId,
                 doc.getId(),
                 operationId,
                 operationGeneration,
                 placementGeneration,
+                logicalPartitionId,
+                primaryNodeId,
                 MutationType.INDEX,
                 BufferedOperation.index(doc));
     }
@@ -552,12 +583,27 @@ public class IndexManager implements Closeable {
     public MutationResult applyReplicatedDelete(
             String partitionId, String docId, String operationId, long operationGeneration, long placementGeneration)
             throws IOException {
+        return applyReplicatedDelete(
+                partitionId, docId, operationId, operationGeneration, placementGeneration, partitionId, "");
+    }
+
+    public MutationResult applyReplicatedDelete(
+            String partitionId,
+            String docId,
+            String operationId,
+            long operationGeneration,
+            long placementGeneration,
+            String logicalPartitionId,
+            String primaryNodeId)
+            throws IOException {
         return applyReplicatedMutation(
                 partitionId,
                 docId,
                 operationId,
                 operationGeneration,
                 placementGeneration,
+                logicalPartitionId,
+                primaryNodeId,
                 MutationType.DELETE,
                 BufferedOperation.delete(docId));
     }
@@ -568,6 +614,8 @@ public class IndexManager implements Closeable {
             String operationId,
             long operationGeneration,
             long placementGeneration,
+            String logicalPartitionId,
+            String primaryNodeId,
             MutationType mutationType,
             BufferedOperation mutation)
             throws IOException {
@@ -578,6 +626,7 @@ public class IndexManager implements Closeable {
             throw new IllegalArgumentException("replicated mutation generations must be positive");
         }
         String physicalIndex = resolvePhysicalIndex(partitionId);
+        ensureNotRepairing(physicalIndex);
         ShardIndex shardIndex = getOrCreateShard(physicalIndex);
         ShardBuffer buffer = getBuffer(physicalIndex);
         String mutationKey = physicalIndex + '\0' + docId;
@@ -613,6 +662,11 @@ public class IndexManager implements Closeable {
                 AppliedMutation applied =
                         new AppliedMutation(operationId, operationGeneration, placementGeneration, mutationType);
                 appliedMutations.put(mutationKey, applied);
+                ReplicaIdentity identity = new ReplicaIdentity(logicalPartitionId, primaryNodeId);
+                ReplicaIdentity previousIdentity = replicaIdentities.putIfAbsent(physicalIndex, identity);
+                if (previousIdentity != null && !previousIdentity.compatibleWith(identity)) {
+                    throw new StaleMutationException("replica identity changed for shard " + physicalIndex);
+                }
                 Map<String, String> commitUserData = mutationCommitUserData(physicalIndex, shardIndex);
                 shardIndex.setLiveCommitData(commitUserData);
                 mutationFaultInjector.checkpoint(physicalIndex, MutationCommitStage.AFTER_COMMIT_DATA_SET);
@@ -631,6 +685,12 @@ public class IndexManager implements Closeable {
             }
         } finally {
             buffer.lock.unlock();
+        }
+    }
+
+    private void ensureNotRepairing(String physicalIndex) {
+        if (repairingShards.contains(physicalIndex)) {
+            throw new RepairInProgressException("Shard " + physicalIndex + " is fenced while replica repair is active");
         }
     }
 
@@ -686,7 +746,9 @@ public class IndexManager implements Closeable {
         for (Map.Entry<String, String> entry : userData.entrySet()) {
             if (!entry.getKey().startsWith(MUTATION_COMMIT_PREFIX)
                     || entry.getKey().equals(MUTATION_COMMIT_FORMAT)
-                    || entry.getKey().equals(MUTATION_COMMIT_COUNT)) {
+                    || entry.getKey().equals(MUTATION_COMMIT_COUNT)
+                    || entry.getKey().equals(MUTATION_COMMIT_LOGICAL_PARTITION)
+                    || entry.getKey().equals(MUTATION_COMMIT_PRIMARY_NODE)) {
                 continue;
             }
             if (!entry.getKey().startsWith(MUTATION_COMMIT_ENTRY_PREFIX)) {
@@ -714,6 +776,9 @@ public class IndexManager implements Closeable {
             throw new IOException("Replicated mutation commit count mismatch for shard " + shardIndex.getShardId()
                     + ": expected " + expectedCount + " but found " + actualCount);
         }
+        String logicalPartition = userData.getOrDefault(MUTATION_COMMIT_LOGICAL_PARTITION, shardIndex.getShardId());
+        String primaryNode = userData.getOrDefault(MUTATION_COMMIT_PRIMARY_NODE, "");
+        replicaIdentities.put(shardIndex.getShardId(), new ReplicaIdentity(logicalPartition, primaryNode));
     }
 
     private void migrateLegacyMutationState() throws IOException {
@@ -745,6 +810,11 @@ public class IndexManager implements Closeable {
                 .toList();
         commitUserData.put(MUTATION_COMMIT_FORMAT, MUTATION_COMMIT_FORMAT_VERSION);
         commitUserData.put(MUTATION_COMMIT_COUNT, Integer.toString(mutations.size()));
+        ReplicaIdentity identity = replicaIdentities.get(physicalIndex);
+        if (identity != null) {
+            commitUserData.put(MUTATION_COMMIT_LOGICAL_PARTITION, identity.logicalPartitionId());
+            commitUserData.put(MUTATION_COMMIT_PRIMARY_NODE, identity.primaryNodeId());
+        }
         for (Map.Entry<String, AppliedMutation> entry : mutations) {
             String documentId = entry.getKey().substring(physicalIndex.length() + 1);
             AppliedMutation mutation = entry.getValue();
@@ -759,6 +829,211 @@ public class IndexManager implements Closeable {
                             + mutation.mutationType().name());
         }
         return commitUserData;
+    }
+
+    public List<ReplicaManifestData> replicaManifests() throws IOException {
+        List<ReplicaManifestData> manifests = new ArrayList<>();
+        for (String shardId : shardIndexes.keySet().stream().sorted().toList()) {
+            manifests.add(replicaManifest(shardId));
+        }
+        return List.copyOf(manifests);
+    }
+
+    public ReplicaManifestData replicaManifest(String shardId) throws IOException {
+        PartitionIdValidator.validate(shardId);
+        ShardIndex shard = requireShard(shardId);
+        ShardBuffer buffer = getBuffer(shardId);
+        buffer.lock.lock();
+        try {
+            flushShardBufferLocked(shardId, shard, buffer);
+            ReplicaIdentity identity = replicaIdentities.getOrDefault(shardId, new ReplicaIdentity(shardId, ""));
+            List<Map.Entry<String, AppliedMutation>> mutations = shardMutations(shardId);
+            long committedPosition = mutations.stream()
+                    .mapToLong(entry -> entry.getValue().operationGeneration())
+                    .max()
+                    .orElse(0L);
+            long placementGeneration = mutations.stream()
+                    .mapToLong(entry -> entry.getValue().placementGeneration())
+                    .max()
+                    .orElse(0L);
+            return new ReplicaManifestData(
+                    shardId,
+                    identity.logicalPartitionId(),
+                    identity.primaryNodeId(),
+                    placementGeneration,
+                    committedPosition,
+                    canonicalChecksum(shard, mutations),
+                    shard.countDocuments(),
+                    repairingShards.contains(shardId) ? "repairing" : "ready",
+                    "");
+        } finally {
+            buffer.lock.unlock();
+        }
+    }
+
+    private List<Map.Entry<String, AppliedMutation>> shardMutations(String shardId) {
+        return appliedMutations.entrySet().stream()
+                .filter(entry -> entry.getKey().startsWith(shardId + '\0'))
+                .sorted(Map.Entry.comparingByKey())
+                .toList();
+    }
+
+    private String canonicalChecksum(ShardIndex shard, List<Map.Entry<String, AppliedMutation>> mutations) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            List<SearchDocument> documents = shard.exportDocuments().stream()
+                    .sorted(java.util.Comparator.comparing(SearchDocument::getId))
+                    .toList();
+            for (SearchDocument document : documents) {
+                updateDigest(digest, document.getId());
+                document.getFields().entrySet().stream()
+                        .sorted(Map.Entry.comparingByKey())
+                        .forEach(entry -> {
+                            updateDigest(digest, entry.getKey());
+                            updateDigest(digest, entry.getValue());
+                        });
+            }
+            for (Map.Entry<String, AppliedMutation> entry : mutations) {
+                updateDigest(digest, entry.getKey());
+                updateDigest(digest, entry.getValue().operationId());
+                updateDigest(digest, Long.toString(entry.getValue().operationGeneration()));
+                updateDigest(digest, Long.toString(entry.getValue().placementGeneration()));
+                updateDigest(digest, entry.getValue().mutationType().name());
+            }
+            return java.util.HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is unavailable", e);
+        }
+    }
+
+    private static void updateDigest(MessageDigest digest, String value) {
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        digest.update(
+                java.nio.ByteBuffer.allocate(Integer.BYTES).putInt(bytes.length).array());
+        digest.update(bytes);
+    }
+
+    public byte[] createReplicaSnapshot(String shardId, long maxBytes) throws IOException {
+        PartitionIdValidator.validate(shardId);
+        ShardIndex shard = requireShard(shardId);
+        ShardBuffer buffer = getBuffer(shardId);
+        buffer.lock.lock();
+        try {
+            flushShardBufferLocked(shardId, shard, buffer);
+            java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+            try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(output)) {
+                try (Stream<Path> paths = Files.walk(shard.indexPath())) {
+                    for (Path path : paths.filter(Files::isRegularFile)
+                            .filter(path ->
+                                    !"write.lock".equals(path.getFileName().toString()))
+                            .sorted()
+                            .toList()) {
+                        String relative =
+                                shard.indexPath().relativize(path).toString().replace('\\', '/');
+                        java.util.zip.ZipEntry zipEntry = new java.util.zip.ZipEntry(relative);
+                        zipEntry.setTime(0L);
+                        zip.putNextEntry(zipEntry);
+                        Files.copy(path, zip);
+                        zip.closeEntry();
+                        if (output.size() > maxBytes) {
+                            throw new IOException(
+                                    "Replica snapshot exceeds configured maximum of " + maxBytes + " bytes");
+                        }
+                    }
+                }
+            }
+            if (output.size() > maxBytes) {
+                throw new IOException("Replica snapshot exceeds configured maximum of " + maxBytes + " bytes");
+            }
+            return output.toByteArray();
+        } finally {
+            buffer.lock.unlock();
+        }
+    }
+
+    public void markReplicaRepairing(String shardId) {
+        PartitionIdValidator.validate(shardId);
+        repairingShards.add(shardId);
+    }
+
+    public void clearReplicaRepair(String shardId) {
+        repairingShards.remove(shardId);
+    }
+
+    public void installReplicaSnapshot(String shardId, Path archive, Path workDirectory) throws IOException {
+        PartitionIdValidator.validate(shardId);
+        ShardBuffer buffer = getBuffer(shardId);
+        buffer.lock.lock();
+        Path stagedShard = workDirectory.resolve("shard-" + shardId).normalize();
+        Path finalShard = baseDir.resolve("shard-" + shardId).normalize();
+        Path backup = workDirectory.resolve("previous-shard").normalize();
+        try {
+            if (!stagedShard.startsWith(workDirectory) || !finalShard.startsWith(baseDir)) {
+                throw new IOException("Replica repair path escaped its configured root");
+            }
+            deleteRecursively(stagedShard);
+            Files.createDirectories(stagedShard);
+            try (java.util.zip.ZipInputStream zip = new java.util.zip.ZipInputStream(Files.newInputStream(archive))) {
+                java.util.zip.ZipEntry entry;
+                while ((entry = zip.getNextEntry()) != null) {
+                    Path target = stagedShard.resolve(entry.getName()).normalize();
+                    if (!target.startsWith(stagedShard) || entry.isDirectory()) {
+                        if (!target.startsWith(stagedShard)) {
+                            throw new IOException("Replica snapshot contains an unsafe path");
+                        }
+                        continue;
+                    }
+                    Files.createDirectories(target.getParent());
+                    Files.copy(zip, target, StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
+            ShardIndex previous = shardIndexes.remove(shardId);
+            if (previous != null) {
+                previous.close();
+            }
+            removeShardMutationState(shardId);
+            if (Files.exists(finalShard)) {
+                moveAtomically(finalShard, backup);
+            }
+            try {
+                moveAtomically(stagedShard, finalShard);
+                openExistingShard(shardId);
+                deleteRecursively(backup);
+            } catch (IOException | RuntimeException failure) {
+                if (Files.exists(backup)) {
+                    deleteRecursively(finalShard);
+                    moveAtomically(backup, finalShard);
+                    openExistingShard(shardId);
+                }
+                throw failure;
+            }
+        } finally {
+            buffer.lock.unlock();
+        }
+    }
+
+    private void removeShardMutationState(String shardId) {
+        appliedMutations.keySet().removeIf(key -> key.startsWith(shardId + '\0'));
+        replicaIdentities.remove(shardId);
+    }
+
+    private static void moveAtomically(Path source, Path target) throws IOException {
+        try {
+            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private static void deleteRecursively(Path root) throws IOException {
+        if (!Files.exists(root)) {
+            return;
+        }
+        try (Stream<Path> paths = Files.walk(root)) {
+            for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(path);
+            }
+        }
     }
 
     private void mergeAppliedMutation(String key, AppliedMutation candidate, String source) throws IOException {
@@ -1372,6 +1647,38 @@ public class IndexManager implements Closeable {
     public static final class StaleMutationException extends IllegalStateException {
         public StaleMutationException(String message) {
             super(message);
+        }
+    }
+
+    public static final class RepairInProgressException extends IllegalStateException {
+        public RepairInProgressException(String message) {
+            super(message);
+        }
+    }
+
+    public record ReplicaManifestData(
+            String shardId,
+            String logicalPartitionId,
+            String primaryNodeId,
+            long placementGeneration,
+            long committedPosition,
+            String contentChecksum,
+            long documentCount,
+            String state,
+            String lastError) {}
+
+    private record ReplicaIdentity(String logicalPartitionId, String primaryNodeId) {
+        private ReplicaIdentity {
+            logicalPartitionId =
+                    logicalPartitionId == null || logicalPartitionId.isBlank() ? "unknown" : logicalPartitionId;
+            primaryNodeId = primaryNodeId == null ? "" : primaryNodeId;
+        }
+
+        boolean compatibleWith(ReplicaIdentity other) {
+            return logicalPartitionId.equals(other.logicalPartitionId)
+                    && (primaryNodeId.isBlank()
+                            || other.primaryNodeId.isBlank()
+                            || primaryNodeId.equals(other.primaryNodeId));
         }
     }
 

@@ -198,7 +198,8 @@ public class GatewayIndexService {
                                         target.nodeId(),
                                         target.primary(),
                                         operationId,
-                                        operationGeneration))
+                                        operationGeneration,
+                                        partitionId))
                                 .build());
                 if (!response.getSuccess()) {
                     throw Status.INTERNAL
@@ -254,7 +255,8 @@ public class GatewayIndexService {
                                         target.nodeId(),
                                         target.primary(),
                                         operationId,
-                                        operationGeneration))
+                                        operationGeneration,
+                                        partitionId))
                                 .build());
                 if (!response.getSuccess()) {
                     throw Status.INTERNAL
@@ -288,7 +290,8 @@ public class GatewayIndexService {
             String targetNodeId,
             boolean primary,
             String operationId,
-            long operationGeneration) {
+            long operationGeneration,
+            String logicalPartitionId) {
         return MutationMetadata.newBuilder()
                 .setOperationId(operationId)
                 .setOperationGeneration(operationGeneration)
@@ -296,6 +299,7 @@ public class GatewayIndexService {
                 .setPrimaryNodeId(replicaSet.primaryNodeId())
                 .setTargetNodeId(targetNodeId)
                 .setReplica(!primary)
+                .setLogicalPartitionId(logicalPartitionId)
                 .build();
     }
 

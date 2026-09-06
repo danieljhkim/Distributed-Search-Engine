@@ -127,6 +127,53 @@ message GetShardMapResponse {
   string durability_policy = 6;
   string read_consistency = 7;
   int32 under_replicated_shards = 8;
+  repeated ReplicaRepairStatus repairs = 9;
+}
+
+enum ReplicaRepairState {
+  REPLICA_REPAIR_STATE_UNKNOWN = 0;
+  REPLICA_REPAIR_STATE_CHECKING = 1;
+  REPLICA_REPAIR_STATE_MISSING = 2;
+  REPLICA_REPAIR_STATE_LAGGING = 3;
+  REPLICA_REPAIR_STATE_WRONG_GENERATION = 4;
+  REPLICA_REPAIR_STATE_CHECKSUM_DIVERGENT = 5;
+  REPLICA_REPAIR_STATE_TRANSFERRING = 6;
+  REPLICA_REPAIR_STATE_VERIFYING = 7;
+  REPLICA_REPAIR_STATE_READY = 8;
+  REPLICA_REPAIR_STATE_PAUSED = 9;
+  REPLICA_REPAIR_STATE_FAILED = 10;
+}
+
+message ReplicaRepairStatus {
+  string repair_id = 1;
+  string shard_id = 2;
+  string source_node_id = 3;
+  string target_node_id = 4;
+  ReplicaRepairState state = 5;
+  uint64 bytes_transferred = 6;
+  uint64 total_bytes = 7;
+  uint32 attempts = 8;
+  string last_error = 9;
+  int64 started_at_epoch_millis = 10;
+  int64 updated_at_epoch_millis = 11;
+}
+
+message GetReplicaRepairsRequest {}
+
+message GetReplicaRepairsResponse {
+  repeated ReplicaRepairStatus repairs = 1;
+  bool paused = 2;
+}
+
+message ControlReplicaRepairsRequest {
+  // Bounded values: pause, resume, retry.
+  string action = 1;
+  string repair_id = 2;
+}
+
+message ControlReplicaRepairsResponse {
+  bool success = 1;
+  bool paused = 2;
 }
 
 service ClusterService {
@@ -135,4 +182,6 @@ service ClusterService {
   rpc DeregisterNode(DeregisterNodeRequest) returns (DeregisterNodeResponse);
   rpc GetShardMap(GetShardMapRequest) returns (GetShardMapResponse);
   rpc getClusterInfo(GetClusterInfoRequest) returns (GetClusterInfoResponse);
+  rpc GetReplicaRepairs(GetReplicaRepairsRequest) returns (GetReplicaRepairsResponse);
+  rpc ControlReplicaRepairs(ControlReplicaRepairsRequest) returns (ControlReplicaRepairsResponse);
 }
