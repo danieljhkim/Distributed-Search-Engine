@@ -9,8 +9,6 @@ import com.danieljhkim.dsearch.common.exception.NodeUnavailableException;
 import com.danieljhkim.dsearch.common.loadbalancer.RoundRobin;
 import com.danieljhkim.dsearch.common.routing.DocumentOwnership;
 import com.danieljhkim.dsearch.common.shard.ReplicaPlacement;
-import com.danieljhkim.dsearch.common.shard.ShardState;
-import com.danieljhkim.dsearch.common.shard.ShardStateStore;
 import com.danieljhkim.dsearch.common.tracing.CorrelationIdClientInterceptor;
 import com.danieljhkim.dsearch.proto.cluster.ClusterServiceGrpc;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
@@ -400,9 +398,6 @@ public class NodeClientManager<T> {
     /**
      * Client for the node that owns {@code (partitionId, documentId)}.
      *
-     * <p>Callers mutate the returned client's shard doc counts themselves, and
-     * only once the node has confirmed the mutation.
-     *
      * @throws NodeUnavailableException if the owner has no client or is not currently active
      */
     public NodeClient<T> ownerClient(String partitionId, String documentId) {
@@ -422,42 +417,6 @@ public class NodeClientManager<T> {
                             + " competing copy of the document");
         }
         return owner;
-    }
-
-    public ShardStateStore.ShardDocSnapshot snapshotShardDocCounts() {
-        ShardStateStore.ShardDocSnapshot snapshot = new ShardStateStore.ShardDocSnapshot();
-        for (NodeClient<T> client : clientMap.values()) {
-            ShardStateStore.NodeEntry entry = new ShardStateStore.NodeEntry();
-            entry.setNodeId(client.getNodeId());
-
-            Map<String, Long> shardCounts = new HashMap<>();
-            for (ShardState state : client.getShardStates().values()) {
-                shardCounts.put(state.getPartitionId(), state.getDocumentCount());
-            }
-            entry.setShards(shardCounts);
-            snapshot.getNodes().add(entry);
-        }
-        return snapshot;
-    }
-
-    public void applySnapshot(ShardStateStore.ShardDocSnapshot snapshot) {
-        Map<String, ShardStateStore.NodeEntry> byNode = new HashMap<>();
-        for (ShardStateStore.NodeEntry e : snapshot.getNodes()) {
-            byNode.put(e.getNodeId(), e);
-        }
-
-        for (NodeClient<T> client : clientMap.values()) {
-            ShardStateStore.NodeEntry entry = byNode.get(client.getNodeId());
-            if (entry == null) {
-                continue;
-            }
-            for (Map.Entry<String, Long> shardCount : entry.getShards().entrySet()) {
-                String shardId = shardCount.getKey();
-                long count = shardCount.getValue();
-                ShardState state = client.getOrCreateShardState(shardId);
-                state.getDocCount().set(count);
-            }
-        }
     }
 
     void refreshClientsFromCluster() {

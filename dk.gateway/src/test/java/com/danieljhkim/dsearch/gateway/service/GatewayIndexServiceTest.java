@@ -22,6 +22,7 @@ import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexResponseDto;
+import com.danieljhkim.dsearch.gateway.api.dto.DocumentCountResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.GetDocumentResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
@@ -36,6 +37,8 @@ import com.danieljhkim.dsearch.proto.index.DeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.Document;
 import com.danieljhkim.dsearch.proto.index.Field;
+import com.danieljhkim.dsearch.proto.index.GetDocumentCountRequest;
+import com.danieljhkim.dsearch.proto.index.GetDocumentCountResponse;
 import com.danieljhkim.dsearch.proto.index.GetDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.GetDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentRequest;
@@ -106,7 +109,29 @@ class GatewayIndexServiceTest {
         assertThat(grpcRequest.getDocument().getFieldsList())
                 .extracting(Field::getName, Field::getValue)
                 .containsExactlyInAnyOrder(tuple("title", "Distributed Search"), tuple("category", "docs"));
-        assertThat(ownerClient.getShardDocCount("tenant-a")).isEqualTo(1);
+    }
+
+    @Test
+    void documentCountUsesOneReadPlanTargetPerLogicalShardAndReportsPartialObservations() {
+        ReplicaPlacement.ReadTarget selectedReplica =
+                new ReplicaPlacement.ReadTarget("logical-1", "1", "tenant-a/primary-1", true);
+        when(indexNodeClientManager.replicaReadPlan("tenant-a"))
+                .thenReturn(new ReplicaPlacement.ReadPlan(List.of(selectedReplica), List.of("logical-2")));
+        when(indexNodeClientManager.getClientMap()).thenReturn(Map.of("1", ownerClient));
+        when(indexStub.getDocumentCount(any(GetDocumentCountRequest.class)))
+                .thenReturn(GetDocumentCountResponse.newBuilder()
+                        .setDocumentCount(7)
+                        .build());
+
+        DocumentCountResponseDto response = service.documentCount("tenant-a");
+
+        assertThat(response.documentCount()).isEqualTo(7);
+        assertThat(response.unavailableLogicalShards()).containsExactly("logical-2");
+        assertThat(response.failedLogicalShards()).isEmpty();
+        assertThat(response.isComplete()).isFalse();
+        ArgumentCaptor<GetDocumentCountRequest> requestCaptor = ArgumentCaptor.forClass(GetDocumentCountRequest.class);
+        verify(indexStub).getDocumentCount(requestCaptor.capture());
+        assertThat(requestCaptor.getValue().getPartitionId()).isEqualTo("tenant-a/primary-1");
     }
 
     @Test
@@ -170,7 +195,6 @@ class GatewayIndexServiceTest {
         IndexResponseDto response = service.index(request);
 
         assertThat(response.isSuccess()).isFalse();
-        assertThat(ownerClient.getShardDocCount("tenant-a")).isZero();
     }
 
     @Test
@@ -201,8 +225,7 @@ class GatewayIndexServiceTest {
     }
 
     @Test
-    void deleteRoutesToTheOwnerAndDecrementsOnce() {
-        ownerClient.incrementDocToShard("tenant-a");
+    void deleteRoutesToTheOwner() {
         when(indexNodeClientManager.ownerClient("tenant-a", "doc-9")).thenReturn(ownerClient);
         when(indexStub.deleteDocument(any(DeleteDocumentRequest.class)))
                 .thenReturn(DeleteDocumentResponse.newBuilder().setSuccess(true).build());
@@ -217,12 +240,10 @@ class GatewayIndexServiceTest {
         DeleteDocumentRequest grpcRequest = requestCaptor.getValue();
         assertThat(grpcRequest.getPartitionId()).isEqualTo("tenant-a");
         assertThat(grpcRequest.getId()).isEqualTo("doc-9");
-        assertThat(ownerClient.getShardDocCount("tenant-a")).isZero();
     }
 
     @Test
-    void deleteDoesNotDecrementWhenTheOwnerReportsFailure() {
-        ownerClient.incrementDocToShard("tenant-a");
+    void deleteReturnsAnUnsuccessfulOwnerResponse() {
         when(indexNodeClientManager.ownerClient("tenant-a", "doc-9")).thenReturn(ownerClient);
         when(indexStub.deleteDocument(any(DeleteDocumentRequest.class)))
                 .thenReturn(
@@ -231,19 +252,15 @@ class GatewayIndexServiceTest {
         IndexResponseDto response = service.delete("doc-9", "tenant-a");
 
         assertThat(response.isSuccess()).isFalse();
-        assertThat(ownerClient.getShardDocCount("tenant-a")).isEqualTo(1);
     }
 
     @Test
-    void deleteDoesNotDecrementWhenTheCallFails() {
-        ownerClient.incrementDocToShard("tenant-a");
+    void deletePropagatesCallFailure() {
         when(indexNodeClientManager.ownerClient("tenant-a", "doc-9")).thenReturn(ownerClient);
         when(indexStub.deleteDocument(any(DeleteDocumentRequest.class)))
                 .thenThrow(new StatusRuntimeException(Status.UNAVAILABLE));
 
         assertThatThrownBy(() -> service.delete("doc-9", "tenant-a")).isInstanceOf(StatusRuntimeException.class);
-
-        assertThat(ownerClient.getShardDocCount("tenant-a")).isEqualTo(1);
     }
 
     @Test
@@ -482,8 +499,6 @@ class GatewayIndexServiceTest {
 
     @Test
     void bulkDeletePreservesDuplicateIdsAsIndependentOrderedOutcomes() {
-        ownerClient.incrementDocToShard("default");
-        ownerClient.incrementDocToShard("default");
         when(indexNodeClientManager.ownerClient("default", "doc-1")).thenReturn(ownerClient);
         when(indexStub.bulkDeleteDocument(any(BulkDeleteDocumentRequest.class)))
                 .thenReturn(BulkDeleteDocumentResponse.newBuilder()
@@ -507,7 +522,6 @@ class GatewayIndexServiceTest {
                 ArgumentCaptor.forClass(BulkDeleteDocumentRequest.class);
         verify(indexStub).bulkDeleteDocument(requestCaptor.capture());
         assertThat(requestCaptor.getValue().getIdsList()).containsExactly("doc-1", "doc-1");
-        assertThat(ownerClient.getShardDocCount("default")).isZero();
     }
 
     @Test

@@ -170,7 +170,11 @@ gateway restarts. A delete for a missing id is an idempotent success. The gatewa
 document id before placement when the client omits one, ensuring later updates use the same
 key.
 
-`NodeClient` keeps approximate per-node, per-partition counters for observability. They are
-adjusted only after a newly applied mutation is confirmed. An update can still overcount
-because a remote node does not cheaply distinguish insert from replace; source exact counts
-from Lucene when exact load telemetry is required.
+`GET /api/v1/index/count?partitionId=...` is the product cardinality endpoint. It queries the
+current committed Lucene count from exactly one eligible replica per logical shard (primary when
+eligible, otherwise the deterministic failover copy) and sums those observations once. It has no
+gateway mutation history or restart-persisted delta. The response names unavailable logical shards
+and selected shards whose count RPC failed; its numeric count is therefore only complete when both
+lists are empty, and a missing observation is never substituted with zero. The count is a
+point-in-time read rather than a cluster snapshot: writes committed while fanout runs may be
+reflected by some shards and not others.

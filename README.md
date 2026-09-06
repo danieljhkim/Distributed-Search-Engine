@@ -60,9 +60,9 @@ The system is composed of three primary components:
     every Gateway process and across restarts, and it does not move when nodes go unhealthy.
   - If the primary is unavailable the mutation fails with `503`; clients never promote a replica for writes.
   - Hashing also spreads documents evenly across nodes without a coordinator.
-  - The Gateway still keeps **per‑shard, per‑node document counts**, updated only after a
-    node confirms a mutation and snapshotted to disk, but they are now an observability
-    signal rather than a routing input.
+  - `GET /api/v1/index/count?partitionId=...` reads committed Lucene counts from one eligible
+    replica of every logical shard. It reports unavailable or failed logical shards explicitly;
+    a partial observation is never presented as a zero count.
   - See [Document Ownership](./docs/DOCUMENT_OWNERSHIP.md) for restart and topology‑change behavior.
 
 The Gateway writes the primary first and then its deterministic followers. `one`, `quorum`,
@@ -520,7 +520,8 @@ replicaRepair:
 - `pagination.cursorSigningKey` signs opaque search cursors. Set one shared value in any cluster
   with more than one query node; see *Sorting and cursor pagination* above.
 - `pagination.maxSortFields` bounds sort components per request, before the id tie-breaker.
-- `indexNodes.routingStrategy` currently supports **`LEAST_LOADED`**, using per‑shard, per‑node doc counts.
+- `indexNodes.routingStrategy` currently supports **`LEAST_LOADED`** for read-client selection;
+  document mutations use deterministic ownership and cardinality comes from Lucene, not gateway deltas.
 - `queryNodes.routingStrategy` currently supports **`ROUND_ROBIN`** for fan‑out queries across multiple query node instances.
 - With discovery enabled, index and query clients require a versioned coordinator response before
   routing. During a coordinator outage they may use only a previously accepted topology for

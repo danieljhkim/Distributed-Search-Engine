@@ -42,6 +42,8 @@ import com.danieljhkim.dsearch.proto.index.Document;
 import com.danieljhkim.dsearch.proto.index.Field;
 import com.danieljhkim.dsearch.proto.index.FinishReplicaRepairRequest;
 import com.danieljhkim.dsearch.proto.index.FinishReplicaRepairResponse;
+import com.danieljhkim.dsearch.proto.index.GetDocumentCountRequest;
+import com.danieljhkim.dsearch.proto.index.GetDocumentCountResponse;
 import com.danieljhkim.dsearch.proto.index.GetDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.GetDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentRequest;
@@ -164,6 +166,26 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
     }
 
     @Override
+    public void getDocumentCount(
+            GetDocumentCountRequest request, StreamObserver<GetDocumentCountResponse> responseObserver) {
+        if (!validatePartition(request.getPartitionId(), responseObserver)) {
+            return;
+        }
+        try {
+            responseObserver.onNext(GetDocumentCountResponse.newBuilder()
+                    .setDocumentCount(indexManager.countDocuments(request.getPartitionId()))
+                    .build());
+            responseObserver.onCompleted();
+        } catch (IOException | RuntimeException e) {
+            LOGGER.log(Level.SEVERE, "GetDocumentCount failed", e);
+            responseObserver.onError(Status.INTERNAL
+                    .withDescription("Failed to read committed document count")
+                    .withCause(e)
+                    .asRuntimeException());
+        }
+    }
+
+    @Override
     public void bulkIndexDocument(
             BulkIndexDocumentRequest request, StreamObserver<BulkIndexDocumentResponse> responseObserver) {
         String partitionId = request.getPartitionId();
@@ -270,8 +292,9 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
                 return;
             }
             Document.Builder responseDocument = Document.newBuilder().setId(document.getId());
-            document.getFields().forEach((name, value) -> responseDocument.addFields(
-                    Field.newBuilder().setName(name).setValue(value)));
+            document.getFields()
+                    .forEach((name, value) -> responseDocument.addFields(
+                            Field.newBuilder().setName(name).setValue(value)));
             responseObserver.onNext(GetDocumentResponse.newBuilder()
                     .setDocument(responseDocument)
                     .build());

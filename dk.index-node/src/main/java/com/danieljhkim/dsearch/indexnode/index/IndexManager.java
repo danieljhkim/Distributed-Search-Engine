@@ -452,6 +452,13 @@ public class IndexManager implements Closeable {
         return shardIndex;
     }
 
+    /** Returns the current committed Lucene cardinality for one physical shard. */
+    public long countDocuments(String partitionId) throws IOException {
+        PartitionIdValidator.validate(partitionId);
+        ShardIndex shardIndex = shardIndexes.get(partitionId);
+        return shardIndex == null ? 0L : shardIndex.countDocuments();
+    }
+
     private ShardBuffer getBuffer(String shardId) {
         return shardBuffers.computeIfAbsent(shardId, id -> new ShardBuffer());
     }

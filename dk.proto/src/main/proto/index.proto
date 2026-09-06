@@ -98,6 +98,17 @@ message GetDocumentResponse {
   Document document = 1;
 }
 
+// This is a point-in-time Lucene cardinality for one physical shard. Gateways
+// aggregate one selected eligible replica per logical shard and report any
+// unavailable observations rather than treating them as empty shards.
+message GetDocumentCountRequest {
+  string partition_id = 1;
+}
+
+message GetDocumentCountResponse {
+  int64 document_count = 1;
+}
+
 message BulkDeleteDocumentRequest {
   string partition_id = 1;
   // Explicit ids to delete, in caller order. Duplicates are preserved positionally rather
@@ -388,6 +399,7 @@ service IndexService {
   rpc BulkIndexDocument(BulkIndexDocumentRequest) returns (BulkIndexDocumentResponse);
   rpc DeleteDocument(DeleteDocumentRequest) returns (DeleteDocumentResponse);
   rpc GetDocument(GetDocumentRequest) returns (GetDocumentResponse);
+  rpc GetDocumentCount(GetDocumentCountRequest) returns (GetDocumentCountResponse);
   rpc BulkDeleteDocument(BulkDeleteDocumentRequest) returns (BulkDeleteDocumentResponse);
   rpc SearchIndex(IndexSearchRequest) returns (IndexSearchResponse);
   rpc CreateIndex(CreateIndexRequest) returns (CreateIndexResponse);

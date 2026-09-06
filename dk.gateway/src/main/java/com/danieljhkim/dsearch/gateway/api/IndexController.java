@@ -5,6 +5,7 @@ import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexResponseDto;
+import com.danieljhkim.dsearch.gateway.api.dto.DocumentCountResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.GetDocumentResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
@@ -94,6 +95,13 @@ public class IndexController {
             @RequestParam(name = "partitionId", defaultValue = "default") String partitionId) {
         PartitionIdValidator.validate(partitionId);
         return indexService.get(id, partitionId);
+    }
+
+    @GetMapping(value = "/count", produces = "application/json")
+    public DocumentCountResponseDto documentCount(
+            @RequestParam(name = "partitionId", defaultValue = "default") String partitionId) {
+        PartitionIdValidator.validate(partitionId);
+        return indexService.documentCount(partitionId);
     }
 
     /**

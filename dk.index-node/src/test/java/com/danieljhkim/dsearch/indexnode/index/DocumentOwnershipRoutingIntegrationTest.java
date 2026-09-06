@@ -35,8 +35,7 @@ import org.junit.jupiter.api.io.TempDir;
  * rule the gateway uses.
  *
  * <p>The gateway's mutation path is exactly what happens here: resolve the owner
- * of {@code (partitionId, documentId)}, call that node, and adjust its shard doc
- * count only after the node confirms the mutation.
+ * of {@code (partitionId, documentId)} and call that node.
  */
 class DocumentOwnershipRoutingIntegrationTest {
 
@@ -86,10 +85,6 @@ class DocumentOwnershipRoutingIntegrationTest {
             owners.add(owner.getNodeId());
 
             index(owner, document(DOCUMENT_ID, "Version " + version, "shared marker version" + version));
-
-            // Skew the load so that least-loaded placement would send the next write to the
-            // peer node, which is what used to leave two copies of the document behind.
-            owner.getOrCreateShardState(PARTITION_ID).getDocCount().addAndGet(1_000);
         }
 
         assertEquals(1, owners.size(), "document changed owner mid-flight: " + owners);
@@ -108,15 +103,12 @@ class DocumentOwnershipRoutingIntegrationTest {
         NodeClient<IndexManager> owner = clientManager.ownerClient(PARTITION_ID, DOCUMENT_ID);
         index(owner, document(DOCUMENT_ID, "Version 1", "shared marker version1"));
         assertEquals(1, totalHitsAcrossCluster("shared"));
-        assertEquals(1, owner.getShardDocCount(PARTITION_ID));
 
         NodeClient<IndexManager> deleteTarget = clientManager.ownerClient(PARTITION_ID, DOCUMENT_ID);
         assertEquals(owner.getNodeId(), deleteTarget.getNodeId());
         deleteTarget.getStub().deleteDocumentDurably(PARTITION_ID, DOCUMENT_ID);
-        deleteTarget.decrementDocFromShard(PARTITION_ID);
 
         assertEquals(0, totalHitsAcrossCluster("shared"));
-        assertEquals(0, deleteTarget.getShardDocCount(PARTITION_ID));
     }
 
     @Test
@@ -126,7 +118,6 @@ class DocumentOwnershipRoutingIntegrationTest {
         owner.getStub().commitAll();
 
         assertEquals(0, totalHitsAcrossCluster("shared"));
-        assertEquals(0, owner.getShardDocCount(PARTITION_ID));
     }
 
     @Test
@@ -197,11 +188,10 @@ class DocumentOwnershipRoutingIntegrationTest {
         return owners;
     }
 
-    /** Mirrors the gateway mutation path: call the owner, then count the confirmed write. */
+    /** Mirrors the gateway mutation path. */
     private static void index(NodeClient<IndexManager> owner, SearchDocument document) throws IOException {
         owner.getStub().indexDocument(PARTITION_ID, document);
         owner.getStub().commitAll();
-        owner.incrementDocToShard(PARTITION_ID);
     }
 
     private long totalHitsAcrossCluster(String query) throws IOException {

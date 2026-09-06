@@ -188,6 +188,12 @@ class ProtoWireContractTest {
         assertRpc(
                 files.get("index.proto"),
                 "IndexService",
+                "GetDocumentCount",
+                "dsearch.index.GetDocumentCountRequest",
+                "dsearch.index.GetDocumentCountResponse");
+        assertRpc(
+                files.get("index.proto"),
+                "IndexService",
                 "SearchIndex",
                 "dsearch.index.IndexSearchRequest",
                 "dsearch.index.IndexSearchResponse");

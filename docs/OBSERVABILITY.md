@@ -12,6 +12,10 @@ before the monthly error budget is exhausted.
 | Recovery | most recent valid snapshot is younger than 24 h; a restore success is recorded for every drill | recovery textfile metrics described below |
 | Replica convergence | every configured copy is eligible only after manifest equality; repair traffic remains within configured bounds | `dsearch_replica_repair_outcomes_total`, `dsearch_replica_repair_duration_seconds`, `dsearch_replica_repairs_active`, `dsearch_replica_repairs_remaining` |
 
+Document cardinality is read from committed Lucene state through `GET /api/v1/index/count`, not
+from gateway mutation counters. Operators must treat a non-empty unavailable or failed logical
+shard list as a partial observation rather than an empty shard or a complete zero count.
+
 ## Bounded dimensions
 
 Metrics must never include document ids, partition ids, query text, hostnames supplied by a
