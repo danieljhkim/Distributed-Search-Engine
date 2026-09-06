@@ -687,6 +687,28 @@ public class ShardIndex implements Closeable {
         searcherManager.maybeRefresh();
     }
 
+    /**
+     * Installs user data for the next commit without publishing it yet. The next {@link #commit()}
+     * publishes segment changes and this metadata through the same checksummed commit point.
+     */
+    void setLiveCommitData(Map<String, String> commitUserData) {
+        indexWriter.setLiveCommitData(commitUserData.entrySet());
+    }
+
+    /** Returns user data from the latest durable Lucene commit. */
+    Map<String, String> committedUserData() throws IOException {
+        var commits = DirectoryReader.listCommits(directory);
+        return commits.get(commits.size() - 1).getUserData();
+    }
+
+    /**
+     * Closes without committing pending writer state. Used when a commit outcome is uncertain so
+     * a later close cannot accidentally publish data without its associated fencing metadata.
+     */
+    void rollbackAndClose() throws IOException {
+        closeResources(true);
+    }
+
     public long countDocuments() {
         IndexSearcher searcher = null;
         try {
@@ -915,6 +937,10 @@ public class ShardIndex implements Closeable {
     @Override
     @SuppressWarnings("all")
     public void close() throws IOException {
+        closeResources(false);
+    }
+
+    private void closeResources(boolean rollback) throws IOException {
         IOException first = null;
         try {
             searcherManager.close();
@@ -922,22 +948,18 @@ public class ShardIndex implements Closeable {
             first = e;
         }
         try {
-            indexWriter.close();
-        } catch (IOException e) {
-            if (first == null) {
-                first = e;
+            if (rollback) {
+                indexWriter.rollback();
             } else {
-                LOGGER.log(Level.WARNING, "Suppressed exception while closing IndexWriter for shard " + shardId, e);
+                indexWriter.close();
             }
+        } catch (IOException e) {
+            first = collectCloseFailure(first, e);
         }
         try {
             directory.close();
         } catch (IOException e) {
-            if (first == null) {
-                first = e;
-            } else {
-                LOGGER.log(Level.WARNING, "Suppressed exception while closing Directory for shard " + shardId, e);
-            }
+            first = collectCloseFailure(first, e);
         }
         try {
             analyzer.close();
@@ -945,26 +967,26 @@ public class ShardIndex implements Closeable {
             IOException closeFailure = e instanceof IOException ioException
                     ? ioException
                     : new IOException("Failed to close analyzer for shard " + shardId, e);
-            if (first == null) {
-                first = closeFailure;
-            } else {
-                LOGGER.log(Level.WARNING, "Suppressed exception while closing analyzer for shard " + shardId, e);
-                first.addSuppressed(closeFailure);
-            }
+            first = collectCloseFailure(first, closeFailure);
         }
         try {
             if (ownedEmbeddingService != null) {
                 ownedEmbeddingService.close();
             }
         } catch (IOException e) {
-            if (first == null) {
-                first = e;
-            } else {
-                LOGGER.log(
-                        Level.WARNING, "Suppressed exception while closing embedding service for shard " + shardId, e);
-                first.addSuppressed(e);
-            }
+            first = collectCloseFailure(first, e);
         }
-        if (first != null) throw first;
+        if (first != null) {
+            throw first;
+        }
+    }
+
+    private IOException collectCloseFailure(IOException first, IOException failure) {
+        if (first == null) {
+            return failure;
+        }
+        first.addSuppressed(failure);
+        LOGGER.log(Level.WARNING, "Suppressed exception while closing resources for shard " + shardId, failure);
+        return first;
     }
 }

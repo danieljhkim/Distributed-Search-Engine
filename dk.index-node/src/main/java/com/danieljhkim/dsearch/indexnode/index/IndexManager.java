@@ -24,16 +24,19 @@ import io.prometheus.client.Gauge;
 import io.prometheus.client.Histogram;
 import java.io.Closeable;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -48,6 +51,11 @@ public class IndexManager implements Closeable {
 
     private static final Logger LOGGER = Logger.getLogger(IndexManager.class.getName());
     private static final String SHARD_PREFIX = "shard-";
+    private static final String MUTATION_COMMIT_PREFIX = "dsearch.replication.";
+    private static final String MUTATION_COMMIT_FORMAT = MUTATION_COMMIT_PREFIX + "format";
+    private static final String MUTATION_COMMIT_COUNT = MUTATION_COMMIT_PREFIX + "count";
+    private static final String MUTATION_COMMIT_ENTRY_PREFIX = MUTATION_COMMIT_PREFIX + "mutation.";
+    private static final String MUTATION_COMMIT_FORMAT_VERSION = "1";
     private static final Counter LUCENE_COMMIT_OUTCOMES = Counter.build()
             .name("dsearch_lucene_commit_outcomes_total")
             .help("Lucene commit attempts by bounded outcome")
@@ -98,7 +106,8 @@ public class IndexManager implements Closeable {
     private final IndexAliasStore aliasStore;
     private final Map<String, SchemaMismatchException> unservableIndexes = new ConcurrentHashMap<>();
     private final Map<String, AppliedMutation> appliedMutations = new ConcurrentHashMap<>();
-    private final Path mutationStateFile;
+    private final Path legacyMutationStateFile;
+    private volatile MutationFaultInjector mutationFaultInjector = (physicalIndex, stage) -> {};
     private volatile boolean closed;
 
     public IndexManager(Path baseDir) {
@@ -221,7 +230,7 @@ public class IndexManager implements Closeable {
             throw new IllegalArgumentException("minimumFreeDiskBytes must not be negative");
         }
         this.baseDir = baseDir;
-        this.mutationStateFile = baseDir.resolve("replication-mutations.properties");
+        this.legacyMutationStateFile = baseDir.resolve("replication-mutations.properties");
         this.maxBufferedOpsPerShard = maxBufferedOpsPerShard;
         this.maxFlushInterval = maxFlushInterval;
         this.minimumFreeDiskBytes = minimumFreeDiskBytes;
@@ -250,8 +259,11 @@ public class IndexManager implements Closeable {
         ScheduledExecutorService scheduler = null;
         try {
             this.aliasStore.load();
-            loadMutationState();
+            boolean legacyMutationStateLoaded = loadLegacyMutationState();
             loadExistingShards();
+            if (legacyMutationStateLoaded) {
+                migrateLegacyMutationState();
+            }
 
             scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "index-flush-scheduler");
@@ -265,7 +277,8 @@ public class IndexManager implements Closeable {
                     this::flushBuffersOnSchedule, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
             this.flushScheduler = scheduler;
         } catch (IOException e) {
-            RuntimeException wrapped = new RuntimeException("Failed to load index alias metadata from " + baseDir, e);
+            RuntimeException wrapped =
+                    new RuntimeException("Failed to initialize durable index state from " + baseDir, e);
             if (scheduler != null) {
                 scheduler.shutdownNow();
             }
@@ -342,9 +355,10 @@ public class IndexManager implements Closeable {
             shardBuffers.put(shardId, new ShardBuffer());
             unservableIndexes.remove(shardId);
             try {
+                loadCommittedMutationState(shardIndex);
                 aliasStore.ensureIdentityAlias(shardId);
             } catch (IOException e) {
-                throw new RuntimeException("Failed to persist identity alias for " + shardId, e);
+                throw new RuntimeException("Failed to load durable state for " + shardId, e);
             }
         } catch (SchemaMismatchException e) {
             LOGGER.log(Level.SEVERE, "Refusing to serve incompatible index " + shardId + ": " + e.getMessage());
@@ -353,6 +367,11 @@ public class IndexManager implements Closeable {
                     new ShardIndex(shardId, baseDir, fieldConfigMap, embeddingService, expectedSchema, false);
             shardIndexes.put(shardId, readable);
             shardBuffers.put(shardId, new ShardBuffer());
+            try {
+                loadCommittedMutationState(readable);
+            } catch (IOException loadFailure) {
+                throw new RuntimeException("Failed to load replicated mutation state for " + shardId, loadFailure);
+            }
         }
     }
 
@@ -435,6 +454,7 @@ public class IndexManager implements Closeable {
 
         buffer.lock.lock();
         try {
+            buffer.requireWritable(physicalIndex);
             buffer.add(BufferedOperation.index(doc));
             if (buffer.pendingOperations.size() >= maxBufferedOpsPerShard) {
                 flushShardBufferLocked(physicalIndex, shardIndex, buffer);
@@ -459,6 +479,7 @@ public class IndexManager implements Closeable {
 
         buffer.lock.lock();
         try {
+            buffer.requireWritable(physicalIndex);
             buffer.add(BufferedOperation.index(doc));
             flushShardBufferLocked(physicalIndex, shardIndex, buffer);
         } finally {
@@ -476,6 +497,7 @@ public class IndexManager implements Closeable {
         ShardBuffer buffer = getBuffer(physicalIndex);
         buffer.lock.lock();
         try {
+            buffer.requireWritable(physicalIndex);
             buffer.add(BufferedOperation.delete(docId));
             if (buffer.pendingOperations.size() >= maxBufferedOpsPerShard) {
                 flushShardBufferLocked(physicalIndex, shardIndex, buffer);
@@ -500,6 +522,7 @@ public class IndexManager implements Closeable {
 
         buffer.lock.lock();
         try {
+            buffer.requireWritable(physicalIndex);
             buffer.add(BufferedOperation.delete(docId));
             flushShardBufferLocked(physicalIndex, shardIndex, buffer);
         } finally {
@@ -522,7 +545,7 @@ public class IndexManager implements Closeable {
                 operationGeneration,
                 placementGeneration,
                 MutationType.INDEX,
-                () -> indexDocumentDurably(partitionId, doc));
+                BufferedOperation.index(doc));
     }
 
     /** Applies a generation-fenced replicated delete; replay of the same identity is a no-op. */
@@ -536,7 +559,7 @@ public class IndexManager implements Closeable {
                 operationGeneration,
                 placementGeneration,
                 MutationType.DELETE,
-                () -> deleteDocumentDurably(partitionId, docId));
+                BufferedOperation.delete(docId));
     }
 
     private MutationResult applyReplicatedMutation(
@@ -546,7 +569,7 @@ public class IndexManager implements Closeable {
             long operationGeneration,
             long placementGeneration,
             MutationType mutationType,
-            IoMutation mutation)
+            BufferedOperation mutation)
             throws IOException {
         if (operationId == null || operationId.isBlank()) {
             throw new IllegalArgumentException("replicated mutation operation_id must not be blank");
@@ -555,10 +578,12 @@ public class IndexManager implements Closeable {
             throw new IllegalArgumentException("replicated mutation generations must be positive");
         }
         String physicalIndex = resolvePhysicalIndex(partitionId);
+        ShardIndex shardIndex = getOrCreateShard(physicalIndex);
         ShardBuffer buffer = getBuffer(physicalIndex);
         String mutationKey = physicalIndex + '\0' + docId;
         buffer.lock.lock();
         try {
+            buffer.requireWritable(physicalIndex);
             AppliedMutation previous = appliedMutations.get(mutationKey);
             if (previous != null) {
                 if (placementGeneration < previous.placementGeneration()) {
@@ -578,85 +603,270 @@ public class IndexManager implements Closeable {
                 }
             }
 
-            mutation.apply();
-            AppliedMutation applied =
-                    new AppliedMutation(operationId, operationGeneration, placementGeneration, mutationType);
-            appliedMutations.put(mutationKey, applied);
             try {
-                persistMutationState();
-            } catch (IOException e) {
-                if (previous == null) {
-                    appliedMutations.remove(mutationKey, applied);
-                } else {
-                    appliedMutations.put(mutationKey, previous);
+                for (BufferedOperation bufferedOperation : buffer.pendingOperations) {
+                    bufferedOperation.apply(shardIndex);
                 }
+                mutation.apply(shardIndex);
+                mutationFaultInjector.checkpoint(physicalIndex, MutationCommitStage.AFTER_MUTATION_APPLIED);
+
+                AppliedMutation applied =
+                        new AppliedMutation(operationId, operationGeneration, placementGeneration, mutationType);
+                appliedMutations.put(mutationKey, applied);
+                Map<String, String> commitUserData = mutationCommitUserData(physicalIndex, shardIndex);
+                shardIndex.setLiveCommitData(commitUserData);
+                mutationFaultInjector.checkpoint(physicalIndex, MutationCommitStage.AFTER_COMMIT_DATA_SET);
+                commitShard(shardIndex);
+                mutationFaultInjector.checkpoint(physicalIndex, MutationCommitStage.AFTER_COMMIT);
+
+                buffer.pendingOperations.clear();
+                buffer.firstPendingNanos = 0L;
+                return new MutationResult(false, operationGeneration);
+            } catch (IOException e) {
+                buffer.poison(e);
+                throw e;
+            } catch (RuntimeException e) {
+                buffer.poison(new IOException("Replicated mutation commit failed unexpectedly", e));
                 throw e;
             }
-            return new MutationResult(false, operationGeneration);
         } finally {
             buffer.lock.unlock();
         }
     }
 
-    private void loadMutationState() throws IOException {
-        if (!Files.exists(mutationStateFile)) {
-            return;
+    private boolean loadLegacyMutationState() throws IOException {
+        if (!Files.exists(legacyMutationStateFile)) {
+            return false;
         }
         Properties properties = new Properties();
-        try (var input = Files.newInputStream(mutationStateFile)) {
+        try (var input = Files.newInputStream(legacyMutationStateFile)) {
             properties.load(input);
         }
-        int count = Integer.parseInt(properties.getProperty("mutation.count", "0"));
+        int count = parseNonNegativeInt(requiredMutationProperty(properties, "mutation.count"), "mutation.count");
+        Set<String> expectedProperties = new HashSet<>();
+        expectedProperties.add("mutation.count");
         for (int index = 0; index < count; index++) {
             String prefix = "mutation." + index + ".";
+            expectedProperties.add(prefix + "key");
+            expectedProperties.add(prefix + "operationId");
+            expectedProperties.add(prefix + "operationGeneration");
+            expectedProperties.add(prefix + "placementGeneration");
+            expectedProperties.add(prefix + "type");
             String key = requiredMutationProperty(properties, prefix + "key");
-            appliedMutations.put(
+            validateMutationKey(key, "legacy mutation ledger");
+            mergeAppliedMutation(
                     key,
-                    new AppliedMutation(
+                    parseAppliedMutation(
                             requiredMutationProperty(properties, prefix + "operationId"),
-                            Long.parseLong(requiredMutationProperty(properties, prefix + "operationGeneration")),
-                            Long.parseLong(requiredMutationProperty(properties, prefix + "placementGeneration")),
-                            MutationType.valueOf(requiredMutationProperty(properties, prefix + "type"))));
+                            requiredMutationProperty(properties, prefix + "operationGeneration"),
+                            requiredMutationProperty(properties, prefix + "placementGeneration"),
+                            requiredMutationProperty(properties, prefix + "type"),
+                            "legacy mutation ledger"),
+                    "legacy mutation ledger");
+        }
+        if (!properties.stringPropertyNames().equals(expectedProperties)) {
+            throw new IOException("Legacy replicated mutation ledger contains incomplete or unknown entries");
+        }
+        return true;
+    }
+
+    private void loadCommittedMutationState(ShardIndex shardIndex) throws IOException {
+        Map<String, String> userData = shardIndex.committedUserData();
+        boolean hasReplicationState =
+                userData.keySet().stream().anyMatch(key -> key.startsWith(MUTATION_COMMIT_PREFIX));
+        if (!hasReplicationState) {
+            return;
+        }
+        if (!MUTATION_COMMIT_FORMAT_VERSION.equals(userData.get(MUTATION_COMMIT_FORMAT))) {
+            throw new IOException("Unsupported replicated mutation commit format for shard " + shardIndex.getShardId());
+        }
+        int expectedCount = parseNonNegativeInt(
+                requiredCommitValue(userData, MUTATION_COMMIT_COUNT, shardIndex.getShardId()), MUTATION_COMMIT_COUNT);
+        int actualCount = 0;
+        for (Map.Entry<String, String> entry : userData.entrySet()) {
+            if (!entry.getKey().startsWith(MUTATION_COMMIT_PREFIX)
+                    || entry.getKey().equals(MUTATION_COMMIT_FORMAT)
+                    || entry.getKey().equals(MUTATION_COMMIT_COUNT)) {
+                continue;
+            }
+            if (!entry.getKey().startsWith(MUTATION_COMMIT_ENTRY_PREFIX)) {
+                throw new IOException("Unknown replicated mutation commit key " + entry.getKey());
+            }
+            String encodedDocumentId = entry.getKey().substring(MUTATION_COMMIT_ENTRY_PREFIX.length());
+            String documentId = decodeCanonical(encodedDocumentId, "document id");
+            if (documentId.isBlank()) {
+                throw new IOException("Replicated mutation commit contains a blank document id");
+            }
+            String[] values = entry.getValue().split("\\|", -1);
+            if (values.length != 4) {
+                throw new IOException("Malformed replicated mutation commit entry for document " + documentId);
+            }
+            String operationId = decodeCanonical(values[0], "operation id");
+            AppliedMutation mutation = parseAppliedMutation(
+                    operationId, values[1], values[2], values[3], "Lucene commit for shard " + shardIndex.getShardId());
+            mergeAppliedMutation(
+                    shardIndex.getShardId() + '\0' + documentId,
+                    mutation,
+                    "Lucene commit for shard " + shardIndex.getShardId());
+            actualCount++;
+        }
+        if (actualCount != expectedCount) {
+            throw new IOException("Replicated mutation commit count mismatch for shard " + shardIndex.getShardId()
+                    + ": expected " + expectedCount + " but found " + actualCount);
         }
     }
 
-    private void persistMutationState() throws IOException {
-        Files.createDirectories(baseDir);
-        Properties properties = new Properties();
+    private void migrateLegacyMutationState() throws IOException {
+        for (String mutationKey : appliedMutations.keySet()) {
+            String physicalIndex = mutationKey.substring(0, mutationKey.indexOf('\0'));
+            if (!shardIndexes.containsKey(physicalIndex)) {
+                throw new IOException("Legacy replicated mutation ledger references missing shard " + physicalIndex);
+            }
+        }
+        for (Map.Entry<String, ShardIndex> entry : shardIndexes.entrySet()) {
+            ShardBuffer buffer = getBuffer(entry.getKey());
+            buffer.lock.lock();
+            try {
+                entry.getValue().setLiveCommitData(mutationCommitUserData(entry.getKey(), entry.getValue()));
+                commitShard(entry.getValue());
+            } finally {
+                buffer.lock.unlock();
+            }
+        }
+        Files.delete(legacyMutationStateFile);
+    }
+
+    private Map<String, String> mutationCommitUserData(String physicalIndex, ShardIndex shardIndex) throws IOException {
+        Map<String, String> commitUserData = new HashMap<>(shardIndex.committedUserData());
+        commitUserData.keySet().removeIf(key -> key.startsWith(MUTATION_COMMIT_PREFIX));
         List<Map.Entry<String, AppliedMutation>> mutations = appliedMutations.entrySet().stream()
+                .filter(entry -> entry.getKey().startsWith(physicalIndex + '\0'))
                 .sorted(Map.Entry.comparingByKey())
                 .toList();
-        properties.setProperty("mutation.count", Integer.toString(mutations.size()));
-        for (int index = 0; index < mutations.size(); index++) {
-            Map.Entry<String, AppliedMutation> entry = mutations.get(index);
-            String prefix = "mutation." + index + ".";
-            properties.setProperty(prefix + "key", entry.getKey());
-            properties.setProperty(prefix + "operationId", entry.getValue().operationId());
-            properties.setProperty(
-                    prefix + "operationGeneration",
-                    Long.toString(entry.getValue().operationGeneration()));
-            properties.setProperty(
-                    prefix + "placementGeneration",
-                    Long.toString(entry.getValue().placementGeneration()));
-            properties.setProperty(
-                    prefix + "type", entry.getValue().mutationType().name());
+        commitUserData.put(MUTATION_COMMIT_FORMAT, MUTATION_COMMIT_FORMAT_VERSION);
+        commitUserData.put(MUTATION_COMMIT_COUNT, Integer.toString(mutations.size()));
+        for (Map.Entry<String, AppliedMutation> entry : mutations) {
+            String documentId = entry.getKey().substring(physicalIndex.length() + 1);
+            AppliedMutation mutation = entry.getValue();
+            commitUserData.put(
+                    MUTATION_COMMIT_ENTRY_PREFIX + encode(documentId),
+                    encode(mutation.operationId())
+                            + '|'
+                            + mutation.operationGeneration()
+                            + '|'
+                            + mutation.placementGeneration()
+                            + '|'
+                            + mutation.mutationType().name());
         }
-        Path temporary = Files.createTempFile(baseDir, "replication-mutations-", ".tmp");
-        try {
-            try (var output = Files.newOutputStream(temporary)) {
-                properties.store(output, "dsearch replicated mutation ledger");
-            }
-            Files.move(
-                    temporary, mutationStateFile, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        } finally {
-            Files.deleteIfExists(temporary);
+        return commitUserData;
+    }
+
+    private void mergeAppliedMutation(String key, AppliedMutation candidate, String source) throws IOException {
+        AppliedMutation existing = appliedMutations.get(key);
+        if (existing == null || candidate.equals(existing)) {
+            appliedMutations.put(key, candidate);
+            return;
+        }
+        if (candidate.operationGeneration() == existing.operationGeneration()
+                && (!candidate.operationId().equals(existing.operationId())
+                        || candidate.mutationType() != existing.mutationType())) {
+            throw new IOException("Conflicting replicated mutation identity for " + key + " in " + source);
+        }
+        if (dominates(candidate, existing)) {
+            appliedMutations.put(key, candidate);
+        } else if (!dominates(existing, candidate)) {
+            throw new IOException("Incomparable replicated mutation generations for " + key + " in " + source);
         }
     }
 
-    private static String requiredMutationProperty(Properties properties, String name) {
+    private static boolean dominates(AppliedMutation left, AppliedMutation right) {
+        return left.operationGeneration() >= right.operationGeneration()
+                && left.placementGeneration() >= right.placementGeneration();
+    }
+
+    private static AppliedMutation parseAppliedMutation(
+            String operationId,
+            String operationGeneration,
+            String placementGeneration,
+            String mutationType,
+            String source)
+            throws IOException {
+        if (operationId == null || operationId.isBlank()) {
+            throw new IOException(source + " contains a blank operation id");
+        }
+        long parsedOperationGeneration = parsePositiveLong(operationGeneration, "operation generation", source);
+        long parsedPlacementGeneration = parsePositiveLong(placementGeneration, "placement generation", source);
+        try {
+            return new AppliedMutation(
+                    operationId,
+                    parsedOperationGeneration,
+                    parsedPlacementGeneration,
+                    MutationType.valueOf(mutationType));
+        } catch (IllegalArgumentException e) {
+            throw new IOException(source + " contains unknown mutation type " + mutationType, e);
+        }
+    }
+
+    private static long parsePositiveLong(String value, String field, String source) throws IOException {
+        try {
+            long parsed = Long.parseLong(value);
+            if (parsed < 1) {
+                throw new IOException(source + " contains non-positive " + field);
+            }
+            return parsed;
+        } catch (NumberFormatException e) {
+            throw new IOException(source + " contains invalid " + field, e);
+        }
+    }
+
+    private static int parseNonNegativeInt(String value, String field) throws IOException {
+        try {
+            int parsed = Integer.parseInt(value);
+            if (parsed < 0) {
+                throw new IOException(field + " must not be negative");
+            }
+            return parsed;
+        } catch (NumberFormatException e) {
+            throw new IOException(field + " is not an integer", e);
+        }
+    }
+
+    private static String requiredCommitValue(Map<String, String> userData, String name, String shardId)
+            throws IOException {
+        String value = userData.get(name);
+        if (value == null || value.isBlank()) {
+            throw new IOException("Replicated mutation commit for shard " + shardId + " is missing " + name);
+        }
+        return value;
+    }
+
+    private static void validateMutationKey(String key, String source) throws IOException {
+        int separator = key.indexOf('\0');
+        if (separator < 1 || separator == key.length() - 1) {
+            throw new IOException(source + " contains an invalid mutation key");
+        }
+    }
+
+    private static String encode(String value) {
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static String decodeCanonical(String value, String field) throws IOException {
+        try {
+            String decoded = new String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8);
+            if (!encode(decoded).equals(value)) {
+                throw new IOException("Replicated mutation commit contains non-canonical " + field);
+            }
+            return decoded;
+        } catch (IllegalArgumentException e) {
+            throw new IOException("Replicated mutation commit contains invalid " + field, e);
+        }
+    }
+
+    private static String requiredMutationProperty(Properties properties, String name) throws IOException {
         String value = properties.getProperty(name);
         if (value == null || value.isBlank()) {
-            throw new IllegalStateException("Replicated mutation ledger is missing " + name);
+            throw new IOException("Replicated mutation ledger is missing " + name);
         }
         return value;
     }
@@ -1031,6 +1241,7 @@ public class IndexManager implements Closeable {
      */
     private void flushShardBufferLocked(String partitionId, ShardIndex shardIndex, ShardBuffer buffer)
             throws IOException {
+        buffer.requireWritable(partitionId);
         if (buffer.pendingOperations.isEmpty()) {
             return;
         }
@@ -1085,8 +1296,12 @@ public class IndexManager implements Closeable {
 
                 buffer.lock.lock();
                 try {
-                    flushShardBufferLocked(shardId, shardIndex, buffer);
-                    shardIndex.close();
+                    if (buffer.commitFailure == null) {
+                        flushShardBufferLocked(shardId, shardIndex, buffer);
+                        shardIndex.close();
+                    } else {
+                        shardIndex.rollbackAndClose();
+                    }
                 } catch (IOException e) {
                     if (first == null) {
                         first = e;
@@ -1123,6 +1338,7 @@ public class IndexManager implements Closeable {
         final ReentrantLock lock = new ReentrantLock();
         final List<BufferedOperation> pendingOperations = new ArrayList<>();
         long firstPendingNanos = 0L;
+        IOException commitFailure;
 
         void add(BufferedOperation operation) {
             if (pendingOperations.isEmpty()) {
@@ -1130,6 +1346,25 @@ public class IndexManager implements Closeable {
             }
             pendingOperations.add(operation);
         }
+
+        void poison(IOException failure) {
+            if (commitFailure == null) {
+                commitFailure = failure;
+            }
+        }
+
+        void requireWritable(String physicalIndex) throws IOException {
+            if (commitFailure != null) {
+                throw new IOException(
+                        "Shard " + physicalIndex + " is write-fenced after an uncertain mutation commit",
+                        commitFailure);
+            }
+        }
+    }
+
+    void setMutationFaultInjector(MutationFaultInjector mutationFaultInjector) {
+        this.mutationFaultInjector =
+                mutationFaultInjector == null ? (physicalIndex, stage) -> {} : mutationFaultInjector;
     }
 
     public record MutationResult(boolean duplicate, long committedGeneration) {}
@@ -1144,8 +1379,14 @@ public class IndexManager implements Closeable {
             String operationId, long operationGeneration, long placementGeneration, MutationType mutationType) {}
 
     @FunctionalInterface
-    private interface IoMutation {
-        void apply() throws IOException;
+    interface MutationFaultInjector {
+        void checkpoint(String physicalIndex, MutationCommitStage stage) throws IOException;
+    }
+
+    enum MutationCommitStage {
+        AFTER_MUTATION_APPLIED,
+        AFTER_COMMIT_DATA_SET,
+        AFTER_COMMIT
     }
 
     private enum MutationType {
