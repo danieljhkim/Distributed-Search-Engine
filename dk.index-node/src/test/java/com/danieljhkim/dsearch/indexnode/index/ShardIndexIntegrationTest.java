@@ -68,6 +68,22 @@ class ShardIndexIntegrationTest {
     }
 
     @Test
+    void exactGetUsesTheIdTermAndReturnsStoredFields() throws IOException {
+        try (ShardIndex index = new ShardIndex(SHARD_ID, tempDir, fieldConfigMap(), FAKE_EMBEDDER)) {
+            String exactId = "doc:[* TO *]";
+            index.index(document(exactId, "Exact title", "exact stored content", Map.of("category", "guide")));
+            index.commit();
+
+            SearchDocument retrieved = index.get(exactId);
+            assertNotNull(retrieved);
+            assertEquals(exactId, retrieved.getId());
+            assertEquals("Exact title", retrieved.getFields().get("title"));
+            assertEquals("guide", retrieved.getFields().get("category"));
+            assertEquals(null, index.get("doc:*"));
+        }
+    }
+
+    @Test
     void bm25FiltersPaginationFacetsAndHighlightsUseDeterministicFixtures() throws IOException {
         try (ShardIndex index = new ShardIndex(SHARD_ID, tempDir, fieldConfigMap(), FAKE_EMBEDDER)) {
             indexFixtureDocuments(index);

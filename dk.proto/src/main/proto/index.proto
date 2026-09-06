@@ -88,6 +88,16 @@ message DeleteDocumentResponse {
   uint64 committed_generation = 3;
 }
 
+// Exact document retrieval intentionally carries an id as a term, never a query string.
+message GetDocumentRequest {
+  string partition_id = 1;
+  string id = 2;
+}
+
+message GetDocumentResponse {
+  Document document = 1;
+}
+
 message BulkDeleteDocumentRequest {
   string partition_id = 1;
   // Explicit ids to delete, in caller order. Duplicates are preserved positionally rather
@@ -377,6 +387,7 @@ service IndexService {
   rpc IndexDocument(IndexDocumentRequest) returns (IndexDocumentResponse);
   rpc BulkIndexDocument(BulkIndexDocumentRequest) returns (BulkIndexDocumentResponse);
   rpc DeleteDocument(DeleteDocumentRequest) returns (DeleteDocumentResponse);
+  rpc GetDocument(GetDocumentRequest) returns (GetDocumentResponse);
   rpc BulkDeleteDocument(BulkDeleteDocumentRequest) returns (BulkDeleteDocumentResponse);
   rpc SearchIndex(IndexSearchRequest) returns (IndexSearchResponse);
   rpc CreateIndex(CreateIndexRequest) returns (CreateIndexResponse);

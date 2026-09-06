@@ -17,6 +17,7 @@ import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResult;
 import com.danieljhkim.dsearch.proto.index.Document;
 import com.danieljhkim.dsearch.proto.index.Field;
+import com.danieljhkim.dsearch.proto.index.GetDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.IndexSearchRequest;
 import com.danieljhkim.dsearch.proto.query.FanoutMetadata;
@@ -181,6 +182,12 @@ class ProtoWireContractTest {
         assertRpc(
                 files.get("index.proto"),
                 "IndexService",
+                "GetDocument",
+                "dsearch.index.GetDocumentRequest",
+                "dsearch.index.GetDocumentResponse");
+        assertRpc(
+                files.get("index.proto"),
+                "IndexService",
                 "SearchIndex",
                 "dsearch.index.IndexSearchRequest",
                 "dsearch.index.IndexSearchResponse");
@@ -226,6 +233,10 @@ class ProtoWireContractTest {
                                 .setOperator(FilterOperator.EQ)
                                 .addValues("acme"))
                         .setHighlight(true)
+                        .build(),
+                GetDocumentRequest.newBuilder()
+                        .setPartitionId("partition-a")
+                        .setId("doc:[* TO *]")
                         .build(),
                 QueryRequest.newBuilder()
                         .setQueryString("protobuf contracts")

@@ -111,6 +111,13 @@ not lose acknowledged writes. With `available`, a selected replica may omit writ
 were acknowledged under `one` or `quorum`; this is the declared consistency tradeoff.
 Stale-generation replicas remain fenced from writes in either mode.
 
+Exact `GET /api/v1/index/{id}?partitionId=...` follows this same read plan for the one logical
+range that owns `(partitionId, id)`. The id is sent to Lucene as a `Term`, not through the query
+parser. A selected copy's `NOT_FOUND` becomes HTTP `404`; an unavailable or ineligible logical
+range becomes HTTP `503` and is never inferred from document counters. The request carries the
+same partition identity used by mutations, so aliases resolve through the existing index-manager
+path on the chosen physical copy.
+
 ## Topology and observability
 
 `GetShardMap` exposes placement generation, primary/replica role, eligibility, current repair

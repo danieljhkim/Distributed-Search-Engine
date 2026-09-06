@@ -23,6 +23,7 @@ import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
+import com.danieljhkim.dsearch.gateway.api.dto.GetDocumentResponseDto;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentResponse;
@@ -32,7 +33,10 @@ import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.BulkIndexDocumentResult;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentResponse;
+import com.danieljhkim.dsearch.proto.index.Document;
 import com.danieljhkim.dsearch.proto.index.Field;
+import com.danieljhkim.dsearch.proto.index.GetDocumentRequest;
+import com.danieljhkim.dsearch.proto.index.GetDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
@@ -657,11 +661,42 @@ class GatewayIndexServiceTest {
                 .isInstanceOf(NodeUnavailableException.class)
                 .hasMessageContaining("writes are never promoted");
 
-        var readTargets = fixture.manager().replicaReadTargets("tenant-a");
+        var readTargets = fixture.manager().replicaReadPlan("tenant-a").targets();
         assertThat(readTargets)
                 .extracting(ReplicaPlacement.ReadTarget::logicalShardId)
                 .doesNotHaveDuplicates();
         assertThat(readTargets).anyMatch(ReplicaPlacement.ReadTarget::failover);
+    }
+
+    @Test
+    void getUsesTheEligibleReplicaForTheExactOwnerAndNeverConvertsUnavailableToAbsent() {
+        ReplicatedFixture fixture = replicatedFixture();
+        String partitionId = "tenant-a";
+        String id = "doc:[* TO *]";
+        String owner = fixture.manager().ownerNodeId(partitionId, id);
+        var selected = fixture.manager().replicaReadPlan(partitionId).targets().stream()
+                .filter(target -> target.logicalShardId().equals(ReplicaPlacement.logicalShardId(owner)))
+                .findFirst()
+                .orElseThrow();
+        when(fixture.stubs().get(selected.nodeId()).getDocument(any(GetDocumentRequest.class)))
+                .thenReturn(GetDocumentResponse.newBuilder()
+                        .setDocument(Document.newBuilder()
+                                .setId(id)
+                                .addFields(Field.newBuilder().setName("title").setValue("exact")))
+                        .build());
+
+        GetDocumentResponseDto response = fixture.service().get(id, partitionId);
+        assertThat(response.partitionId()).isEqualTo(partitionId);
+        assertThat(response.id()).isEqualTo(id);
+        assertThat(response.fields()).containsEntry("title", "exact");
+        ArgumentCaptor<GetDocumentRequest> request = ArgumentCaptor.forClass(GetDocumentRequest.class);
+        verify(fixture.stubs().get(selected.nodeId())).getDocument(request.capture());
+        assertThat(request.getValue().getPartitionId()).isEqualTo(selected.storagePartitionId());
+
+        fixture.manager().getClientMap().values().forEach(client -> client.setActive(false));
+        assertThatThrownBy(() -> fixture.service().get(id, partitionId))
+                .isInstanceOf(NodeUnavailableException.class)
+                .hasMessageContaining("exact lookup is unavailable");
     }
 
     private static ReplicatedFixture replicatedFixture() {
