@@ -25,13 +25,14 @@ class ReplicaPlacementTest {
 
     @Test
     void failoverSelectsOneEligibleCopyOfEveryLogicalShard() {
-        List<ReplicaPlacement.ReadTarget> targets = ReplicaPlacement.readTargets(
-                "tenant-a",
-                List.of("n0", "n1", "n2"),
-                List.of("n1", "n2"),
-                2,
-                9,
-                ReplicaPlacement.DurabilityPolicy.ALL);
+        List<ReplicaPlacement.ReadTarget> targets = ReplicaPlacement.readPlan(
+                        "tenant-a",
+                        List.of("n0", "n1", "n2"),
+                        List.of("n1", "n2"),
+                        2,
+                        9,
+                        ReplicaPlacement.DurabilityPolicy.ALL)
+                .targets();
 
         assertEquals(3, targets.size());
         assertEquals(
@@ -48,6 +49,25 @@ class ReplicaPlacementTest {
                         .map(ReplicaPlacement.ReadTarget::storagePartitionId)
                         .distinct()
                         .count());
+    }
+
+    @Test
+    void readPlanRetainsUnavailableLogicalRangesWhenOnlyOneReplicaIsActive() {
+        ReplicaPlacement.ReadPlan plan = ReplicaPlacement.readPlan(
+                "tenant-a", List.of("n0", "n1", "n2"), List.of("n1"), 2, 9, ReplicaPlacement.DurabilityPolicy.ALL);
+
+        assertEquals(
+                3, plan.targets().size() + plan.unavailableLogicalShardIds().size());
+        assertEquals(
+                List.of("index/n0", "index/n1", "index/n2"),
+                java.util.stream.Stream.concat(
+                                plan.targets().stream().map(ReplicaPlacement.ReadTarget::logicalShardId),
+                                plan.unavailableLogicalShardIds().stream())
+                        .sorted()
+                        .toList());
+        assertEquals(1, plan.targets().size());
+        assertEquals("index/n1", plan.targets().getFirst().logicalShardId());
+        assertEquals(List.of("index/n0", "index/n2"), plan.unavailableLogicalShardIds());
     }
 
     @Test

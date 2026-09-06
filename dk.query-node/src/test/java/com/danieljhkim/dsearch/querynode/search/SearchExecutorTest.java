@@ -156,6 +156,40 @@ class SearchExecutorTest {
     }
 
     @Test
+    void uncoveredLogicalRangesProducePartialMetadataWithoutDoubleCountingAvailableResults() {
+        Map<String, NodeClient<IndexServiceGrpc.IndexServiceBlockingStub>> clients = new HashMap<>();
+        clients.put("n0", nodeClient("n0", false));
+        clients.put("n1", nodeClient("n1", true));
+        clients.put("n2", nodeClient("n2", false));
+        NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> manager = new NodeClientManager<>(
+                clients,
+                RoutingStrategy.ROUND_ROBIN,
+                NodeRole.NODE_ROLE_INDEX,
+                IndexServiceGrpc::newBlockingStub,
+                2,
+                ReplicaPlacement.DurabilityPolicy.ALL,
+                ReplicaPlacement.ReadConsistency.ACKNOWLEDGED);
+        String n1Shard = ReplicaPlacement.storagePartitionId("tenant-a", "n1", 2);
+        RecordingIndexService indexService =
+                new RecordingIndexService().successShard(n1Shard, result(List.of(hit("doc-b", 1.0f)), 1, null));
+        shardExecutor = Executors.newCachedThreadPool();
+        SearchExecutor executor = new SearchExecutor(shardExecutor, manager, TEST_TIMEOUT);
+
+        SearchResult result = executor.search("coffee", "tenant-a", 0, 10, SearchType.BM25, indexService);
+
+        assertEquals(List.of("doc-b"), hitIds(result));
+        assertEquals(1L, result.getTotalHits());
+        assertEquals(List.of("n1"), indexService.calledNodes());
+        SearchResult.FanoutMetadata metadata = result.getFanoutMetadata();
+        assertEquals(SearchResult.FanoutStatus.PARTIAL_FAILURE, metadata.status());
+        assertEquals(1, metadata.attemptedNodes());
+        assertEquals(1, metadata.succeededNodes());
+        assertEquals(0, metadata.failedNodes());
+        assertEquals(0, metadata.timedOutNodes());
+        assertEquals(2, metadata.unavailableLogicalRanges());
+    }
+
+    @Test
     void hybridProjectionIsForwardedToEveryBm25AndSemanticNodeCall() {
         RecordingIndexService indexService = new RecordingIndexService()
                 .success("1", result(List.of(hit("doc-a", 2.0f)), 1, null))
@@ -633,11 +667,13 @@ class SearchExecutorTest {
             List<String> nodeIds) {
         NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> manager = mock(NodeClientManager.class);
         when(manager.getActiveNodeIds()).thenReturn(nodeIds);
-        when(manager.replicaReadTargets(org.mockito.ArgumentMatchers.anyString()))
+        when(manager.replicaReadPlan(org.mockito.ArgumentMatchers.anyString()))
                 .thenAnswer(invocation -> nodeIds.stream()
                         .map(nodeId -> new ReplicaPlacement.ReadTarget(
                                 "index/" + nodeId, nodeId, invocation.getArgument(0), false))
-                        .toList());
+                        .collect(java.util.stream.Collectors.collectingAndThen(
+                                java.util.stream.Collectors.toList(),
+                                targets -> new ReplicaPlacement.ReadPlan(targets, List.of()))));
         return manager;
     }
 

@@ -98,6 +98,14 @@ and then deterministic followers. Exactly one copy of every range is queried, ev
 several ranges fail over to the same physical node. Hits, total counts, and facets are
 therefore aggregated once per logical shard rather than once per copy.
 
+If neither a primary nor any follower is eligible, the range remains explicitly unavailable
+in the read plan. It is never silently omitted: the response reports a non-success fanout
+status and a separate unavailable-logical-range count (rather than classifying it as a failed
+downstream call). This applies to both read modes. With `acknowledged` and `all` durability,
+any eligible copy contains acknowledged writes; with `available`, the chosen eligible copy may
+lag a write acknowledged under `one` or `quorum`. Neither mode permits a response to claim
+success when any logical range has no eligible copy.
+
 With `readConsistency: acknowledged` and `durabilityPolicy: all`, losing a primary does
 not lose acknowledged writes. With `available`, a selected replica may omit writes that
 were acknowledged under `one` or `quorum`; this is the declared consistency tradeoff.

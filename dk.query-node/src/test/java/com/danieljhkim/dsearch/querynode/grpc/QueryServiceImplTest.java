@@ -83,6 +83,7 @@ class QueryServiceImplTest {
         assertEquals(2, observer.response.getFanout().getSucceededNodes());
         assertEquals(0, observer.response.getFanout().getFailedNodes());
         assertEquals(0, observer.response.getFanout().getTimedOutNodes());
+        assertEquals(0, observer.response.getFanout().getUnavailableLogicalRanges());
     }
 
     @Test
@@ -131,6 +132,26 @@ class QueryServiceImplTest {
     }
 
     @Test
+    void unavailableLogicalRangeReturnsPartialMetadataSeparateFromDownstreamFailures() {
+        when(searchExecutor.search(
+                        any(), any(), anyInt(), anyInt(), any(), any(), anyList(), anyBoolean(), anyList(), any()))
+                .thenReturn(result(
+                        List.of(new SearchHit("doc-1", "title", "content", 1.0f)),
+                        new SearchResult.FanoutMetadata(1, 1, 0, 0, 2)));
+
+        RecordingObserver observer = new RecordingObserver();
+        queryService.search(request(SearchType.BM25), observer);
+
+        assertTrue(observer.completed);
+        assertNull(observer.error);
+        assertEquals(
+                FanoutStatus.FANOUT_STATUS_PARTIAL_FAILURE,
+                observer.response.getFanout().getStatus());
+        assertEquals(0, observer.response.getFanout().getFailedNodes());
+        assertEquals(2, observer.response.getFanout().getUnavailableLogicalRanges());
+    }
+
+    @Test
     void zeroActiveNodesReturnsUnavailable() {
         when(searchExecutor.search(
                         any(), any(), anyInt(), anyInt(), any(), any(), anyList(), anyBoolean(), anyList(), any()))
@@ -144,7 +165,7 @@ class QueryServiceImplTest {
         StatusRuntimeException error = (StatusRuntimeException) observer.error;
         assertEquals(Status.Code.UNAVAILABLE, error.getStatus().getCode());
         assertEquals(
-                "Search fanout failed: attemptedNodes=0 succeededNodes=0 failedNodes=0 timedOutNodes=0",
+                "Search fanout failed: attemptedNodes=0 succeededNodes=0 failedNodes=0 timedOutNodes=0 unavailableLogicalRanges=0",
                 error.getStatus().getDescription());
     }
 
@@ -162,7 +183,7 @@ class QueryServiceImplTest {
         StatusRuntimeException error = (StatusRuntimeException) observer.error;
         assertEquals(Status.Code.UNAVAILABLE, error.getStatus().getCode());
         assertEquals(
-                "Search fanout failed: attemptedNodes=2 succeededNodes=0 failedNodes=2 timedOutNodes=0",
+                "Search fanout failed: attemptedNodes=2 succeededNodes=0 failedNodes=2 timedOutNodes=0 unavailableLogicalRanges=0",
                 error.getStatus().getDescription());
     }
 
@@ -180,7 +201,7 @@ class QueryServiceImplTest {
         StatusRuntimeException error = (StatusRuntimeException) observer.error;
         assertEquals(Status.Code.DEADLINE_EXCEEDED, error.getStatus().getCode());
         assertEquals(
-                "Search fanout failed: attemptedNodes=2 succeededNodes=0 failedNodes=0 timedOutNodes=2",
+                "Search fanout failed: attemptedNodes=2 succeededNodes=0 failedNodes=0 timedOutNodes=2 unavailableLogicalRanges=0",
                 error.getStatus().getDescription());
     }
 
