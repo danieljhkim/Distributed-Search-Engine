@@ -310,6 +310,9 @@ public class IndexManager implements Closeable {
         if (closed) {
             return HealthHttpServer.Readiness.notReady("index_manager_closed");
         }
+        if (shardBuffers.values().stream().anyMatch(ShardBuffer::isWriteFenced)) {
+            return HealthHttpServer.Readiness.notReady("shard_write_fenced");
+        }
         if (embeddingService instanceof TextEmbeddingService textEmbeddingService && !textEmbeddingService.isReady()) {
             return HealthHttpServer.Readiness.notReady("embedding_model_not_ready");
         }
@@ -1679,7 +1682,7 @@ public class IndexManager implements Closeable {
         final ReentrantLock lock = new ReentrantLock();
         final List<BufferedOperation> pendingOperations = new ArrayList<>();
         long firstPendingNanos = 0L;
-        IOException commitFailure;
+        private volatile IOException commitFailure;
 
         void add(BufferedOperation operation) {
             if (pendingOperations.isEmpty()) {
@@ -1700,6 +1703,10 @@ public class IndexManager implements Closeable {
                         "Shard " + physicalIndex + " is write-fenced after an uncertain mutation commit",
                         commitFailure);
             }
+        }
+
+        boolean isWriteFenced() {
+            return commitFailure != null;
         }
     }
 

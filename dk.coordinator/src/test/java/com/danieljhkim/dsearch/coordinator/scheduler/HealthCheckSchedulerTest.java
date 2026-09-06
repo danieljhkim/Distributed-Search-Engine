@@ -1,6 +1,7 @@
 package com.danieljhkim.dsearch.coordinator.scheduler;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -36,20 +37,26 @@ class HealthCheckSchedulerTest {
                 new HealthCheckScheduler(membership, config(true), HttpClient.newHttpClient(), executor);
         try {
             membership.registerNode(node("index-live", healthy.getAddress().getPort()), NodeRole.NODE_ROLE_INDEX);
-            membership.registerNode(node("query-stale", unhealthy.getAddress().getPort()), NodeRole.NODE_ROLE_QUERY);
+            membership.registerNode(
+                    node("index-write-fenced", unhealthy.getAddress().getPort()), NodeRole.NODE_ROLE_INDEX);
             membership.registerNode(node("index-unreachable", unavailablePort), NodeRole.NODE_ROLE_INDEX);
 
             assertDoesNotThrow(scheduler::checkClusterHealth);
             assertTrue(membership.getIndexGroup().getNode("index-live").isHealthy());
-            assertFalse(membership.getQueryGroup().getNode("query-stale").isHealthy());
+            assertFalse(membership.getIndexGroup().getNode("index-write-fenced").isHealthy());
             assertFalse(membership.getIndexGroup().getNode("index-unreachable").isHealthy());
+            assertEquals(
+                    List.of("index-live"),
+                    membership.healthyNodes(NodeRole.NODE_ROLE_INDEX).stream()
+                            .map(NodeGroup.NodeInfo::getNodeId)
+                            .toList());
 
             clock.advanceSeconds(6);
             assertDoesNotThrow(scheduler::checkClusterHealth);
             assertFalse(membership.getIndexGroup().getAllNodes().stream()
                     .anyMatch(node -> node.getNodeId().equals("index-live")));
-            assertFalse(membership.getQueryGroup().getAllNodes().stream()
-                    .anyMatch(node -> node.getNodeId().equals("query-stale")));
+            assertFalse(membership.getIndexGroup().getAllNodes().stream()
+                    .anyMatch(node -> node.getNodeId().equals("index-write-fenced")));
             assertFalse(membership.getIndexGroup().getAllNodes().stream()
                     .anyMatch(node -> node.getNodeId().equals("index-unreachable")));
         } finally {
