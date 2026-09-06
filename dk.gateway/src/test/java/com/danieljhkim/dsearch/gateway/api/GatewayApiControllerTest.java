@@ -23,6 +23,7 @@ import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
+import com.danieljhkim.dsearch.gateway.api.dto.GetDocumentResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.SearchRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.SearchResponseDto;
 import com.danieljhkim.dsearch.gateway.config.MetricsConfig;
@@ -214,6 +215,29 @@ class GatewayApiControllerTest {
                 .andExpect(jsonPath("$.success").value(true));
 
         verify(indexService).delete("doc-7", "tenant-a");
+    }
+
+    @Test
+    void getDocumentReturnsStoredFieldsAndMapsConfirmedAbsenceAndUnavailability() throws Exception {
+        when(indexService.get("doc:[* TO *]", "tenant-a"))
+                .thenReturn(new GetDocumentResponseDto(
+                        "tenant-a", "doc:[* TO *]", Map.of("title", "Exact", "category", "guide")));
+
+        mockMvc.perform(get("/api/v1/index/{id}", "doc:[* TO *]").param("partitionId", "tenant-a"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.partitionId").value("tenant-a"))
+                .andExpect(jsonPath("$.id").value("doc:[* TO *]"))
+                .andExpect(jsonPath("$.fields.title").value("Exact"));
+
+        when(indexService.get("missing", "tenant-a"))
+                .thenThrow(new StatusRuntimeException(Status.NOT_FOUND.withDescription("confirmed absence")));
+        mockMvc.perform(get("/api/v1/index/{id}", "missing").param("partitionId", "tenant-a"))
+                .andExpect(status().isNotFound());
+
+        when(indexService.get("unavailable", "tenant-a"))
+                .thenThrow(new com.danieljhkim.dsearch.common.exception.NodeUnavailableException("n0", "no eligible replica"));
+        mockMvc.perform(get("/api/v1/index/{id}", "unavailable").param("partitionId", "tenant-a"))
+                .andExpect(status().isServiceUnavailable());
     }
 
     @Test

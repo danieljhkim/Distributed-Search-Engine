@@ -42,6 +42,8 @@ import com.danieljhkim.dsearch.proto.index.Document;
 import com.danieljhkim.dsearch.proto.index.Field;
 import com.danieljhkim.dsearch.proto.index.FinishReplicaRepairRequest;
 import com.danieljhkim.dsearch.proto.index.FinishReplicaRepairResponse;
+import com.danieljhkim.dsearch.proto.index.GetDocumentRequest;
+import com.danieljhkim.dsearch.proto.index.GetDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexHit;
@@ -244,6 +246,44 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
             LOGGER.log(Level.SEVERE, "DeleteDocument failed", e);
             responseObserver.onError(Status.INTERNAL
                     .withDescription("Failed to delete document " + docId)
+                    .withCause(e)
+                    .asRuntimeException());
+        }
+    }
+
+    @Override
+    public void getDocument(GetDocumentRequest request, StreamObserver<GetDocumentResponse> responseObserver) {
+        String partitionId = request.getPartitionId();
+        if (!validatePartition(partitionId, responseObserver)) {
+            return;
+        }
+        if (request.getId().isBlank()) {
+            invalidArgument(responseObserver, new IllegalArgumentException("id must not be blank"));
+            return;
+        }
+        try {
+            SearchDocument document = indexManager.getDocument(partitionId, request.getId());
+            if (document == null) {
+                responseObserver.onError(Status.NOT_FOUND
+                        .withDescription("Document " + request.getId() + " was not found in partition " + partitionId)
+                        .asRuntimeException());
+                return;
+            }
+            Document.Builder responseDocument = Document.newBuilder().setId(document.getId());
+            document.getFields().forEach((name, value) -> responseDocument.addFields(
+                    Field.newBuilder().setName(name).setValue(value)));
+            responseObserver.onNext(GetDocumentResponse.newBuilder()
+                    .setDocument(responseDocument)
+                    .build());
+            responseObserver.onCompleted();
+        } catch (IllegalArgumentException e) {
+            invalidArgument(responseObserver, e);
+        } catch (SchemaMismatchException e) {
+            failedPrecondition(responseObserver, e);
+        } catch (RuntimeException e) {
+            LOGGER.log(Level.SEVERE, "getDocument failed", e);
+            responseObserver.onError(Status.INTERNAL
+                    .withDescription("Failed to retrieve document from shard " + partitionId)
                     .withCause(e)
                     .asRuntimeException());
         }

@@ -1294,6 +1294,18 @@ public class IndexManager implements Closeable {
         };
     }
 
+    /**
+     * Reads a document by its exact stored id from the same resolved physical index used by
+     * mutations. A missing local shard is a successfully confirmed absence, not a provisioning
+     * request.
+     */
+    public SearchDocument getDocument(String partitionId, String documentId) {
+        String physicalIndex = resolvePhysicalIndex(partitionId);
+        ensureServable(physicalIndex);
+        ShardIndex shardIndex = shardIndexes.get(physicalIndex);
+        return shardIndex == null ? null : shardIndex.get(documentId);
+    }
+
     public CreatedIndex createIndex(String indexName, String alias, IndexSchema schema) throws IOException {
         PartitionIdValidator.validate(indexName);
         String resolvedAlias = alias == null || alias.isBlank() ? indexName : alias;

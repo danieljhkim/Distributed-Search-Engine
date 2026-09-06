@@ -70,6 +70,22 @@ and `all` acknowledgement policies are supported; acknowledged-consistency failo
 `all`. Query fanout selects exactly one eligible copy of each logical range, so replicas do
 not multiply hits, totals, or facets.
 
+### Exact document retrieval
+
+Retrieve a document without constructing a search query:
+
+```bash
+curl 'http://localhost:8080/api/v1/index/doc-123?partitionId=movies'
+```
+
+`GET /api/v1/index/{id}` treats `{id}` as an exact Lucene term, so characters such as `:` and
+`*` have no query-parser meaning. It returns the logical `partitionId`, document `id`, and
+stored `fields`. The gateway selects the same eligible primary-or-replica logical range as other
+reads; `404` therefore means the selected authoritative copy confirmed absence. If that range has
+no eligible copy, the endpoint returns `503` rather than claiming the document is absent. With
+`readConsistency: acknowledged` and `durabilityPolicy: all`, a successful upsert is immediately
+retrievable and a successful delete is immediately absent, including after replica failover.
+
 The coordinator exposes a versioned, health-aware node registry. `RegisterNode` creates or updates
 membership, `Heartbeat` renews a previously registered node's lease without creating membership,
 and `GetShardMap` returns the generation-fenced primary and replicas for each logical `index/<nodeId>` range. Those

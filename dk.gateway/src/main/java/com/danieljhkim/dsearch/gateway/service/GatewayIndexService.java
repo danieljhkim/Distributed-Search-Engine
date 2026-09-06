@@ -4,6 +4,7 @@ import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.exception.NodeUnavailableException;
 import com.danieljhkim.dsearch.common.grpc.NodeClient;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
+import com.danieljhkim.dsearch.common.shard.ReplicaPlacement;
 import com.danieljhkim.dsearch.common.validation.RequestLimitsValidator;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteItemResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteRequestDto;
@@ -13,6 +14,7 @@ import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
+import com.danieljhkim.dsearch.gateway.api.dto.GetDocumentResponseDto;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentResult;
@@ -23,6 +25,8 @@ import com.danieljhkim.dsearch.proto.index.DeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.Document;
 import com.danieljhkim.dsearch.proto.index.Field;
+import com.danieljhkim.dsearch.proto.index.GetDocumentRequest;
+import com.danieljhkim.dsearch.proto.index.GetDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
@@ -132,6 +136,46 @@ public class GatewayIndexService {
             return legacyDeleteViaOwner(resolvedPartitionId, id);
         }
         return replicateDelete(resolvedPartitionId, id, UUID.randomUUID().toString(), ALLOCATE_OPERATION_GENERATION);
+    }
+
+    /**
+     * Retrieves one exact document through the declared logical-shard read plan. This deliberately
+     * never uses the write-owner client: an eligible replica may serve an acknowledged read after
+     * primary failure, while a range with no eligible copy is unavailable rather than absent.
+     */
+    public GetDocumentResponseDto get(String id, String partitionId) {
+        if (id == null || id.isBlank()) {
+            throw new IllegalArgumentException("id must not be blank");
+        }
+        RequestLimitsValidator.validateDocument(id, Map.of(), requestLimits);
+        String resolvedPartitionId = resolvePartitionId(partitionId);
+        String ownerNodeId = indexNodeClientManager.ownerNodeId(resolvedPartitionId, id);
+        String logicalShardId = ReplicaPlacement.logicalShardId(ownerNodeId);
+        ReplicaPlacement.ReadPlan readPlan = indexNodeClientManager.replicaReadPlan(resolvedPartitionId);
+        if (readPlan.unavailableLogicalShardIds().contains(logicalShardId)) {
+            throw new NodeUnavailableException(
+                    ownerNodeId, "No eligible replica for logical shard " + logicalShardId + "; exact lookup is unavailable");
+        }
+        ReplicaPlacement.ReadTarget target = readPlan.targets().stream()
+                .filter(candidate -> logicalShardId.equals(candidate.logicalShardId()))
+                .findFirst()
+                .orElseThrow(() -> new NodeUnavailableException(
+                        ownerNodeId, "No read target for logical shard " + logicalShardId + "; exact lookup is unavailable"));
+        NodeClient<IndexServiceGrpc.IndexServiceBlockingStub> client =
+                indexNodeClientManager.getClientMap().get(target.nodeId());
+        if (client == null || !client.isActive()) {
+            throw new NodeUnavailableException(
+                    target.nodeId(), "Selected read replica " + target.nodeId() + " is unavailable for " + logicalShardId);
+        }
+        GetDocumentResponse response = client.getStub()
+                .withDeadlineAfter(Math.max(1, requestLimits.getRequestTimeoutMillis()), TimeUnit.MILLISECONDS)
+                .getDocument(GetDocumentRequest.newBuilder()
+                        .setPartitionId(target.storagePartitionId())
+                        .setId(id)
+                        .build());
+        Map<String, String> fields = new LinkedHashMap<>();
+        response.getDocument().getFieldsList().forEach(field -> fields.put(field.getName(), field.getValue()));
+        return new GetDocumentResponseDto(resolvedPartitionId, response.getDocument().getId(), fields);
     }
 
     /** Compatibility seam for older injected manager doubles; constructed managers always report at least one. */

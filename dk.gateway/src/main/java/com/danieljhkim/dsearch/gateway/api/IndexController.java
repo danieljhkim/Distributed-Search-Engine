@@ -7,12 +7,14 @@ import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
+import com.danieljhkim.dsearch.gateway.api.dto.GetDocumentResponseDto;
 import com.danieljhkim.dsearch.gateway.service.GatewayIndexService;
 import io.micrometer.core.annotation.Timed;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -79,6 +81,15 @@ public class IndexController {
                     .tag("partitionId", partitionId != null ? partitionId : "UNKNOWN")
                     .register(meterRegistry));
         }
+    }
+
+    @Timed(value = "dsearch.get_document.http", extraTags = {"endpoint", "/api/v1/index/{id}"})
+    @GetMapping(value = "/{id}", produces = "application/json")
+    public GetDocumentResponseDto getDocument(
+            @PathVariable("id") String id,
+            @RequestParam(name = "partitionId", defaultValue = "default") String partitionId) {
+        PartitionIdValidator.validate(partitionId);
+        return indexService.get(id, partitionId);
     }
 
     /**

@@ -80,6 +80,7 @@ import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.search.TopFieldDocs;
 import org.apache.lucene.search.TotalHitCountCollector;
 import org.apache.lucene.search.TotalHits;
+import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 import org.apache.lucene.util.BytesRef;
@@ -274,6 +275,36 @@ public class ShardIndex implements Closeable {
      */
     public void delete(String docId) throws IOException {
         indexWriter.deleteDocuments(new Term(FIELD_ID, docId));
+    }
+
+    /** Returns the current committed document for an exact id term, or {@code null} when absent. */
+    public SearchDocument get(String docId) {
+        IndexSearcher searcher = null;
+        try {
+            searcher = searcherManager.acquire();
+            TopDocs topDocs = searcher.search(new TermQuery(new Term(FIELD_ID, docId)), 1);
+            if (topDocs.scoreDocs.length == 0) {
+                return null;
+            }
+            Document document = searcher.storedFields().document(topDocs.scoreDocs[0].doc);
+            Map<String, String> fields = new HashMap<>();
+            Set<String> seen = new HashSet<>();
+            for (IndexableField field : document.getFields()) {
+                String name = field.name();
+                if (FIELD_ID.equals(name) || FIELD_EMBEDDING.equals(name) || !seen.add(name)) {
+                    continue;
+                }
+                String value = document.get(name);
+                if (value != null) {
+                    fields.put(name, value);
+                }
+            }
+            return new SearchDocument(docId, fields);
+        } catch (IOException e) {
+            throw new IndexOperationException("I/O error retrieving document from shard " + shardId, e);
+        } finally {
+            releaseSearcher(searcher);
+        }
     }
 
     /**

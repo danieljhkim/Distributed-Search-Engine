@@ -26,6 +26,8 @@ import com.danieljhkim.dsearch.proto.index.DeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.Document;
 import com.danieljhkim.dsearch.proto.index.Field;
+import com.danieljhkim.dsearch.proto.index.GetDocumentRequest;
+import com.danieljhkim.dsearch.proto.index.GetDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexSearchRequest;
@@ -69,6 +71,34 @@ class IndexServiceImplTest {
                     1,
                     manager.searchDocument("0", "durable", 10, 0, SearchType.BM25)
                             .getTotalHits());
+        }
+    }
+
+    @Test
+    void getDocumentReturnsStoredFieldsAndNotFoundOnlyAfterExactLookup() throws IOException {
+        try (IndexManager manager = manager("exact-get")) {
+            IndexServiceImpl service = new IndexServiceImpl(manager);
+            service.indexDocument(
+                    IndexDocumentRequest.newBuilder()
+                            .setPartitionId("tenant-a")
+                            .setDocument(document("doc:[* TO *]", "stored content"))
+                            .build(),
+                    new RecordingObserver<>());
+
+            RecordingObserver<GetDocumentResponse> present = new RecordingObserver<>();
+            service.getDocument(
+                    GetDocumentRequest.newBuilder().setPartitionId("tenant-a").setId("doc:[* TO *]").build(),
+                    present);
+            assertTrue(present.completed);
+            assertNull(present.error);
+            assertEquals("doc:[* TO *]", present.value.getDocument().getId());
+            assertEquals("stored content", present.value.getDocument().getFields(0).getValue());
+
+            RecordingObserver<GetDocumentResponse> absent = new RecordingObserver<>();
+            service.getDocument(
+                    GetDocumentRequest.newBuilder().setPartitionId("tenant-a").setId("doc:*").build(), absent);
+            assertInstanceOf(StatusRuntimeException.class, absent.error);
+            assertEquals(Status.Code.NOT_FOUND, ((StatusRuntimeException) absent.error).getStatus().getCode());
         }
     }
 
