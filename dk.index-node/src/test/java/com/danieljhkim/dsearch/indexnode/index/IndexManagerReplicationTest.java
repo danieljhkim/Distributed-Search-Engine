@@ -180,6 +180,8 @@ class IndexManagerReplicationTest {
         assertThrows(
                 IOException.class,
                 () -> manager.applyReplicatedIndex("tenant_r1", document("doc-1", "uncommitted"), "op-10", 10, 4));
+        assertFalse(manager.readiness().ready());
+        assertEquals("shard_write_fenced", manager.readiness().reason());
         IOException fenced = assertThrows(
                 IOException.class,
                 () -> manager.indexDocumentDurably("tenant_r1", document("doc-2", "must-not-commit")));
@@ -187,6 +189,7 @@ class IndexManagerReplicationTest {
         manager.close();
 
         try (IndexManager restarted = manager(data)) {
+            assertTrue(restarted.readiness().ready());
             assertEquals(
                     0,
                     restarted
