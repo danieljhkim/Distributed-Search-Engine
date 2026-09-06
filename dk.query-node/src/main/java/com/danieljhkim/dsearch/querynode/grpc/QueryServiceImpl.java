@@ -368,12 +368,13 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
     }
 
     private static String fanoutFailureDescription(SearchResult.FanoutMetadata fanoutMetadata) {
-        return "Search fanout failed: attemptedNodes=%d succeededNodes=%d failedNodes=%d timedOutNodes=%d"
+        return "Search fanout failed: attemptedNodes=%d succeededNodes=%d failedNodes=%d timedOutNodes=%d unavailableLogicalRanges=%d"
                 .formatted(
                         fanoutMetadata.attemptedNodes(),
                         fanoutMetadata.succeededNodes(),
                         fanoutMetadata.failedNodes(),
-                        fanoutMetadata.timedOutNodes());
+                        fanoutMetadata.timedOutNodes(),
+                        fanoutMetadata.unavailableLogicalRanges());
     }
 
     private static FanoutMetadata toProtoFanout(SearchResult.FanoutMetadata fanoutMetadata) {
@@ -382,6 +383,7 @@ public class QueryServiceImpl extends QueryServiceGrpc.QueryServiceImplBase {
                 .setSucceededNodes(fanoutMetadata.succeededNodes())
                 .setFailedNodes(fanoutMetadata.failedNodes())
                 .setTimedOutNodes(fanoutMetadata.timedOutNodes())
+                .setUnavailableLogicalRanges(fanoutMetadata.unavailableLogicalRanges())
                 .setStatus(toProtoFanoutStatus(fanoutMetadata.status()))
                 .build();
     }

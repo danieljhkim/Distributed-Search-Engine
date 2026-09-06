@@ -327,7 +327,8 @@ public class SearchExecutor implements Closeable {
 
         // Fan out
         List<NodeSearchTask> futures = new ArrayList<>();
-        var replicaTargets = nodeClientManager.replicaReadTargets(shardId);
+        var replicaReadPlan = nodeClientManager.replicaReadPlan(shardId);
+        var replicaTargets = replicaReadPlan.targets();
         int acquiredPermits = replicaTargets.size();
         if (acquiredPermits > 0 && !fanoutAdmission.tryAcquire(acquiredPermits)) {
             FANOUT_OUTCOMES.labels("rejected").inc();
@@ -400,7 +401,11 @@ public class SearchExecutor implements Closeable {
 
         long sumMs = nodeTimingsMs.values().stream().mapToLong(Long::longValue).sum();
         SearchResult.FanoutMetadata fanoutMetadata = new SearchResult.FanoutMetadata(
-                futures.size(), acc.successfulNodes, acc.failedNodes, acc.timedOutNodes);
+                futures.size(),
+                acc.successfulNodes,
+                acc.failedNodes,
+                acc.timedOutNodes,
+                replicaReadPlan.unavailableLogicalShardIds().size());
         FANOUT_OUTCOMES.labels(fanoutOutcome(fanoutMetadata)).inc();
         logFanoutSummary(
                 requestId, shardId, searchType, acc.totalHits, page, size, sumMs, nodeTimingsMs, fanoutMetadata);
@@ -418,6 +423,9 @@ public class SearchExecutor implements Closeable {
         }
         if (metadata.failedNodes() > 0) {
             return "partial_failure";
+        }
+        if (metadata.unavailableLogicalRanges() > 0) {
+            return "unavailable_logical_range";
         }
         return "success";
     }
@@ -822,7 +830,7 @@ public class SearchExecutor implements Closeable {
             Map<String, Long> nodeTimingsMs,
             SearchResult.FanoutMetadata fanoutMetadata) {
         String message =
-                "Search fanout summary: requestId={}, shardId={}, searchType={}, fanoutStatus={}, totalHits={}, page={}, size={}, attemptedNodes={}, succeededNodes={}, failedNodes={}, timedOutNodes={}, totalNodeTimeMs={}, nodeTimingsMs={}";
+                "Search fanout summary: requestId={}, shardId={}, searchType={}, fanoutStatus={}, totalHits={}, page={}, size={}, attemptedNodes={}, succeededNodes={}, failedNodes={}, timedOutNodes={}, unavailableLogicalRanges={}, totalNodeTimeMs={}, nodeTimingsMs={}";
         Object[] args = {
             requestId,
             shardId,
@@ -835,6 +843,7 @@ public class SearchExecutor implements Closeable {
             fanoutMetadata.succeededNodes(),
             fanoutMetadata.failedNodes(),
             fanoutMetadata.timedOutNodes(),
+            fanoutMetadata.unavailableLogicalRanges(),
             totalNodeTimeMs,
             nodeTimingsMs
         };

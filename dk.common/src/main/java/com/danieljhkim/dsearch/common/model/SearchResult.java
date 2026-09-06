@@ -51,12 +51,20 @@ public class SearchResult {
         FAILED
     }
 
-    public record FanoutMetadata(int attemptedNodes, int succeededNodes, int failedNodes, int timedOutNodes) {
+    public record FanoutMetadata(
+            int attemptedNodes, int succeededNodes, int failedNodes, int timedOutNodes, int unavailableLogicalRanges) {
+        public FanoutMetadata(int attemptedNodes, int succeededNodes, int failedNodes, int timedOutNodes) {
+            this(attemptedNodes, succeededNodes, failedNodes, timedOutNodes, 0);
+        }
+
         public FanoutStatus status() {
             if (attemptedNodes == 0 || succeededNodes == 0) {
                 return FanoutStatus.FAILED;
             }
-            if (failedNodes > 0 || timedOutNodes > 0 || succeededNodes < attemptedNodes) {
+            if (failedNodes > 0
+                    || timedOutNodes > 0
+                    || unavailableLogicalRanges > 0
+                    || succeededNodes < attemptedNodes) {
                 return FanoutStatus.PARTIAL_FAILURE;
             }
             return FanoutStatus.SUCCESS;
@@ -73,7 +81,8 @@ public class SearchResult {
                     left.attemptedNodes + right.attemptedNodes,
                     left.succeededNodes + right.succeededNodes,
                     left.failedNodes + right.failedNodes,
-                    left.timedOutNodes + right.timedOutNodes);
+                    left.timedOutNodes + right.timedOutNodes,
+                    left.unavailableLogicalRanges + right.unavailableLogicalRanges);
         }
     }
 }

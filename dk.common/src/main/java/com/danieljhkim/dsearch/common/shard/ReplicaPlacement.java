@@ -75,6 +75,18 @@ public final class ReplicaPlacement {
 
     public record ReadTarget(String logicalShardId, String nodeId, String storagePartitionId, boolean failover) {}
 
+    /**
+     * A complete read plan: every logical range is either assigned exactly one eligible copy or
+     * explicitly recorded as unavailable. Keeping the latter is essential because an absent
+     * target is not the same thing as a successful empty shard.
+     */
+    public record ReadPlan(List<ReadTarget> targets, List<String> unavailableLogicalShardIds) {
+        public ReadPlan {
+            targets = List.copyOf(targets);
+            unavailableLogicalShardIds = List.copyOf(unavailableLogicalShardIds);
+        }
+    }
+
     public static ReplicaSet forDocument(
             String partitionId,
             String documentId,
@@ -118,7 +130,7 @@ public final class ReplicaPlacement {
                 durabilityPolicy.requiredAcknowledgements(replicas.size()));
     }
 
-    public static List<ReadTarget> readTargets(
+    public static ReadPlan readPlan(
             String partitionId,
             Collection<String> eligibleNodeIds,
             Collection<String> activeNodeIds,
@@ -128,18 +140,39 @@ public final class ReplicaPlacement {
         List<String> nodes = normalizedNodes(eligibleNodeIds, replicationFactor);
         Set<String> active = Set.copyOf(activeNodeIds);
         List<ReadTarget> targets = new ArrayList<>(nodes.size());
+        List<String> unavailableLogicalShardIds = new ArrayList<>();
         for (String primary : nodes) {
             ReplicaSet set = forPrimary(partitionId, primary, nodes, replicationFactor, generation, durabilityPolicy);
-            set.nodeIds().stream()
-                    .filter(active::contains)
-                    .findFirst()
-                    .ifPresent(selected -> targets.add(new ReadTarget(
-                            set.shardId(),
-                            selected,
-                            storagePartitionId(partitionId, primary, replicationFactor),
-                            !selected.equals(primary))));
+            String selected =
+                    set.nodeIds().stream().filter(active::contains).findFirst().orElse(null);
+            if (selected == null) {
+                unavailableLogicalShardIds.add(set.shardId());
+            } else {
+                targets.add(new ReadTarget(
+                        set.shardId(),
+                        selected,
+                        storagePartitionId(partitionId, primary, replicationFactor),
+                        !selected.equals(primary)));
+            }
         }
-        return List.copyOf(targets);
+        return new ReadPlan(targets, unavailableLogicalShardIds);
+    }
+
+    /**
+     * @deprecated Prefer {@link #readPlan(String, Collection, Collection, int, long,
+     *     DurabilityPolicy)} so callers cannot mistake an unavailable logical range for a
+     *     successful omission.
+     */
+    @Deprecated
+    public static List<ReadTarget> readTargets(
+            String partitionId,
+            Collection<String> eligibleNodeIds,
+            Collection<String> activeNodeIds,
+            int replicationFactor,
+            long generation,
+            DurabilityPolicy durabilityPolicy) {
+        return readPlan(partitionId, eligibleNodeIds, activeNodeIds, replicationFactor, generation, durabilityPolicy)
+                .targets();
     }
 
     public static String logicalShardId(String primaryNodeId) {

@@ -372,9 +372,12 @@ public class NodeClientManager<T> {
         return new ReplicaWritePlan<>(set, targets);
     }
 
-    /** One active copy of every logical shard, primary preferred, so totals and facets count once. */
-    public List<ReplicaPlacement.ReadTarget> replicaReadTargets(String partitionId) {
-        return ReplicaPlacement.readTargets(
+    /**
+     * One active copy of every logical shard, primary preferred, plus ranges for which no copy is
+     * eligible. Callers must surface unavailable ranges rather than silently dropping them.
+     */
+    public ReplicaPlacement.ReadPlan replicaReadPlan(String partitionId) {
+        return ReplicaPlacement.readPlan(
                 partitionId,
                 ownershipNodeIds,
                 getActiveNodeIds(),

@@ -194,11 +194,13 @@ class SearchExecutorSortMergeTest {
             List<String> nodeIds) {
         NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> manager = mock(NodeClientManager.class);
         when(manager.getActiveNodeIds()).thenReturn(nodeIds);
-        when(manager.replicaReadTargets(org.mockito.ArgumentMatchers.anyString()))
+        when(manager.replicaReadPlan(org.mockito.ArgumentMatchers.anyString()))
                 .thenAnswer(invocation -> nodeIds.stream()
                         .map(nodeId -> new ReplicaPlacement.ReadTarget(
                                 "index/" + nodeId, nodeId, invocation.getArgument(0), false))
-                        .toList());
+                        .collect(java.util.stream.Collectors.collectingAndThen(
+                                java.util.stream.Collectors.toList(),
+                                targets -> new ReplicaPlacement.ReadPlan(targets, List.of()))));
         return manager;
     }
 
