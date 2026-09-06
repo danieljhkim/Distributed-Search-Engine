@@ -17,13 +17,14 @@ import com.danieljhkim.dsearch.common.exception.NodeUnavailableException;
 import com.danieljhkim.dsearch.common.grpc.NodeClient;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.common.shard.ReplicaPlacement;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteItemRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexResponseDto;
+import com.danieljhkim.dsearch.gateway.api.dto.GetDocumentResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
-import com.danieljhkim.dsearch.gateway.api.dto.GetDocumentResponseDto;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentResponse;
@@ -49,6 +50,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -626,6 +628,70 @@ class GatewayIndexServiceTest {
     }
 
     @Test
+    void singleDeleteForwardsCallerIdentityAndGeneration() {
+        ReplicatedFixture fixture = replicatedFixture();
+
+        IndexResponseDto response = fixture.service().delete("doc-delete", "tenant-a", "delete-42", 42L);
+
+        assertThat(response.getOperationId()).isEqualTo("delete-42");
+        assertThat(response.getGeneration()).isEqualTo(42L);
+        assertThat(fixture.deleteRequests())
+                .extracting(request -> request.getMutation().getOperationId())
+                .containsExactly("delete-42", "delete-42");
+        assertThat(fixture.deleteRequests())
+                .extracting(request -> request.getMutation().getOperationGeneration())
+                .containsExactly(42L, 42L);
+    }
+
+    @Test
+    void replicationFactorOneBulkDeletePreservesIdentityContract() {
+        ReplicatedFixture fixture = replicatedFixture(1);
+        BulkDeleteItemRequestDto item = new BulkDeleteItemRequestDto("doc-delete", "delete-one", 9L);
+
+        BulkDeleteResponseDto response = fixture.service().bulkDelete(bulkDeleteItemRequest("tenant-a", item));
+
+        assertThat(response.isSuccess()).isTrue();
+        assertThat(response.getItems().getFirst().getOperationId()).isEqualTo("delete-one");
+        assertThat(response.getItems().getFirst().getGeneration()).isEqualTo(9L);
+        assertThat(fixture.deleteRequests()).hasSize(1);
+        assertThat(fixture.deleteRequests().getFirst().getMutation().getReplica())
+                .isFalse();
+    }
+
+    @Test
+    void oldDeleteRetryCannotRemoveANewerAcknowledgedUpsert() {
+        ReplicatedFixture fixture = replicatedFixture();
+        IndexRequestDto original = indexRequest("doc-race", Map.of("title", "original"));
+        original.setPartitionId("tenant-a");
+        original.setOperationId("upsert-original");
+        original.setGeneration(1L);
+        fixture.service().index(original);
+
+        fixture.failNextFollowerDelete().set(true);
+        BulkDeleteResponseDto uncertain = fixture.service().bulkDelete(bulkDeleteRequest("tenant-a", "doc-race"));
+        var uncertainItem = uncertain.getItems().getFirst();
+        assertThat(uncertainItem.getStatus()).isEqualTo("retryable_failure");
+        assertThat(uncertainItem.getOperationId()).isNotBlank();
+        assertThat(uncertainItem.getGeneration()).isEqualTo(2L);
+
+        IndexRequestDto newer = indexRequest("doc-race", Map.of("title", "newer"));
+        newer.setPartitionId("tenant-a");
+        newer.setOperationId("upsert-newer");
+        newer.setGeneration(3L);
+        IndexResponseDto newerResponse = fixture.service().index(newer);
+        assertThat(newerResponse.getAcknowledgements()).isEqualTo(2);
+
+        BulkDeleteItemRequestDto retry =
+                new BulkDeleteItemRequestDto("doc-race", uncertainItem.getOperationId(), uncertainItem.getGeneration());
+        BulkDeleteResponseDto retried = fixture.service().bulkDelete(bulkDeleteItemRequest("tenant-a", retry));
+
+        assertThat(retried.getItems().getFirst().getStatus()).isEqualTo("permanent_failure");
+        assertThat(retried.getItems().getFirst().getOperationId()).isEqualTo(uncertainItem.getOperationId());
+        assertThat(retried.getItems().getFirst().getGeneration()).isEqualTo(2L);
+        assertThat(fixture.replicaValues("doc-race")).containsOnly("newer");
+    }
+
+    @Test
     void allPolicyDoesNotAcknowledgeReplicaOutageAndRetryCanFinishTheSameOperation() {
         ReplicatedFixture fixture = replicatedFixture();
         var plan = fixture.manager().replicaWritePlan("tenant-a", "doc-replicated");
@@ -707,28 +773,64 @@ class GatewayIndexServiceTest {
         Map<String, IndexServiceGrpc.IndexServiceBlockingStub> stubs = new LinkedHashMap<>();
         Map<String, NodeClient<IndexServiceGrpc.IndexServiceBlockingStub>> clients = new LinkedHashMap<>();
         Map<String, AtomicLong> primaryGenerations = new ConcurrentHashMap<>();
+        Map<String, Map<String, ReplicaMutationState>> states = new LinkedHashMap<>();
         List<IndexDocumentRequest> requests = new ArrayList<>();
+        List<DeleteDocumentRequest> deleteRequests = new ArrayList<>();
+        AtomicBoolean failNextFollowerDelete = new AtomicBoolean();
         for (String nodeId : List.of("n0", "n1")) {
             IndexServiceGrpc.IndexServiceBlockingStub stub = mock(IndexServiceGrpc.IndexServiceBlockingStub.class);
+            states.put(nodeId, new LinkedHashMap<>());
             lenient()
                     .when(stub.withDeadlineAfter(anyLong(), any(TimeUnit.class)))
                     .thenReturn(stub);
             lenient().when(stub.indexDocument(any(IndexDocumentRequest.class))).thenAnswer(invocation -> {
                 IndexDocumentRequest request = invocation.getArgument(0);
                 requests.add(request);
-                long requestedGeneration = request.getMutation().getOperationGeneration();
-                long committedGeneration = requestedGeneration;
-                if (!request.getMutation().getReplica() && requestedGeneration == 0) {
-                    committedGeneration = primaryGenerations
-                            .computeIfAbsent(request.getDocument().getId(), ignored -> new AtomicLong())
-                            .incrementAndGet();
-                }
+                MutationOutcome outcome = applyFixtureMutation(
+                        states.get(nodeId),
+                        primaryGenerations,
+                        request.getDocument().getId(),
+                        request.getMutation().getOperationId(),
+                        request.getMutation().getOperationGeneration(),
+                        !request.getMutation().getReplica(),
+                        "index",
+                        request.getDocument().getFieldsList().stream()
+                                .filter(field -> "title".equals(field.getName()))
+                                .map(Field::getValue)
+                                .findFirst()
+                                .orElse("indexed"));
                 return IndexDocumentResponse.newBuilder()
                         .setId(request.getDocument().getId())
                         .setSuccess(true)
-                        .setCommittedGeneration(committedGeneration)
+                        .setDuplicate(outcome.duplicate())
+                        .setCommittedGeneration(outcome.generation())
                         .build();
             });
+            lenient()
+                    .when(stub.deleteDocument(any(DeleteDocumentRequest.class)))
+                    .thenAnswer(invocation -> {
+                        DeleteDocumentRequest request = invocation.getArgument(0);
+                        deleteRequests.add(request);
+                        if (request.getMutation().getReplica() && failNextFollowerDelete.compareAndSet(true, false)) {
+                            throw Status.UNAVAILABLE
+                                    .withDescription("simulated follower delete failure")
+                                    .asRuntimeException();
+                        }
+                        MutationOutcome outcome = applyFixtureMutation(
+                                states.get(nodeId),
+                                primaryGenerations,
+                                request.getId(),
+                                request.getMutation().getOperationId(),
+                                request.getMutation().getOperationGeneration(),
+                                !request.getMutation().getReplica(),
+                                "delete",
+                                null);
+                        return DeleteDocumentResponse.newBuilder()
+                                .setSuccess(true)
+                                .setDuplicate(outcome.duplicate())
+                                .setCommittedGeneration(outcome.generation())
+                                .build();
+                    });
             stubs.put(nodeId, stub);
             clients.put(nodeId, new NodeClient<>(nodeId, stub, mock(ManagedChannel.class), "localhost", 5100));
         }
@@ -740,19 +842,91 @@ class GatewayIndexServiceTest {
                 replicationFactor,
                 ReplicaPlacement.DurabilityPolicy.ALL,
                 ReplicaPlacement.ReadConsistency.ACKNOWLEDGED);
-        return new ReplicatedFixture(manager, new GatewayIndexService(manager), stubs, requests);
+        return new ReplicatedFixture(
+                manager,
+                new GatewayIndexService(manager),
+                stubs,
+                requests,
+                deleteRequests,
+                states,
+                failNextFollowerDelete);
     }
 
     private record ReplicatedFixture(
             NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> manager,
             GatewayIndexService service,
             Map<String, IndexServiceGrpc.IndexServiceBlockingStub> stubs,
-            List<IndexDocumentRequest> requests) {}
+            List<IndexDocumentRequest> requests,
+            List<DeleteDocumentRequest> deleteRequests,
+            Map<String, Map<String, ReplicaMutationState>> states,
+            AtomicBoolean failNextFollowerDelete) {
+
+        private List<String> replicaValues(String id) {
+            return states.values().stream()
+                    .map(state -> state.get(id))
+                    .map(ReplicaMutationState::value)
+                    .toList();
+        }
+    }
+
+    private static MutationOutcome applyFixtureMutation(
+            Map<String, ReplicaMutationState> state,
+            Map<String, AtomicLong> primaryGenerations,
+            String id,
+            String operationId,
+            long requestedGeneration,
+            boolean primary,
+            String type,
+            String value) {
+        ReplicaMutationState previous = state.get(id);
+        long generation = requestedGeneration;
+        if (primary && generation == 0) {
+            if (previous != null
+                    && previous.operationId().equals(operationId)
+                    && previous.type().equals(type)) {
+                return new MutationOutcome(true, previous.generation());
+            }
+            long floor = previous == null ? 0 : previous.generation();
+            AtomicLong allocator = primaryGenerations.computeIfAbsent(id, ignored -> new AtomicLong(floor));
+            allocator.accumulateAndGet(floor, Math::max);
+            generation = allocator.incrementAndGet();
+        }
+        if (previous != null) {
+            if (generation < previous.generation()) {
+                throw Status.FAILED_PRECONDITION
+                        .withDescription("operation generation " + generation + " is older than committed generation "
+                                + previous.generation())
+                        .asRuntimeException();
+            }
+            if (generation == previous.generation()) {
+                if (previous.operationId().equals(operationId)
+                        && previous.type().equals(type)) {
+                    return new MutationOutcome(true, generation);
+                }
+                throw Status.FAILED_PRECONDITION
+                        .withDescription("operation generation was already committed with a different identity")
+                        .asRuntimeException();
+            }
+        }
+        state.put(id, new ReplicaMutationState(operationId, generation, type, value));
+        return new MutationOutcome(false, generation);
+    }
+
+    private record ReplicaMutationState(String operationId, long generation, String type, String value) {}
+
+    private record MutationOutcome(boolean duplicate, long generation) {}
 
     private static BulkDeleteRequestDto bulkDeleteRequest(String partitionId, String... ids) {
         BulkDeleteRequestDto request = new BulkDeleteRequestDto();
         request.setPartitionId(partitionId);
         request.setIds(List.of(ids));
+        return request;
+    }
+
+    private static BulkDeleteRequestDto bulkDeleteItemRequest(String partitionId, BulkDeleteItemRequestDto... items) {
+        BulkDeleteRequestDto request = new BulkDeleteRequestDto();
+        request.setPartitionId(partitionId);
+        request.setItems(List.of(items));
         return request;
     }
 
