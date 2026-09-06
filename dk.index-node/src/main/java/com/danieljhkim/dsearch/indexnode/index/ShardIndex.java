@@ -701,6 +701,10 @@ public class ShardIndex implements Closeable {
         return commits.get(commits.size() - 1).getUserData();
     }
 
+    Path indexPath() {
+        return indexPath;
+    }
+
     /**
      * Closes without committing pending writer state. Used when a commit outcome is uncertain so
      * a later close cannot accidentally publish data without its associated fencing metadata.

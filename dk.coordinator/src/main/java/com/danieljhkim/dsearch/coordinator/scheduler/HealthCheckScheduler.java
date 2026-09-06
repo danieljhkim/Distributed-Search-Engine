@@ -3,6 +3,7 @@ package com.danieljhkim.dsearch.coordinator.scheduler;
 import com.danieljhkim.dsearch.common.cluster.NodeGroup;
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.coordinator.cluster.ClusterMembershipService;
+import com.danieljhkim.dsearch.coordinator.cluster.ReplicaRepairCoordinator;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import io.prometheus.client.Counter;
 import java.net.URI;
@@ -30,6 +31,7 @@ public class HealthCheckScheduler {
     private final ClusterMembershipService membershipService;
     private final int refreshIntervalSeconds;
     private final boolean enabled;
+    private final ReplicaRepairCoordinator repairCoordinator;
 
     public HealthCheckScheduler(ClusterMembershipService membershipService, AppConfig appConfig) {
         this(
@@ -40,7 +42,8 @@ public class HealthCheckScheduler {
                     Thread t = new Thread(r, "node-health-checker");
                     t.setDaemon(true);
                     return t;
-                }));
+                }),
+                new ReplicaRepairCoordinator(membershipService, appConfig));
     }
 
     HealthCheckScheduler(
@@ -48,11 +51,21 @@ public class HealthCheckScheduler {
             AppConfig appConfig,
             HttpClient httpClient,
             ScheduledExecutorService clusterHealthScheduler) {
+        this(membershipService, appConfig, httpClient, clusterHealthScheduler, null);
+    }
+
+    HealthCheckScheduler(
+            ClusterMembershipService membershipService,
+            AppConfig appConfig,
+            HttpClient httpClient,
+            ScheduledExecutorService clusterHealthScheduler,
+            ReplicaRepairCoordinator repairCoordinator) {
         this.refreshIntervalSeconds = appConfig.getServiceDiscovery().getRefreshIntervalSeconds();
         this.enabled = appConfig.getServiceDiscovery().isEnabled();
         this.membershipService = membershipService;
         this.httpClient = httpClient;
         this.clusterHealthScheduler = clusterHealthScheduler;
+        this.repairCoordinator = repairCoordinator;
     }
 
     public void start() {
@@ -62,12 +75,19 @@ public class HealthCheckScheduler {
         }
         this.clusterHealthScheduler.scheduleAtFixedRate(
                 this::checkClusterHealth, refreshIntervalSeconds, refreshIntervalSeconds, TimeUnit.SECONDS);
+        if (repairCoordinator != null) {
+            this.clusterHealthScheduler.scheduleAtFixedRate(
+                    repairCoordinator::reconcile, 0, repairCoordinator.intervalSeconds(), TimeUnit.SECONDS);
+        }
     }
 
     public void shutdown() throws InterruptedException {
         this.clusterHealthScheduler.shutdown();
         if (!this.clusterHealthScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
             this.clusterHealthScheduler.shutdownNow();
+        }
+        if (repairCoordinator != null) {
+            repairCoordinator.close();
         }
     }
 

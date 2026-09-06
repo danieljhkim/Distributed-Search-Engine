@@ -29,6 +29,7 @@ message MutationMetadata {
   string primary_node_id = 4;
   string target_node_id = 5;
   bool replica = 6;
+  string logical_partition_id = 7;
 }
 
 message IndexDocumentRequest {
@@ -284,6 +285,91 @@ message RollbackAliasResponse {
   string audit_id = 5;
 }
 
+// A manifest describes one durable physical shard commit.  The content checksum is
+// over the canonical committed documents and replication fence metadata, not over
+// Lucene's incidental segment layout, so independently committed but equivalent
+// replicas compare equal.
+message ReplicaManifest {
+  string shard_id = 1;
+  string logical_partition_id = 2;
+  string primary_node_id = 3;
+  uint64 placement_generation = 4;
+  uint64 committed_position = 5;
+  string content_checksum = 6;
+  int64 document_count = 7;
+  string state = 8;
+  string last_error = 9;
+}
+
+message ListReplicaManifestsRequest {}
+
+message ListReplicaManifestsResponse {
+  repeated ReplicaManifest manifests = 1;
+}
+
+message OpenReplicaSnapshotRequest {
+  string shard_id = 1;
+  uint64 max_snapshot_bytes = 2;
+}
+
+message OpenReplicaSnapshotResponse {
+  string snapshot_id = 1;
+  uint64 total_bytes = 2;
+  string transfer_checksum = 3;
+  ReplicaManifest manifest = 4;
+}
+
+message ReadReplicaSnapshotChunkRequest {
+  string snapshot_id = 1;
+  uint64 offset = 2;
+  uint32 max_bytes = 3;
+}
+
+message ReadReplicaSnapshotChunkResponse {
+  uint64 offset = 1;
+  bytes data = 2;
+  bool complete = 3;
+}
+
+message BeginReplicaRepairRequest {
+  string repair_id = 1;
+  ReplicaManifest manifest = 2;
+  string snapshot_id = 3;
+  uint64 total_bytes = 4;
+  string transfer_checksum = 5;
+}
+
+message BeginReplicaRepairResponse {
+  uint64 accepted_offset = 1;
+}
+
+message WriteReplicaRepairChunkRequest {
+  string repair_id = 1;
+  uint64 offset = 2;
+  bytes data = 3;
+}
+
+message WriteReplicaRepairChunkResponse {
+  uint64 accepted_offset = 1;
+}
+
+message FinishReplicaRepairRequest {
+  string repair_id = 1;
+}
+
+message FinishReplicaRepairResponse {
+  ReplicaManifest manifest = 1;
+}
+
+message AbortReplicaRepairRequest {
+  string repair_id = 1;
+  string reason = 2;
+}
+
+message AbortReplicaRepairResponse {
+  bool success = 1;
+}
+
 service IndexService {
   rpc IndexDocument(IndexDocumentRequest) returns (IndexDocumentResponse);
   rpc BulkIndexDocument(BulkIndexDocumentRequest) returns (BulkIndexDocumentResponse);
@@ -296,4 +382,11 @@ service IndexService {
   rpc Reindex(ReindexRequest) returns (ReindexResponse);
   rpc SwapAlias(SwapAliasRequest) returns (SwapAliasResponse);
   rpc RollbackAlias(RollbackAliasRequest) returns (RollbackAliasResponse);
+  rpc ListReplicaManifests(ListReplicaManifestsRequest) returns (ListReplicaManifestsResponse);
+  rpc OpenReplicaSnapshot(OpenReplicaSnapshotRequest) returns (OpenReplicaSnapshotResponse);
+  rpc ReadReplicaSnapshotChunk(ReadReplicaSnapshotChunkRequest) returns (ReadReplicaSnapshotChunkResponse);
+  rpc BeginReplicaRepair(BeginReplicaRepairRequest) returns (BeginReplicaRepairResponse);
+  rpc WriteReplicaRepairChunk(WriteReplicaRepairChunkRequest) returns (WriteReplicaRepairChunkResponse);
+  rpc FinishReplicaRepair(FinishReplicaRepairRequest) returns (FinishReplicaRepairResponse);
+  rpc AbortReplicaRepair(AbortReplicaRepairRequest) returns (AbortReplicaRepairResponse);
 }

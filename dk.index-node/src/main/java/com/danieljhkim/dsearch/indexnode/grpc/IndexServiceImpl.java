@@ -15,14 +15,19 @@ import com.danieljhkim.dsearch.common.validation.PartitionIdValidator;
 import com.danieljhkim.dsearch.common.validation.RequestAdmissionException;
 import com.danieljhkim.dsearch.common.validation.RequestLimitsValidator;
 import com.danieljhkim.dsearch.indexnode.index.IndexManager;
+import com.danieljhkim.dsearch.indexnode.index.ReplicaRepairStore;
 import com.danieljhkim.dsearch.indexnode.index.ShardIndex;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.Filter;
 import com.danieljhkim.dsearch.proto.common.SearchType;
 import com.danieljhkim.dsearch.proto.common.SortValue;
+import com.danieljhkim.dsearch.proto.index.AbortReplicaRepairRequest;
+import com.danieljhkim.dsearch.proto.index.AbortReplicaRepairResponse;
 import com.danieljhkim.dsearch.proto.index.AnalyzeIndexRequest;
 import com.danieljhkim.dsearch.proto.index.AnalyzeIndexResponse;
 import com.danieljhkim.dsearch.proto.index.AnalyzeToken;
+import com.danieljhkim.dsearch.proto.index.BeginReplicaRepairRequest;
+import com.danieljhkim.dsearch.proto.index.BeginReplicaRepairResponse;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentResult;
@@ -35,6 +40,8 @@ import com.danieljhkim.dsearch.proto.index.DeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.Document;
 import com.danieljhkim.dsearch.proto.index.Field;
+import com.danieljhkim.dsearch.proto.index.FinishReplicaRepairRequest;
+import com.danieljhkim.dsearch.proto.index.FinishReplicaRepairResponse;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexHit;
@@ -43,13 +50,22 @@ import com.danieljhkim.dsearch.proto.index.IndexSearchResponse;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
 import com.danieljhkim.dsearch.proto.index.InspectSchemaRequest;
 import com.danieljhkim.dsearch.proto.index.InspectSchemaResponse;
+import com.danieljhkim.dsearch.proto.index.ListReplicaManifestsRequest;
+import com.danieljhkim.dsearch.proto.index.ListReplicaManifestsResponse;
 import com.danieljhkim.dsearch.proto.index.MutationMetadata;
+import com.danieljhkim.dsearch.proto.index.OpenReplicaSnapshotRequest;
+import com.danieljhkim.dsearch.proto.index.OpenReplicaSnapshotResponse;
+import com.danieljhkim.dsearch.proto.index.ReadReplicaSnapshotChunkRequest;
+import com.danieljhkim.dsearch.proto.index.ReadReplicaSnapshotChunkResponse;
 import com.danieljhkim.dsearch.proto.index.ReindexRequest;
 import com.danieljhkim.dsearch.proto.index.ReindexResponse;
+import com.danieljhkim.dsearch.proto.index.ReplicaManifest;
 import com.danieljhkim.dsearch.proto.index.RollbackAliasRequest;
 import com.danieljhkim.dsearch.proto.index.RollbackAliasResponse;
 import com.danieljhkim.dsearch.proto.index.SwapAliasRequest;
 import com.danieljhkim.dsearch.proto.index.SwapAliasResponse;
+import com.danieljhkim.dsearch.proto.index.WriteReplicaRepairChunkRequest;
+import com.danieljhkim.dsearch.proto.index.WriteReplicaRepairChunkResponse;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import io.prometheus.client.Counter;
@@ -75,10 +91,16 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
             .name("dsearch_replication_apply_duration_seconds")
             .help("Replica mutation apply latency")
             .register();
+    private static final Counter REPAIR_TRANSFERS = Counter.build()
+            .name("dsearch_replica_repair_transfers_total")
+            .help("Replica repair transfer operations by bounded outcome")
+            .labelNames("operation", "outcome")
+            .register();
 
     private final IndexManager indexManager;
     private final AppConfig.RequestLimitsConfig requestLimits;
     private final String localNodeId;
+    private final ReplicaRepairStore replicaRepairStore;
     private final AtomicLong latestPlacementGeneration = new AtomicLong();
 
     public IndexServiceImpl(IndexManager indexManager) {
@@ -94,6 +116,7 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
         this.indexManager = indexManager;
         this.requestLimits = RequestLimitsValidator.limitsOrDefaults(requestLimits);
         this.localNodeId = localNodeId;
+        this.replicaRepairStore = new ReplicaRepairStore(indexManager);
     }
 
     @Override
@@ -123,7 +146,9 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
             responseObserver.onCompleted();
         } catch (IllegalArgumentException e) {
             invalidArgument(responseObserver, e);
-        } catch (SchemaMismatchException | IndexManager.StaleMutationException e) {
+        } catch (SchemaMismatchException
+                | IndexManager.StaleMutationException
+                | IndexManager.RepairInProgressException e) {
             failedPrecondition(responseObserver, e);
         } catch (RequestAdmissionException e) {
             resourceExhausted(responseObserver, e);
@@ -172,7 +197,9 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
             } catch (RequestAdmissionException e) {
                 success = false;
                 result.setSuccess(false).setError("request admission exhausted; retry with the returned id");
-            } catch (SchemaMismatchException | IndexManager.StaleMutationException e) {
+            } catch (SchemaMismatchException
+                    | IndexManager.StaleMutationException
+                    | IndexManager.RepairInProgressException e) {
                 success = false;
                 result.setSuccess(false).setError(e.getMessage());
             } catch (IOException | RuntimeException e) {
@@ -209,7 +236,9 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
             responseObserver.onCompleted();
         } catch (IllegalArgumentException e) {
             invalidArgument(responseObserver, e);
-        } catch (SchemaMismatchException | IndexManager.StaleMutationException e) {
+        } catch (SchemaMismatchException
+                | IndexManager.StaleMutationException
+                | IndexManager.RepairInProgressException e) {
             failedPrecondition(responseObserver, e);
         } catch (IOException e) {
             LOGGER.log(Level.SEVERE, "DeleteDocument failed", e);
@@ -264,7 +293,9 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
             } catch (RequestAdmissionException e) {
                 success = false;
                 result.setSuccess(false).setError("request admission exhausted; retry with the same id");
-            } catch (SchemaMismatchException | IndexManager.StaleMutationException e) {
+            } catch (SchemaMismatchException
+                    | IndexManager.StaleMutationException
+                    | IndexManager.RepairInProgressException e) {
                 success = false;
                 result.setSuccess(false).setError(e.getMessage());
             } catch (IOException | RuntimeException e) {
@@ -302,7 +333,9 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
                     document,
                     mutation.getOperationId(),
                     mutation.getOperationGeneration(),
-                    mutation.getPlacementGeneration());
+                    mutation.getPlacementGeneration(),
+                    mutation.getLogicalPartitionId().isBlank() ? partitionId : mutation.getLogicalPartitionId(),
+                    mutation.getPrimaryNodeId());
             REPLICATION_OUTCOMES
                     .labels(role, result.duplicate() ? "duplicate" : "applied")
                     .inc();
@@ -328,7 +361,9 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
                     documentId,
                     mutation.getOperationId(),
                     mutation.getOperationGeneration(),
-                    mutation.getPlacementGeneration());
+                    mutation.getPlacementGeneration(),
+                    mutation.getLogicalPartitionId().isBlank() ? partitionId : mutation.getLogicalPartitionId(),
+                    mutation.getPrimaryNodeId());
             REPLICATION_OUTCOMES
                     .labels(role, result.duplicate() ? "duplicate" : "applied")
                     .inc();
@@ -362,6 +397,180 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
             throw new IndexManager.StaleMutationException("placement generation " + mutation.getPlacementGeneration()
                     + " is older than node generation " + observed);
         }
+    }
+
+    @Override
+    public void listReplicaManifests(
+            ListReplicaManifestsRequest request, StreamObserver<ListReplicaManifestsResponse> responseObserver) {
+        try {
+            ListReplicaManifestsResponse.Builder response = ListReplicaManifestsResponse.newBuilder();
+            for (IndexManager.ReplicaManifestData manifest : indexManager.replicaManifests()) {
+                response.addManifests(toProto(manifest));
+            }
+            responseObserver.onNext(response.build());
+            responseObserver.onCompleted();
+        } catch (IOException | RuntimeException e) {
+            repairError(responseObserver, "Failed to inspect replica manifests", e);
+        }
+    }
+
+    @Override
+    public void openReplicaSnapshot(
+            OpenReplicaSnapshotRequest request, StreamObserver<OpenReplicaSnapshotResponse> responseObserver) {
+        try {
+            ReplicaRepairStore.SourceSnapshot snapshot =
+                    replicaRepairStore.openSnapshot(request.getShardId(), request.getMaxSnapshotBytes());
+            REPAIR_TRANSFERS.labels("open", "success").inc();
+            responseObserver.onNext(OpenReplicaSnapshotResponse.newBuilder()
+                    .setSnapshotId(snapshot.snapshotId())
+                    .setTotalBytes(snapshot.payload().length)
+                    .setTransferChecksum(snapshot.transferChecksum())
+                    .setManifest(toProto(snapshot.manifest()))
+                    .build());
+            responseObserver.onCompleted();
+        } catch (IllegalArgumentException e) {
+            REPAIR_TRANSFERS.labels("open", "rejected").inc();
+            invalidArgument(responseObserver, e);
+        } catch (IOException | RuntimeException e) {
+            REPAIR_TRANSFERS.labels("open", "failed").inc();
+            repairError(responseObserver, "Failed to open replica snapshot", e);
+        }
+    }
+
+    @Override
+    public void readReplicaSnapshotChunk(
+            ReadReplicaSnapshotChunkRequest request,
+            StreamObserver<ReadReplicaSnapshotChunkResponse> responseObserver) {
+        try {
+            ReplicaRepairStore.SnapshotChunk chunk = replicaRepairStore.readSnapshot(
+                    request.getSnapshotId(), request.getOffset(), request.getMaxBytes());
+            responseObserver.onNext(ReadReplicaSnapshotChunkResponse.newBuilder()
+                    .setOffset(chunk.offset())
+                    .setData(com.google.protobuf.ByteString.copyFrom(chunk.data()))
+                    .setComplete(chunk.complete())
+                    .build());
+            responseObserver.onCompleted();
+        } catch (IllegalArgumentException e) {
+            invalidArgument(responseObserver, e);
+        } catch (RuntimeException e) {
+            repairError(responseObserver, "Failed to read replica snapshot chunk", e);
+        }
+    }
+
+    @Override
+    public void beginReplicaRepair(
+            BeginReplicaRepairRequest request, StreamObserver<BeginReplicaRepairResponse> responseObserver) {
+        try {
+            long offset = replicaRepairStore.begin(
+                    request.getRepairId(),
+                    request.getSnapshotId(),
+                    request.getTotalBytes(),
+                    request.getTransferChecksum(),
+                    fromProto(request.getManifest()));
+            REPAIR_TRANSFERS.labels("begin", "success").inc();
+            responseObserver.onNext(BeginReplicaRepairResponse.newBuilder()
+                    .setAcceptedOffset(offset)
+                    .build());
+            responseObserver.onCompleted();
+        } catch (IllegalArgumentException e) {
+            REPAIR_TRANSFERS.labels("begin", "rejected").inc();
+            invalidArgument(responseObserver, e);
+        } catch (IOException | RuntimeException e) {
+            REPAIR_TRANSFERS.labels("begin", "failed").inc();
+            repairError(responseObserver, "Failed to begin replica repair", e);
+        }
+    }
+
+    @Override
+    public void writeReplicaRepairChunk(
+            WriteReplicaRepairChunkRequest request, StreamObserver<WriteReplicaRepairChunkResponse> responseObserver) {
+        try {
+            long offset = replicaRepairStore.write(
+                    request.getRepairId(),
+                    request.getOffset(),
+                    request.getData().toByteArray());
+            responseObserver.onNext(WriteReplicaRepairChunkResponse.newBuilder()
+                    .setAcceptedOffset(offset)
+                    .build());
+            responseObserver.onCompleted();
+        } catch (ReplicaRepairStore.OffsetMismatchException e) {
+            responseObserver.onError(
+                    Status.ABORTED.withDescription(e.getMessage()).withCause(e).asRuntimeException());
+        } catch (IllegalArgumentException e) {
+            invalidArgument(responseObserver, e);
+        } catch (IOException | RuntimeException e) {
+            repairError(responseObserver, "Failed to write replica repair chunk", e);
+        }
+    }
+
+    @Override
+    public void finishReplicaRepair(
+            FinishReplicaRepairRequest request, StreamObserver<FinishReplicaRepairResponse> responseObserver) {
+        try {
+            IndexManager.ReplicaManifestData manifest = replicaRepairStore.finish(request.getRepairId());
+            REPAIR_TRANSFERS.labels("finish", "success").inc();
+            responseObserver.onNext(FinishReplicaRepairResponse.newBuilder()
+                    .setManifest(toProto(manifest))
+                    .build());
+            responseObserver.onCompleted();
+        } catch (IllegalArgumentException e) {
+            REPAIR_TRANSFERS.labels("finish", "rejected").inc();
+            invalidArgument(responseObserver, e);
+        } catch (IOException | RuntimeException e) {
+            REPAIR_TRANSFERS.labels("finish", "failed").inc();
+            repairError(responseObserver, "Failed to finish replica repair", e);
+        }
+    }
+
+    @Override
+    public void abortReplicaRepair(
+            AbortReplicaRepairRequest request, StreamObserver<AbortReplicaRepairResponse> responseObserver) {
+        try {
+            replicaRepairStore.abort(request.getRepairId(), request.getReason());
+            REPAIR_TRANSFERS.labels("abort", "success").inc();
+            responseObserver.onNext(
+                    AbortReplicaRepairResponse.newBuilder().setSuccess(true).build());
+            responseObserver.onCompleted();
+        } catch (IllegalArgumentException e) {
+            invalidArgument(responseObserver, e);
+        } catch (IOException | RuntimeException e) {
+            repairError(responseObserver, "Failed to abort replica repair", e);
+        }
+    }
+
+    private static ReplicaManifest toProto(IndexManager.ReplicaManifestData manifest) {
+        return ReplicaManifest.newBuilder()
+                .setShardId(manifest.shardId())
+                .setLogicalPartitionId(manifest.logicalPartitionId())
+                .setPrimaryNodeId(manifest.primaryNodeId())
+                .setPlacementGeneration(manifest.placementGeneration())
+                .setCommittedPosition(manifest.committedPosition())
+                .setContentChecksum(manifest.contentChecksum())
+                .setDocumentCount(manifest.documentCount())
+                .setState(manifest.state())
+                .setLastError(manifest.lastError())
+                .build();
+    }
+
+    private static IndexManager.ReplicaManifestData fromProto(ReplicaManifest manifest) {
+        return new IndexManager.ReplicaManifestData(
+                manifest.getShardId(),
+                manifest.getLogicalPartitionId(),
+                manifest.getPrimaryNodeId(),
+                manifest.getPlacementGeneration(),
+                manifest.getCommittedPosition(),
+                manifest.getContentChecksum(),
+                manifest.getDocumentCount(),
+                manifest.getState(),
+                manifest.getLastError());
+    }
+
+    private static void repairError(StreamObserver<?> responseObserver, String description, Exception error) {
+        LOGGER.log(Level.SEVERE, description, error);
+        responseObserver.onError(Status.INTERNAL
+                .withDescription(description + ": " + error.getMessage())
+                .withCause(error)
+                .asRuntimeException());
     }
 
     @Override

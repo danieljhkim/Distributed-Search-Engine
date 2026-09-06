@@ -18,6 +18,12 @@ class ReplicaTopologyTest {
     @Test
     void shardMapExposesVersionedPrimaryReplicaRolesAndUnderReplication() {
         ClusterMembershipService membership = new ClusterMembershipService(config(), null, Clock.systemUTC());
+        membership.updateReplicaNodeState(
+                "n0", com.danieljhkim.dsearch.proto.cluster.ReplicaRepairState.REPLICA_REPAIR_STATE_READY);
+        membership.updateReplicaNodeState(
+                "n1", com.danieljhkim.dsearch.proto.cluster.ReplicaRepairState.REPLICA_REPAIR_STATE_READY);
+        membership.updateReplicaNodeState(
+                "n2", com.danieljhkim.dsearch.proto.cluster.ReplicaRepairState.REPLICA_REPAIR_STATE_READY);
         RecordingObserver<GetShardMapResponse> initial = new RecordingObserver<>();
 
         new ClusterServiceImpl(membership).getShardMap(GetShardMapRequest.getDefaultInstance(), initial);

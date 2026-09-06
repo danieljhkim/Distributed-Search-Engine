@@ -115,6 +115,19 @@ When the exercise fails, start with `resilience-report.md` to find the scenario,
 
 ## Related runbooks
 
+### Replica repair controls
+
+For a replicated layout, use the coordinator gRPC API `GetReplicaRepairs` to inspect the latest
+bounded repair records. `ControlReplicaRepairs(action=pause|resume)` stops or restarts admission of
+new transfers; `ControlReplicaRepairs(action=retry, repair_id=...)` clears a failed record for the
+next reconciliation pass. A target remains outside index-node discovery until every expected shard
+has the source's placement generation, committed position, and content checksum.
+
+Repair work is bounded by `replicaRepair.chunkBytes`, `maxSnapshotBytes`,
+`bandwidthBytesPerSecond`, `maxConcurrentRepairs`, and the per-RPC deadline. Target staging lives
+under the index volume's `.replica-repair` directory, so an interrupted transfer resumes after a
+target or coordinator restart. Do not delete that directory to retry; use the control RPC.
+
 - [Snapshot, restore, and recovery drills](./RECOVERY.md) — the supported data recovery path.
 - [Document ownership](./DOCUMENT_OWNERSHIP.md) — why mutations to a lost owner are refused instead
   of rerouted.

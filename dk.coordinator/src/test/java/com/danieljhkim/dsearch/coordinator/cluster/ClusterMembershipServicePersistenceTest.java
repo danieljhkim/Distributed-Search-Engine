@@ -47,6 +47,18 @@ class ClusterMembershipServicePersistenceTest {
     }
 
     @Test
+    void repairPauseSurvivesCoordinatorRestart() {
+        Path stateFile = tempDir.resolve("coordinator-topology.properties");
+        ClusterMembershipService first = new ClusterMembershipService(config(), stateFile, java.time.Clock.systemUTC());
+        first.setRepairsPaused(true);
+
+        ClusterMembershipService recreated =
+                new ClusterMembershipService(config(), stateFile, java.time.Clock.systemUTC());
+
+        assertTrue(recreated.repairsPaused());
+    }
+
+    @Test
     void legacyStateWithoutFormatVersionRetainsTopology() throws IOException {
         Path stateFile = tempDir.resolve("coordinator-topology.properties");
         ClusterMembershipService beforeMigration =

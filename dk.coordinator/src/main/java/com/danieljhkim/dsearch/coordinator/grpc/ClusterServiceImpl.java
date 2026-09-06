@@ -5,10 +5,14 @@ import com.danieljhkim.dsearch.common.grpc.GrpcPeerIdentity;
 import com.danieljhkim.dsearch.common.grpc.GrpcPeerIdentityContext;
 import com.danieljhkim.dsearch.coordinator.cluster.ClusterMembershipService;
 import com.danieljhkim.dsearch.proto.cluster.ClusterServiceGrpc;
+import com.danieljhkim.dsearch.proto.cluster.ControlReplicaRepairsRequest;
+import com.danieljhkim.dsearch.proto.cluster.ControlReplicaRepairsResponse;
 import com.danieljhkim.dsearch.proto.cluster.DeregisterNodeRequest;
 import com.danieljhkim.dsearch.proto.cluster.DeregisterNodeResponse;
 import com.danieljhkim.dsearch.proto.cluster.GetClusterInfoRequest;
 import com.danieljhkim.dsearch.proto.cluster.GetClusterInfoResponse;
+import com.danieljhkim.dsearch.proto.cluster.GetReplicaRepairsRequest;
+import com.danieljhkim.dsearch.proto.cluster.GetReplicaRepairsResponse;
 import com.danieljhkim.dsearch.proto.cluster.GetShardMapRequest;
 import com.danieljhkim.dsearch.proto.cluster.GetShardMapResponse;
 import com.danieljhkim.dsearch.proto.cluster.HeartbeatRequest;
@@ -197,10 +201,17 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
                                 .setState(
                                         eligible
                                                 ? nodeId.equals(replicaSet.primaryNodeId()) ? "primary" : "replica"
-                                                : "unavailable")
+                                                : !membershipService.isIndexNodeHealthy(nodeId)
+                                                        ? "unavailable"
+                                                        : membershipService
+                                                                .replicaRepairState(nodeId)
+                                                                .name()
+                                                                .substring("REPLICA_REPAIR_STATE_".length())
+                                                                .toLowerCase())
                                 .build());
                     }
                 }
+                builder.addAllRepairs(membershipService.repairStatuses());
                 response = builder.build();
             }
             responseObserver.onNext(response);
@@ -262,6 +273,51 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
                     .withDescription("Failed to get cluster info for role: " + request.getRole())
                     .withCause(e)
                     .asRuntimeException());
+        }
+    }
+
+    @Override
+    public void getReplicaRepairs(
+            GetReplicaRepairsRequest request, StreamObserver<GetReplicaRepairsResponse> responseObserver) {
+        responseObserver.onNext(GetReplicaRepairsResponse.newBuilder()
+                .addAllRepairs(membershipService.repairStatuses())
+                .setPaused(membershipService.repairsPaused())
+                .build());
+        responseObserver.onCompleted();
+    }
+
+    @Override
+    public void controlReplicaRepairs(
+            ControlReplicaRepairsRequest request, StreamObserver<ControlReplicaRepairsResponse> responseObserver) {
+        try {
+            if (GrpcPeerIdentityContext.current() == null) {
+                throw Status.UNAUTHENTICATED
+                        .withDescription("Replica repair control requires an authenticated identity")
+                        .asRuntimeException();
+            }
+            boolean success =
+                    switch (request.getAction().trim().toLowerCase()) {
+                        case "pause" -> {
+                            membershipService.setRepairsPaused(true);
+                            yield true;
+                        }
+                        case "resume" -> {
+                            membershipService.setRepairsPaused(false);
+                            yield true;
+                        }
+                        case "retry" -> membershipService.retryRepair(request.getRepairId());
+                        default -> throw new IllegalArgumentException("action must be pause, resume, or retry");
+                    };
+            responseObserver.onNext(ControlReplicaRepairsResponse.newBuilder()
+                    .setSuccess(success)
+                    .setPaused(membershipService.repairsPaused())
+                    .build());
+            responseObserver.onCompleted();
+        } catch (StatusRuntimeException e) {
+            responseObserver.onError(e);
+        } catch (IllegalArgumentException e) {
+            responseObserver.onError(
+                    Status.INVALID_ARGUMENT.withDescription(e.getMessage()).asRuntimeException());
         }
     }
 

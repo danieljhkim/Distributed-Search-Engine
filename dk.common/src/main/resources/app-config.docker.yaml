@@ -84,6 +84,15 @@ indexing:
   minimumFreeDiskBytes: 104857600
   analyzer: "standard"
 
+replicaRepair:
+  enabled: true
+  intervalSeconds: 15
+  rpcDeadlineMillis: 5000
+  chunkBytes: 262144
+  maxSnapshotBytes: 1073741824
+  bandwidthBytesPerSecond: 10485760
+  maxConcurrentRepairs: 1
+
 coordinatorNodes:
   routingStrategy: "ROUND_ROBIN"
   componentLabel: "dsearch-coordinator-node"

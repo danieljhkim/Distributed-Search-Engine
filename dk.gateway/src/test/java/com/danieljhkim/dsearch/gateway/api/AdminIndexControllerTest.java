@@ -1,7 +1,9 @@
 package com.danieljhkim.dsearch.gateway.api;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -9,14 +11,21 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.gateway.api.dto.AdminAuditResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.AnalyzeResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.InspectSchemaResponseDto;
 import com.danieljhkim.dsearch.gateway.config.AdminAuthFilter;
 import com.danieljhkim.dsearch.gateway.service.GatewayAdminIndexService;
+import com.danieljhkim.dsearch.proto.cluster.ClusterServiceGrpc;
+import com.danieljhkim.dsearch.proto.cluster.ControlReplicaRepairsResponse;
+import com.danieljhkim.dsearch.proto.cluster.GetReplicaRepairsResponse;
+import com.danieljhkim.dsearch.proto.cluster.ReplicaRepairState;
+import com.danieljhkim.dsearch.proto.cluster.ReplicaRepairStatus;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -33,6 +42,9 @@ class AdminIndexControllerTest {
 
     @MockBean
     private GatewayAdminIndexService adminIndexService;
+
+    @MockBean(name = "clusterNodeClientManager")
+    private NodeClientManager<ClusterServiceGrpc.ClusterServiceBlockingStub> clusterNodeClientManager;
 
     @Test
     void createInspectReindexSwapAndRollbackReturnAuditableJson() throws Exception {
@@ -84,6 +96,41 @@ class AdminIndexControllerTest {
                 .andExpect(jsonPath("$.operation").value("alias-rollback"));
 
         verify(adminIndexService).createIndex(any(), any());
+    }
+
+    @Test
+    void repairEndpointsExposeProgressAndControlTheCoordinator() throws Exception {
+        ClusterServiceGrpc.ClusterServiceBlockingStub stub = mock(ClusterServiceGrpc.ClusterServiceBlockingStub.class);
+        when(clusterNodeClientManager.nextClient()).thenReturn(stub);
+        when(stub.withDeadlineAfter(anyLong(), eq(TimeUnit.SECONDS))).thenReturn(stub);
+        when(stub.getReplicaRepairs(any()))
+                .thenReturn(GetReplicaRepairsResponse.newBuilder()
+                        .setPaused(false)
+                        .addRepairs(ReplicaRepairStatus.newBuilder()
+                                .setRepairId("repair-1")
+                                .setShardId("tenant_r1")
+                                .setSourceNodeId("n0")
+                                .setTargetNodeId("n1")
+                                .setState(ReplicaRepairState.REPLICA_REPAIR_STATE_TRANSFERRING)
+                                .setBytesTransferred(10)
+                                .setTotalBytes(20)
+                                .build())
+                        .build());
+        when(stub.controlReplicaRepairs(any()))
+                .thenReturn(ControlReplicaRepairsResponse.newBuilder()
+                        .setSuccess(true)
+                        .setPaused(true)
+                        .build());
+
+        mockMvc.perform(get("/api/v1/admin/repairs"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.paused").value(false))
+                .andExpect(jsonPath("$.repairs[0].state").value("transferring"))
+                .andExpect(jsonPath("$.repairs[0].bytesTransferred").value(10));
+        mockMvc.perform(post("/api/v1/admin/repairs/pause"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.paused").value(true));
     }
 
     private static AdminAuditResponseDto audit(String operation, String alias, String index, String previous) {

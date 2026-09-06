@@ -66,8 +66,10 @@ then removed.
 
 If a replicated commit returns an uncertain failure, that shard is write-fenced for the lifetime
 of the manager and its uncommitted writer state is rolled back on close. Restart resolves the
-outcome from the latest valid Lucene commit. Automatic snapshot transfer, checksum comparison,
-and convergence of a restored or lagging replica belong to the separate replica-repair workflow.
+outcome from the latest valid Lucene commit. The coordinator repair loop compares each physical
+copy's logical partition, primary identity, placement generation, highest committed operation,
+document count, and canonical content checksum. Missing, lagging, wrong-generation, and divergent
+copies remain ineligible while a full checksummed snapshot is transferred and atomically installed.
 
 ## Reads and failover
 
@@ -83,8 +85,10 @@ Stale-generation replicas remain fenced from writes in either mode.
 
 ## Topology and observability
 
-`GetShardMap` exposes placement generation, primary/replica role, eligibility,
-acknowledgement policy, read consistency, and under-replicated count. `GET /cluster/health`
+`GetShardMap` exposes placement generation, primary/replica role, eligibility, current repair
+records, acknowledgement policy, read consistency, and under-replicated count. `GetReplicaRepairs`
+and `ControlReplicaRepairs` let an authenticated operator inspect, pause/resume, or retry repair
+without editing topology files. `GET /cluster/health`
 includes the bounded replication summary and failover count. Prometheus metrics cover
 under-replication, failover, apply outcomes, missing acknowledgements, and
 acknowledgement/apply latency without document- or shard-id labels.
@@ -107,7 +111,11 @@ factor one likewise requires reindexing into the historical layout.
 
 Adding or removing an index node changes some primary ranges and follower sets. Use the
 online handoff/rebalance workflow; editing configuration alone never moves Lucene data.
-An unavailable follower remains explicitly under-replicated until repair completes.
+An unavailable follower remains explicitly under-replicated until repair completes. Transfer
+staging is durable across target restarts and is resumed at the exact accepted byte offset. The
+target rejects foreground mutations while its shard is staged; the source takes its snapshot under
+the normal per-shard commit lock, and writes that race after that point are detected by the next
+manifest comparison rather than silently admitted as converged.
 
 ## Restarts, deletes, ids, and counters
 
