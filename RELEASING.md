@@ -91,11 +91,9 @@ approves the resulting release task before any version or changelog edit.
    authority.
 6. The release gate verifies the exact digests' source/version labels, SPDX
    SBOM and build-provenance attestations, applies the vulnerability policy in
-   `SECURITY.md`, and runs `scripts/docker-cluster-e2e.sh` with all four digest
-   references injected. The smoke test covers startup/readiness, model-backed
-   semantic search, writable data and cache mounts, the non-root/read-only/
-   capability-free profile, and graceful shutdown. It then creates and verifies
-   a keyless Cosign signature for each digest.
+   `SECURITY.md`, and then creates and verifies a keyless Cosign signature for
+   each digest. Docker cluster exercises remain available as manual scripts and
+   are not release gates.
 7. Only after every gate passes does the workflow promote those same manifests
    to the immutable version tag and, except for RC-tag patterns, `latest`.
    Promotion is rejected if an existing version tag names another digest. Keep

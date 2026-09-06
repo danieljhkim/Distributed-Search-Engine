@@ -10,7 +10,7 @@
 # still exactly intact once the fault is removed, and measures how long capacity
 # took to return on its own. The coordinator state volume is never reset.
 #
-# See docs/OPERABILITY.md for the runbook and the CI profile.
+# See docs/OPERABILITY.md for the manual runbook.
 
 set -Eeuo pipefail
 

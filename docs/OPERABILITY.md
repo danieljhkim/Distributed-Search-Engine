@@ -1,6 +1,6 @@
-# Operability gate: overload, storage exhaustion, and rolling restarts
+# Manual operability exercise: overload, storage exhaustion, and rolling restarts
 
-`scripts/docker-cluster-resilience.sh` is the resilience gate. It stands up the Docker Compose
+`scripts/docker-cluster-resilience.sh` is a manual resilience exercise. It stands up the Docker Compose
 topology exactly as `scripts/docker-cluster-e2e.sh` does — production mTLS profile, hardened
 containers, the same four images — and then drives the deployment through seven faults that
 production actually produces: request overload, exhausted admission capacity at two tiers, a slow
@@ -8,15 +8,15 @@ downstream, an ungracefully lost downstream, an index volume with no write headr
 index storage, a coordinator restart, and a rolling replacement of every query and index
 container.
 
-The functional end-to-end gate (`scripts/docker-cluster-e2e.sh`) proves the deployment is correct
-at steady state and can be recovered from a snapshot. This gate proves it stays *bounded and
+The functional end-to-end exercise (`scripts/docker-cluster-e2e.sh`) proves the deployment is correct
+at steady state and can be recovered from a snapshot. This exercise proves it stays *bounded and
 honest* while it is broken, and that capacity comes back on its own afterwards. Both share
 `scripts/lib/docker-cluster.sh`.
 
 ## The four invariants
 
 Every scenario asserts the same four things. A scenario that cannot assert all four is not part of
-this gate.
+this exercise.
 
 1. **Bounded.** Every request returns a definite HTTP status inside its budget. The budget is
    `requestLimits.requestTimeoutMillis` from `app-config.docker.yaml` plus a fixed allowance for
@@ -24,9 +24,9 @@ this gate.
    pass.
 2. **Explicit.** A `200` must carry real fan-out metadata (`SUCCESS` or `PARTIAL_FAILURE` with node
    counts) or an acknowledged mutation. A non-`200` must carry a structured error document with a
-   message. An empty result set that merely looks successful fails the gate.
+   message. An empty result set that merely looks successful fails the exercise.
 3. **Intact.** Once the fault is removed, all acknowledged writes are searchable *exactly once*.
-   The gate re-runs a marker query and compares both the total hit count and the full sorted set of
+   The exercise re-runs a marker query and compares both the total hit count and the full sorted set of
    document ids, so loss and duplicate application both fail.
 4. **Self-healing.** Capacity returns without operator action and without resetting the
    coordinator. The coordinator state volume is never deleted, the epoch must not change, and the
@@ -51,10 +51,10 @@ the write bit from inside the container — the Lucene volume is owned by the co
 that identity can revoke its own access — rather than remounting it, which keeps the fault inside
 the deployed topology instead of depending on how two Compose files merge a volume list.
 
-The gate reads `requestTimeoutMillis`, `maxConcurrentHttpRequests`, `maxConcurrentFanoutCalls`,
+The exercise reads `requestTimeoutMillis`, `maxConcurrentHttpRequests`, `maxConcurrentFanoutCalls`,
 `nodeExpirySeconds`, and `refreshIntervalSeconds` from
 `dk.common/src/main/resources/app-config.docker.yaml` instead of hard-coding them, so tightening a
-limit tightens the gate rather than silently invalidating it.
+limit tightens the exercise rather than silently invalidating it.
 
 The burst is retried up to three times. On a small runner the shell can take long enough to fork
 the burst that too few requests overlap; the retry keeps the gate deterministic in outcome without
@@ -63,7 +63,8 @@ weakening the assertion that both admission tiers must engage.
 ## Evidence
 
 Everything lands in `$DSEARCH_RESILIENCE_DIAGNOSTICS` (default
-`target/docker-resilience-diagnostics`), and CI uploads the whole directory.
+`target/docker-resilience-diagnostics`). Preserve the directory when retaining evidence from a
+manual exercise.
 
 | Artifact | Contents |
 | --- | --- |
@@ -102,23 +103,13 @@ Useful environment variables:
 
 Budget on a two-core runner: roughly 25 minutes of scenarios after image build and cluster startup.
 
-## CI profile
+## Availability
 
-The gate runs in `.github/workflows/resilience.yml`, separately from `ci.yml`, because it needs a
-long timeout and reruns the cluster many times:
+The repository does not run this Docker exercise in GitHub Actions. Run it manually when its
+operability evidence is needed. Runtime is roughly 25 minutes on a two-core machine after image
+build and cluster startup.
 
-- **Nightly**, at 04:00 UTC, on `main`.
-- **On demand**, via `workflow_dispatch`.
-- **On pull requests** that touch the gate itself, the shared harness library, the Compose topology,
-  or `app-config.docker.yaml` — the inputs whose behaviour the gate encodes.
-
-Runtime is roughly 35 minutes on a GitHub-hosted runner, most of it building the four images.
-
-It is deliberately *not* on the default pull-request path: `ci.yml` stays fast, and
-`scripts/docker-cluster-e2e.sh` remains the per-PR deployment gate. Diagnostics are uploaded on
-every run, pass or fail.
-
-When the gate fails, start with `resilience-report.md` to find the scenario, then
+When the exercise fails, start with `resilience-report.md` to find the scenario, then
 `fault-timeline.jsonl` for the exact injection time, then the matching
 `<scenario>-after-services.log` and `metrics/<scenario>-during.prom`.
 
