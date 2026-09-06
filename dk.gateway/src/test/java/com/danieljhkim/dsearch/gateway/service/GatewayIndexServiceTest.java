@@ -47,11 +47,15 @@ import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
 import io.grpc.ManagedChannel;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
+import io.prometheus.client.CollectorRegistry;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -579,6 +583,180 @@ class GatewayIndexServiceTest {
     }
 
     @Test
+    void oneReturnsAfterPrimaryWhileBoundedFollowersRemainObservableAndStopOnShutdown() throws Exception {
+        ReplicatedFixture fixture = replicatedFixture(3, ReplicaPlacement.DurabilityPolicy.ONE);
+        IndexRequestDto request = indexRequest("doc-one", Map.of("title", "one"));
+        request.setPartitionId("tenant-a");
+        request.setOperationId("operation-one");
+        request.setGeneration(11L);
+        var followers = fixture.manager()
+                .replicaWritePlan("tenant-a", "doc-one")
+                .targets()
+                .subList(1, 3);
+        CountDownLatch followersStarted = new CountDownLatch(2);
+        CountDownLatch releaseFollowers = new CountDownLatch(1);
+        CountDownLatch followersInterrupted = new CountDownLatch(2);
+        followers.forEach(target -> blockIndex(
+                fixture.stubs().get(target.nodeId()), followersStarted, releaseFollowers, followersInterrupted));
+        double cancelledBefore = metricValue("index", "cancelled");
+
+        try {
+            IndexResponseDto response = CompletableFuture.supplyAsync(
+                            () -> fixture.service().index(request))
+                    .get(1, TimeUnit.SECONDS);
+
+            assertThat(response.getAcknowledgements()).isEqualTo(1);
+            assertThat(response.getRequiredAcknowledgements()).isEqualTo(1);
+            assertThat(followersStarted.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(CollectorRegistry.defaultRegistry.getSampleValue("dsearch_replication_unacknowledged_replicas"))
+                    .isEqualTo(2.0);
+
+            fixture.service().shutdownReplication();
+
+            assertThat(followersInterrupted.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(metricValue("index", "cancelled") - cancelledBefore).isEqualTo(2.0);
+        } finally {
+            releaseFollowers.countDown();
+            fixture.service().shutdownReplication();
+        }
+    }
+
+    @Test
+    void quorumReturnsAfterPrimaryAndOneFollowerWithoutWaitingForBlockedFollower() throws Exception {
+        ReplicatedFixture fixture = replicatedFixture(3, ReplicaPlacement.DurabilityPolicy.QUORUM);
+        IndexRequestDto request = indexRequest("doc-quorum", Map.of("title", "quorum"));
+        request.setPartitionId("tenant-a");
+        request.setOperationId("operation-quorum");
+        request.setGeneration(21L);
+        var plan = fixture.manager().replicaWritePlan("tenant-a", "doc-quorum");
+        var blockedFollower = plan.targets().getLast();
+        CountDownLatch blockedStarted = new CountDownLatch(1);
+        CountDownLatch releaseBlocked = new CountDownLatch(1);
+        blockIndex(
+                fixture.stubs().get(blockedFollower.nodeId()), blockedStarted, releaseBlocked, new CountDownLatch(0));
+
+        try {
+            IndexResponseDto response = CompletableFuture.supplyAsync(
+                            () -> fixture.service().index(request))
+                    .get(1, TimeUnit.SECONDS);
+
+            assertThat(response.getAcknowledgements()).isEqualTo(2);
+            assertThat(response.getRequiredAcknowledgements()).isEqualTo(2);
+            assertThat(blockedStarted.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(fixture.requests().getFirst().getMutation().getReplica()).isFalse();
+        } finally {
+            releaseBlocked.countDown();
+            fixture.service().shutdownReplication();
+        }
+    }
+
+    @Test
+    void followerFailureAfterOneAcknowledgementLeavesObservableLagForRepair() throws Exception {
+        ReplicatedFixture fixture = replicatedFixture(3, ReplicaPlacement.DurabilityPolicy.ONE);
+        IndexRequestDto request = indexRequest("doc-lag", Map.of("title", "lag"));
+        request.setPartitionId("tenant-a");
+        request.setGeneration(25L);
+        var followers = fixture.manager()
+                .replicaWritePlan("tenant-a", "doc-lag")
+                .targets()
+                .subList(1, 3);
+        CountDownLatch failureStarted = new CountDownLatch(1);
+        CountDownLatch allowFailure = new CountDownLatch(1);
+        failIndexAfterRelease(fixture.stubs().get(followers.getFirst().nodeId()), failureStarted, allowFailure);
+        CountDownLatch blockedStarted = new CountDownLatch(1);
+        CountDownLatch releaseBlocked = new CountDownLatch(1);
+        blockIndex(
+                fixture.stubs().get(followers.getLast().nodeId()),
+                blockedStarted,
+                releaseBlocked,
+                new CountDownLatch(0));
+        double failuresBefore = metricValue("index", "retryable_failure");
+
+        try {
+            IndexResponseDto response = CompletableFuture.supplyAsync(
+                            () -> fixture.service().index(request))
+                    .get(1, TimeUnit.SECONDS);
+            assertThat(response.getAcknowledgements()).isEqualTo(1);
+            assertThat(failureStarted.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(blockedStarted.await(1, TimeUnit.SECONDS)).isTrue();
+
+            allowFailure.countDown();
+            awaitMetric("index", "retryable_failure", failuresBefore + 1);
+            assertThat(CollectorRegistry.defaultRegistry.getSampleValue("dsearch_replication_unacknowledged_replicas"))
+                    .isEqualTo(2.0);
+
+            releaseBlocked.countDown();
+            awaitReplicaLag(1.0);
+        } finally {
+            allowFailure.countDown();
+            releaseBlocked.countDown();
+            fixture.service().shutdownReplication();
+        }
+    }
+
+    @Test
+    void allStillWaitsForEveryReplica() throws Exception {
+        ReplicatedFixture fixture = replicatedFixture(3, ReplicaPlacement.DurabilityPolicy.ALL);
+        IndexRequestDto request = indexRequest("doc-all", Map.of("title", "all"));
+        request.setPartitionId("tenant-a");
+        request.setOperationId("operation-all");
+        request.setGeneration(31L);
+        var plan = fixture.manager().replicaWritePlan("tenant-a", "doc-all");
+        CountDownLatch blockedStarted = new CountDownLatch(1);
+        CountDownLatch releaseBlocked = new CountDownLatch(1);
+        blockIndex(
+                fixture.stubs().get(plan.targets().getLast().nodeId()),
+                blockedStarted,
+                releaseBlocked,
+                new CountDownLatch(0));
+        CompletableFuture<IndexResponseDto> response =
+                CompletableFuture.supplyAsync(() -> fixture.service().index(request));
+
+        try {
+            assertThat(blockedStarted.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(response.isDone()).isFalse();
+            releaseBlocked.countDown();
+
+            assertThat(response.get(1, TimeUnit.SECONDS).getAcknowledgements()).isEqualTo(3);
+        } finally {
+            releaseBlocked.countDown();
+            fixture.service().shutdownReplication();
+        }
+    }
+
+    @Test
+    void deleteUsesTheSameQuorumCompletionPointAndStableIdentity() throws Exception {
+        ReplicatedFixture fixture = replicatedFixture(3, ReplicaPlacement.DurabilityPolicy.QUORUM);
+        var plan = fixture.manager().replicaWritePlan("tenant-a", "doc-delete-quorum");
+        var blockedFollower = plan.targets().getLast();
+        CountDownLatch blockedStarted = new CountDownLatch(1);
+        CountDownLatch releaseBlocked = new CountDownLatch(1);
+        blockDelete(
+                fixture.stubs().get(blockedFollower.nodeId()), blockedStarted, releaseBlocked, new CountDownLatch(0));
+
+        try {
+            IndexResponseDto response = CompletableFuture.supplyAsync(
+                            () -> fixture.service().delete("doc-delete-quorum", "tenant-a", "delete-quorum", 41L))
+                    .get(1, TimeUnit.SECONDS);
+
+            assertThat(response.getAcknowledgements()).isEqualTo(2);
+            assertThat(response.getRequiredAcknowledgements()).isEqualTo(2);
+            assertThat(response.getOperationId()).isEqualTo("delete-quorum");
+            assertThat(response.getGeneration()).isEqualTo(41L);
+            assertThat(blockedStarted.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(fixture.deleteRequests().getFirst().getMutation().getReplica())
+                    .isFalse();
+            assertThat(fixture.deleteRequests()).allSatisfy(delete -> {
+                assertThat(delete.getMutation().getOperationId()).isEqualTo("delete-quorum");
+                assertThat(delete.getMutation().getOperationGeneration()).isEqualTo(41L);
+            });
+        } finally {
+            releaseBlocked.countDown();
+            fixture.service().shutdownReplication();
+        }
+    }
+
+    @Test
     void omittedGenerationUsesTheSharedPrimaryAcrossOlderAndRestartedGateways() {
         ReplicatedFixture fixture = replicatedFixture();
         GatewayIndexService olderGateway = fixture.service();
@@ -784,14 +962,20 @@ class GatewayIndexServiceTest {
     }
 
     private static ReplicatedFixture replicatedFixture(int replicationFactor) {
+        return replicatedFixture(replicationFactor, ReplicaPlacement.DurabilityPolicy.ALL);
+    }
+
+    private static ReplicatedFixture replicatedFixture(
+            int replicationFactor, ReplicaPlacement.DurabilityPolicy durabilityPolicy) {
         Map<String, IndexServiceGrpc.IndexServiceBlockingStub> stubs = new LinkedHashMap<>();
         Map<String, NodeClient<IndexServiceGrpc.IndexServiceBlockingStub>> clients = new LinkedHashMap<>();
         Map<String, AtomicLong> primaryGenerations = new ConcurrentHashMap<>();
         Map<String, Map<String, ReplicaMutationState>> states = new LinkedHashMap<>();
-        List<IndexDocumentRequest> requests = new ArrayList<>();
-        List<DeleteDocumentRequest> deleteRequests = new ArrayList<>();
+        List<IndexDocumentRequest> requests = Collections.synchronizedList(new ArrayList<>());
+        List<DeleteDocumentRequest> deleteRequests = Collections.synchronizedList(new ArrayList<>());
         AtomicBoolean failNextFollowerDelete = new AtomicBoolean();
-        for (String nodeId : List.of("n0", "n1")) {
+        List<String> nodeIds = List.of("n0", "n1", "n2").subList(0, Math.max(2, replicationFactor));
+        for (String nodeId : nodeIds) {
             IndexServiceGrpc.IndexServiceBlockingStub stub = mock(IndexServiceGrpc.IndexServiceBlockingStub.class);
             states.put(nodeId, new LinkedHashMap<>());
             lenient()
@@ -854,8 +1038,10 @@ class GatewayIndexServiceTest {
                 NodeRole.NODE_ROLE_INDEX,
                 IndexServiceGrpc::newBlockingStub,
                 replicationFactor,
-                ReplicaPlacement.DurabilityPolicy.ALL,
-                ReplicaPlacement.ReadConsistency.ACKNOWLEDGED);
+                durabilityPolicy,
+                durabilityPolicy == ReplicaPlacement.DurabilityPolicy.ALL
+                        ? ReplicaPlacement.ReadConsistency.ACKNOWLEDGED
+                        : ReplicaPlacement.ReadConsistency.AVAILABLE);
         return new ReplicatedFixture(
                 manager,
                 new GatewayIndexService(manager),
@@ -864,6 +1050,95 @@ class GatewayIndexServiceTest {
                 deleteRequests,
                 states,
                 failNextFollowerDelete);
+    }
+
+    private static void blockIndex(
+            IndexServiceGrpc.IndexServiceBlockingStub stub,
+            CountDownLatch started,
+            CountDownLatch release,
+            CountDownLatch interrupted) {
+        when(stub.indexDocument(any(IndexDocumentRequest.class))).thenAnswer(invocation -> {
+            IndexDocumentRequest request = invocation.getArgument(0);
+            started.countDown();
+            awaitRelease(release, interrupted);
+            return IndexDocumentResponse.newBuilder()
+                    .setId(request.getDocument().getId())
+                    .setSuccess(true)
+                    .setCommittedGeneration(request.getMutation().getOperationGeneration())
+                    .build();
+        });
+    }
+
+    private static void blockDelete(
+            IndexServiceGrpc.IndexServiceBlockingStub stub,
+            CountDownLatch started,
+            CountDownLatch release,
+            CountDownLatch interrupted) {
+        when(stub.deleteDocument(any(DeleteDocumentRequest.class))).thenAnswer(invocation -> {
+            DeleteDocumentRequest request = invocation.getArgument(0);
+            started.countDown();
+            awaitRelease(release, interrupted);
+            return DeleteDocumentResponse.newBuilder()
+                    .setSuccess(true)
+                    .setCommittedGeneration(request.getMutation().getOperationGeneration())
+                    .build();
+        });
+    }
+
+    private static void failIndexAfterRelease(
+            IndexServiceGrpc.IndexServiceBlockingStub stub, CountDownLatch started, CountDownLatch release) {
+        when(stub.indexDocument(any(IndexDocumentRequest.class))).thenAnswer(invocation -> {
+            started.countDown();
+            awaitRelease(release, new CountDownLatch(0));
+            throw Status.UNAVAILABLE
+                    .withDescription("test follower failed after acknowledgement")
+                    .asRuntimeException();
+        });
+    }
+
+    private static void awaitRelease(CountDownLatch release, CountDownLatch interrupted) {
+        try {
+            if (!release.await(5, TimeUnit.SECONDS)) {
+                throw Status.DEADLINE_EXCEEDED
+                        .withDescription("test follower remained blocked")
+                        .asRuntimeException();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            interrupted.countDown();
+            throw Status.CANCELLED
+                    .withDescription("test follower interrupted")
+                    .withCause(e)
+                    .asRuntimeException();
+        }
+    }
+
+    private static double metricValue(String mutation, String outcome) {
+        Double value = CollectorRegistry.defaultRegistry.getSampleValue(
+                "dsearch_replication_replica_attempts_total",
+                new String[] {"mutation", "outcome"},
+                new String[] {mutation, outcome});
+        return value == null ? 0.0 : value;
+    }
+
+    private static void awaitMetric(String mutation, String outcome, double expected) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+        while (metricValue(mutation, outcome) < expected && System.nanoTime() < deadline) {
+            Thread.sleep(5);
+        }
+        assertThat(metricValue(mutation, outcome)).isGreaterThanOrEqualTo(expected);
+    }
+
+    private static void awaitReplicaLag(double expected) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+        while (!Double.valueOf(expected)
+                        .equals(CollectorRegistry.defaultRegistry.getSampleValue(
+                                "dsearch_replication_unacknowledged_replicas"))
+                && System.nanoTime() < deadline) {
+            Thread.sleep(5);
+        }
+        assertThat(CollectorRegistry.defaultRegistry.getSampleValue("dsearch_replication_unacknowledged_replicas"))
+                .isEqualTo(expected);
     }
 
     private record ReplicatedFixture(
