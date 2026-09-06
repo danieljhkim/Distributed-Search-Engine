@@ -13,6 +13,7 @@ import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexItemResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexResponseDto;
+import com.danieljhkim.dsearch.gateway.api.dto.DocumentCountResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.GetDocumentResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
@@ -26,6 +27,7 @@ import com.danieljhkim.dsearch.proto.index.DeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.Document;
 import com.danieljhkim.dsearch.proto.index.Field;
+import com.danieljhkim.dsearch.proto.index.GetDocumentCountRequest;
 import com.danieljhkim.dsearch.proto.index.GetDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.GetDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentRequest;
@@ -193,6 +195,37 @@ public class GatewayIndexService {
                 resolvedPartitionId, response.getDocument().getId(), fields);
     }
 
+    /**
+     * Aggregates current committed Lucene counts from exactly one eligible copy
+     * of each logical shard. A partial observation is never represented as zero.
+     */
+    public DocumentCountResponseDto documentCount(String partitionId) {
+        String resolvedPartitionId = resolvePartitionId(partitionId);
+        ReplicaPlacement.ReadPlan readPlan = indexNodeClientManager.replicaReadPlan(resolvedPartitionId);
+        long count = 0L;
+        List<String> failed = new ArrayList<>();
+        for (ReplicaPlacement.ReadTarget target : readPlan.targets()) {
+            NodeClient<IndexServiceGrpc.IndexServiceBlockingStub> client =
+                    indexNodeClientManager.getClientMap().get(target.nodeId());
+            if (client == null || !client.isActive()) {
+                failed.add(target.logicalShardId());
+                continue;
+            }
+            try {
+                count += client.getStub()
+                        .withDeadlineAfter(Math.max(1, requestLimits.getRequestTimeoutMillis()), TimeUnit.MILLISECONDS)
+                        .getDocumentCount(GetDocumentCountRequest.newBuilder()
+                                .setPartitionId(target.storagePartitionId())
+                                .build())
+                        .getDocumentCount();
+            } catch (RuntimeException e) {
+                failed.add(target.logicalShardId());
+            }
+        }
+        return new DocumentCountResponseDto(
+                resolvedPartitionId, count, readPlan.unavailableLogicalShardIds(), List.copyOf(failed));
+    }
+
     /** Compatibility seam for older injected manager doubles; constructed managers always report at least one. */
     private IndexResponseDto legacyIndexViaOwner(String partitionId, Document document) {
         NodeClient<IndexServiceGrpc.IndexServiceBlockingStub> owner =
@@ -203,9 +236,6 @@ public class GatewayIndexService {
                         .setPartitionId(partitionId)
                         .setDocument(document)
                         .build());
-        if (response.getSuccess()) {
-            owner.incrementDocToShard(partitionId);
-        }
         return new IndexResponseDto(response.getId(), response.getSuccess());
     }
 
@@ -218,9 +248,6 @@ public class GatewayIndexService {
                         .setPartitionId(partitionId)
                         .setId(documentId)
                         .build());
-        if (response.getSuccess()) {
-            owner.decrementDocFromShard(partitionId);
-        }
         return new IndexResponseDto(documentId, response.getSuccess());
     }
 
@@ -263,9 +290,6 @@ public class GatewayIndexService {
                 committedGeneration = confirmCommittedGeneration(
                         target.primary(), operationGeneration, committedGeneration, response.getCommittedGeneration());
                 acknowledgements++;
-                if (!response.getDuplicate()) {
-                    target.client().incrementDocToShard(partitionId);
-                }
             } catch (RuntimeException e) {
                 lastFailure = e;
                 if (target.primary()) {
@@ -323,9 +347,6 @@ public class GatewayIndexService {
                 committedGeneration = confirmCommittedGeneration(
                         target.primary(), operationGeneration, committedGeneration, response.getCommittedGeneration());
                 acknowledgements++;
-                if (!response.getDuplicate()) {
-                    target.client().decrementDocFromShard(partitionId);
-                }
             } catch (RuntimeException e) {
                 lastFailure = e;
                 if (target.primary()) {
@@ -681,7 +702,6 @@ public class GatewayIndexService {
             resultSeen[responseIndex] = true;
             PreparedBulkDeleteItem item = ownerItems.get(responseIndex);
             if (itemResult.getSuccess()) {
-                owner.decrementDocFromShard(partitionId);
                 results.set(
                         item.requestIndex(),
                         new BulkDeleteItemResponseDto(item.requestIndex(), item.id(), "success", null));
@@ -747,7 +767,6 @@ public class GatewayIndexService {
             resultSeen[responseIndex] = true;
             PreparedBulkItem item = ownerItems.get(responseIndex);
             if (itemResult.getSuccess()) {
-                owner.incrementDocToShard(partitionId);
                 results.set(
                         item.requestIndex(),
                         new BulkIndexItemResponseDto(item.requestIndex(), item.id(), "success", null));

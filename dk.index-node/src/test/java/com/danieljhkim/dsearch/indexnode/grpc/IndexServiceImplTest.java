@@ -26,6 +26,8 @@ import com.danieljhkim.dsearch.proto.index.DeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.DeleteDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.Document;
 import com.danieljhkim.dsearch.proto.index.Field;
+import com.danieljhkim.dsearch.proto.index.GetDocumentCountRequest;
+import com.danieljhkim.dsearch.proto.index.GetDocumentCountResponse;
 import com.danieljhkim.dsearch.proto.index.GetDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.GetDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentRequest;
@@ -87,18 +89,58 @@ class IndexServiceImplTest {
 
             RecordingObserver<GetDocumentResponse> present = new RecordingObserver<>();
             service.getDocument(
-                    GetDocumentRequest.newBuilder().setPartitionId("tenant-a").setId("doc:[* TO *]").build(),
+                    GetDocumentRequest.newBuilder()
+                            .setPartitionId("tenant-a")
+                            .setId("doc:[* TO *]")
+                            .build(),
                     present);
             assertTrue(present.completed);
             assertNull(present.error);
             assertEquals("doc:[* TO *]", present.value.getDocument().getId());
-            assertEquals("stored content", present.value.getDocument().getFields(0).getValue());
+            assertEquals(
+                    "stored content", present.value.getDocument().getFields(0).getValue());
 
             RecordingObserver<GetDocumentResponse> absent = new RecordingObserver<>();
             service.getDocument(
-                    GetDocumentRequest.newBuilder().setPartitionId("tenant-a").setId("doc:*").build(), absent);
+                    GetDocumentRequest.newBuilder()
+                            .setPartitionId("tenant-a")
+                            .setId("doc:*")
+                            .build(),
+                    absent);
             assertInstanceOf(StatusRuntimeException.class, absent.error);
-            assertEquals(Status.Code.NOT_FOUND, ((StatusRuntimeException) absent.error).getStatus().getCode());
+            assertEquals(
+                    Status.Code.NOT_FOUND,
+                    ((StatusRuntimeException) absent.error).getStatus().getCode());
+        }
+    }
+
+    @Test
+    void documentCountComesFromCommittedLuceneStateRatherThanMutationHistory() throws IOException {
+        try (IndexManager manager = manager("count")) {
+            IndexServiceImpl service = new IndexServiceImpl(manager);
+            service.indexDocument(
+                    IndexDocumentRequest.newBuilder()
+                            .setPartitionId("tenant-a")
+                            .setDocument(document("doc-1", "first version"))
+                            .build(),
+                    new RecordingObserver<>());
+            service.indexDocument(
+                    IndexDocumentRequest.newBuilder()
+                            .setPartitionId("tenant-a")
+                            .setDocument(document("doc-1", "replacement version"))
+                            .build(),
+                    new RecordingObserver<>());
+
+            RecordingObserver<GetDocumentCountResponse> observer = new RecordingObserver<>();
+            service.getDocumentCount(
+                    GetDocumentCountRequest.newBuilder()
+                            .setPartitionId("tenant-a")
+                            .build(),
+                    observer);
+
+            assertTrue(observer.completed);
+            assertNull(observer.error);
+            assertEquals(1L, observer.value.getDocumentCount());
         }
     }
 

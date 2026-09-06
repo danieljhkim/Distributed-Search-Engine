@@ -67,16 +67,12 @@ class NodeClientManagerTest {
                 new NodeClientManager<>(clients, RoutingStrategy.LEAST_LOADED, NodeRole.NODE_ROLE_INDEX, ch -> "");
         String owner = manager.ownerNodeId("p0", "doc-1");
 
-        // Pile load onto the owner: least-loaded routing would move the document to its peer,
-        // leaving two Lucene copies of the same id.
-        clients.get(owner).getOrCreateShardState("p0").getDocCount().set(1_000);
-
         assertEquals(owner, manager.ownerNodeId("p0", "doc-1"));
         assertSame(clients.get(owner), manager.ownerClient("p0", "doc-1"));
     }
 
     @Test
-    void ownerRoutingDoesNotTouchDocCounts() {
+    void ownerRoutingIsStableAcrossRepeatedLookups() {
         Map<String, NodeClient<String>> clients = clients("0", "1");
         NodeClientManager<String> manager =
                 new NodeClientManager<>(clients, RoutingStrategy.LEAST_LOADED, NodeRole.NODE_ROLE_INDEX, ch -> "");
@@ -84,8 +80,7 @@ class NodeClientManagerTest {
         manager.ownerClient("p0", "doc-1");
         manager.ownerClient("p0", "doc-1");
 
-        assertEquals(0, clients.get("0").getShardDocCount("p0"));
-        assertEquals(0, clients.get("1").getShardDocCount("p0"));
+        assertEquals(manager.ownerNodeId("p0", "doc-1"), manager.ownerNodeId("p0", "doc-1"));
     }
 
     @Test
@@ -158,8 +153,6 @@ class NodeClientManagerTest {
         AtomicReference<NodeGroup> discovered =
                 new AtomicReference<>(nodeGroup(RoutingStrategy.LEAST_LOADED, "0", "1"));
         NodeClientManager<String> manager = discoveryBackedManager(RoutingStrategy.LEAST_LOADED, discovered, "0", "1");
-        manager.getClientMap().get("1").incrementDocToShard("p0");
-
         discovered.set(nodeGroup(RoutingStrategy.LEAST_LOADED, "1"));
         manager.refreshClientsFromCluster();
 
