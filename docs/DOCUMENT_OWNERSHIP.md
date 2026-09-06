@@ -30,8 +30,28 @@ the placement contract.
 
 Every replicated upsert and delete carries an `operation_id`, monotonic
 `operation_generation`, placement generation, primary id, target id, and explicit
-primary/replica role. The gateway commits the primary first and then its followers. Index
-nodes durably retain the latest identity and generation per document:
+primary/replica role. The gateway commits the primary first and then its followers. Generation
+ownership is explicit:
+
+- when an HTTP index request supplies `generation`, the caller owns ordering and must provide a
+  positive, monotonically increasing value for that document; the primary and every replica use
+  that exact value;
+- when `generation` is omitted (and for HTTP delete, which currently has no generation field), the
+  gateway sends protobuf `operation_generation = 0` only to the declared primary. Under the same
+  per-shard commit lock used for the mutation, the primary allocates one plus that document's last
+  committed generation, commits the mutation and fence together, and returns the positive value in
+  `committed_generation`;
+- the gateway forwards that returned positive value to followers and returns it in the HTTP index
+  response. Followers reject the zero allocation sentinel. Gateway clocks, process age, and restart
+  history therefore never participate in generated ordering.
+
+Concurrent gateways share the same primary allocation point for a document. Retrying an omitted-
+generation request with the same `operation_id` returns the already committed generation, so an
+uncertain primary response can be retried without allocating another operation. Reusing a committed
+generation with another identity or mutation type remains a conflict, and explicitly supplied values
+below the committed generation remain stale.
+
+Index nodes durably retain the latest identity and generation per document:
 
 - duplicate delivery of the same identity is an idempotent success;
 - reordered operations and stale placement generations are rejected;

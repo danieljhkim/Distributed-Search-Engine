@@ -619,6 +619,46 @@ class IndexServiceImplTest {
     }
 
     @Test
+    void onlyPrimaryAllocatesAnOmittedGenerationAndReturnsItForReplication() throws IOException {
+        try (IndexManager primaryManager = manager("primary-allocation")) {
+            IndexServiceImpl primary = new IndexServiceImpl(primaryManager, new AppConfig.RequestLimitsConfig(), "n0");
+            IndexDocumentRequest request = IndexDocumentRequest.newBuilder()
+                    .setPartitionId("tenant_r1")
+                    .setDocument(document("doc-1", "allocated"))
+                    .setMutation(mutation("op-1", 0, 5, "n0", "n0", false))
+                    .build();
+            RecordingObserver<IndexDocumentResponse> first = new RecordingObserver<>();
+            RecordingObserver<IndexDocumentResponse> retry = new RecordingObserver<>();
+
+            primary.indexDocument(request, first);
+            primary.indexDocument(request, retry);
+
+            assertEquals(1L, first.value.getCommittedGeneration());
+            assertFalse(first.value.getDuplicate());
+            assertEquals(1L, retry.value.getCommittedGeneration());
+            assertTrue(retry.value.getDuplicate());
+        }
+
+        try (IndexManager followerManager = manager("replica-allocation-rejected")) {
+            IndexServiceImpl follower =
+                    new IndexServiceImpl(followerManager, new AppConfig.RequestLimitsConfig(), "n1");
+            RecordingObserver<IndexDocumentResponse> rejected = new RecordingObserver<>();
+
+            follower.indexDocument(
+                    IndexDocumentRequest.newBuilder()
+                            .setPartitionId("tenant_r1")
+                            .setDocument(document("doc-1", "invalid allocation"))
+                            .setMutation(mutation("op-1", 0, 5, "n0", "n1", true))
+                            .build(),
+                    rejected);
+
+            assertEquals(
+                    Status.Code.INVALID_ARGUMENT,
+                    status(rejected.error).getStatus().getCode());
+        }
+    }
+
+    @Test
     void analyzeIndexReturnsAnalyzerIdentityTokensPositionsAndOffsets() throws IOException {
         try (IndexManager manager = manager("analyze")) {
             IndexServiceImpl service = new IndexServiceImpl(manager);

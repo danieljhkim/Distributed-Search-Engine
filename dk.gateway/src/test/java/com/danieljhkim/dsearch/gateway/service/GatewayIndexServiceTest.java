@@ -39,10 +39,13 @@ import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
 import io.grpc.ManagedChannel;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -544,12 +547,78 @@ class GatewayIndexServiceTest {
         assertThat(response.getAcknowledgements()).isEqualTo(2);
         assertThat(response.getRequiredAcknowledgements()).isEqualTo(2);
         assertThat(response.getOperationId()).isEqualTo("operation-42");
+        assertThat(fixture.requests())
+                .extracting(requestValue -> requestValue.getMutation().getReplica())
+                .containsExactly(false, true);
         fixture.stubs().values().forEach(stub -> {
             ArgumentCaptor<IndexDocumentRequest> captor = ArgumentCaptor.forClass(IndexDocumentRequest.class);
             verify(stub).indexDocument(captor.capture());
             assertThat(captor.getValue().getMutation().getOperationId()).isEqualTo("operation-42");
             assertThat(captor.getValue().getMutation().getOperationGeneration()).isEqualTo(42L);
         });
+    }
+
+    @Test
+    void omittedGenerationUsesTheSharedPrimaryAcrossOlderAndRestartedGateways() {
+        ReplicatedFixture fixture = replicatedFixture();
+        GatewayIndexService olderGateway = fixture.service();
+        GatewayIndexService restartedGateway = new GatewayIndexService(fixture.manager());
+
+        IndexRequestDto first = indexRequest("doc-shared", Map.of("title", "first"));
+        first.setPartitionId("tenant-a");
+        first.setOperationId("operation-first");
+        IndexRequestDto second = indexRequest("doc-shared", Map.of("title", "second"));
+        second.setPartitionId("tenant-a");
+        second.setOperationId("operation-second");
+        IndexRequestDto third = indexRequest("doc-shared", Map.of("title", "third"));
+        third.setPartitionId("tenant-a");
+        third.setOperationId("operation-third");
+
+        IndexResponseDto firstResponse = olderGateway.index(first);
+        IndexResponseDto secondResponse = restartedGateway.index(second);
+        IndexResponseDto thirdResponse = olderGateway.index(third);
+
+        assertThat(List.of(
+                        firstResponse.getGeneration(), secondResponse.getGeneration(), thirdResponse.getGeneration()))
+                .containsExactly(1L, 2L, 3L);
+        assertThat(fixture.requests())
+                .filteredOn(requestValue -> !requestValue.getMutation().getReplica())
+                .extracting(requestValue -> requestValue.getMutation().getOperationGeneration())
+                .containsExactly(0L, 0L, 0L);
+        assertThat(fixture.requests())
+                .filteredOn(requestValue -> requestValue.getMutation().getReplica())
+                .extracting(requestValue -> requestValue.getMutation().getOperationGeneration())
+                .containsExactly(1L, 2L, 3L);
+    }
+
+    @Test
+    void replicationFactorOneStillAllocatesAndReturnsThePrimaryGeneration() {
+        ReplicatedFixture fixture = replicatedFixture(1);
+        IndexRequestDto request = indexRequest("doc-single-copy", Map.of("title", "single"));
+        request.setPartitionId("tenant-a");
+        request.setOperationId("operation-single");
+
+        IndexResponseDto response = fixture.service().index(request);
+
+        assertThat(response.getGeneration()).isEqualTo(1L);
+        assertThat(response.getAcknowledgements()).isEqualTo(1);
+        assertThat(response.getRequiredAcknowledgements()).isEqualTo(1);
+        assertThat(fixture.requests()).hasSize(1);
+        assertThat(fixture.requests().getFirst().getMutation().getReplica()).isFalse();
+        assertThat(fixture.requests().getFirst().getMutation().getOperationGeneration())
+                .isZero();
+    }
+
+    @Test
+    void callerProvidedGenerationMustBePositive() {
+        ReplicatedFixture fixture = replicatedFixture();
+        IndexRequestDto request = indexRequest("doc-invalid-generation", Map.of("title", "invalid"));
+        request.setGeneration(0L);
+
+        assertThatThrownBy(() -> fixture.service().index(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("generation must be positive");
+        assertThat(fixture.requests()).isEmpty();
     }
 
     @Test
@@ -596,8 +665,14 @@ class GatewayIndexServiceTest {
     }
 
     private static ReplicatedFixture replicatedFixture() {
+        return replicatedFixture(2);
+    }
+
+    private static ReplicatedFixture replicatedFixture(int replicationFactor) {
         Map<String, IndexServiceGrpc.IndexServiceBlockingStub> stubs = new LinkedHashMap<>();
         Map<String, NodeClient<IndexServiceGrpc.IndexServiceBlockingStub>> clients = new LinkedHashMap<>();
+        Map<String, AtomicLong> primaryGenerations = new ConcurrentHashMap<>();
+        List<IndexDocumentRequest> requests = new ArrayList<>();
         for (String nodeId : List.of("n0", "n1")) {
             IndexServiceGrpc.IndexServiceBlockingStub stub = mock(IndexServiceGrpc.IndexServiceBlockingStub.class);
             lenient()
@@ -605,10 +680,18 @@ class GatewayIndexServiceTest {
                     .thenReturn(stub);
             lenient().when(stub.indexDocument(any(IndexDocumentRequest.class))).thenAnswer(invocation -> {
                 IndexDocumentRequest request = invocation.getArgument(0);
+                requests.add(request);
+                long requestedGeneration = request.getMutation().getOperationGeneration();
+                long committedGeneration = requestedGeneration;
+                if (!request.getMutation().getReplica() && requestedGeneration == 0) {
+                    committedGeneration = primaryGenerations
+                            .computeIfAbsent(request.getDocument().getId(), ignored -> new AtomicLong())
+                            .incrementAndGet();
+                }
                 return IndexDocumentResponse.newBuilder()
                         .setId(request.getDocument().getId())
                         .setSuccess(true)
-                        .setCommittedGeneration(request.getMutation().getOperationGeneration())
+                        .setCommittedGeneration(committedGeneration)
                         .build();
             });
             stubs.put(nodeId, stub);
@@ -619,16 +702,17 @@ class GatewayIndexServiceTest {
                 RoutingStrategy.ROUND_ROBIN,
                 NodeRole.NODE_ROLE_INDEX,
                 IndexServiceGrpc::newBlockingStub,
-                2,
+                replicationFactor,
                 ReplicaPlacement.DurabilityPolicy.ALL,
                 ReplicaPlacement.ReadConsistency.ACKNOWLEDGED);
-        return new ReplicatedFixture(manager, new GatewayIndexService(manager), stubs);
+        return new ReplicatedFixture(manager, new GatewayIndexService(manager), stubs, requests);
     }
 
     private record ReplicatedFixture(
             NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> manager,
             GatewayIndexService service,
-            Map<String, IndexServiceGrpc.IndexServiceBlockingStub> stubs) {}
+            Map<String, IndexServiceGrpc.IndexServiceBlockingStub> stubs,
+            List<IndexDocumentRequest> requests) {}
 
     private static BulkDeleteRequestDto bulkDeleteRequest(String partitionId, String... ids) {
         BulkDeleteRequestDto request = new BulkDeleteRequestDto();
