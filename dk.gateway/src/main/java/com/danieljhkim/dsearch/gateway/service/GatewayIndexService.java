@@ -39,6 +39,7 @@ import io.grpc.StatusRuntimeException;
 import io.prometheus.client.Counter;
 import io.prometheus.client.Gauge;
 import io.prometheus.client.Histogram;
+import jakarta.annotation.PreDestroy;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -47,7 +48,20 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -80,20 +94,67 @@ public class GatewayIndexService {
             .name("dsearch_replication_unacknowledged_replicas")
             .help("Replica attempts missing from the most recently completed mutation")
             .register();
+    private static final Counter REPLICA_ATTEMPT_OUTCOMES = Counter.build()
+            .name("dsearch_replication_replica_attempts_total")
+            .help("Follower replica attempt outcomes, including attempts completed after client acknowledgement")
+            .labelNames("mutation", "outcome")
+            .register();
+    private static final int MAX_REPLICA_THREADS = 8;
+    private static final int MAX_QUEUED_REPLICA_ATTEMPTS = 256;
+    private static final AtomicLong REPLICATION_SEQUENCE = new AtomicLong();
+    private static final AtomicLong LATEST_COMPLETED_SEQUENCE = new AtomicLong();
 
     private final NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> indexNodeClientManager;
     private final AppConfig.RequestLimitsConfig requestLimits;
+    private final ThreadPoolExecutor replicaExecutor;
+    private final Set<TrackedReplicaAttempt> replicaAttempts = ConcurrentHashMap.newKeySet();
+    private final AtomicBoolean acceptingReplicaAttempts = new AtomicBoolean(true);
 
     @Autowired
     public GatewayIndexService(
             NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> indexNodeClientManager, AppConfig appConfig) {
         this.indexNodeClientManager = indexNodeClientManager;
         this.requestLimits = RequestLimitsValidator.limitsOrDefaults(appConfig.getRequestLimits());
+        this.replicaExecutor = newReplicaExecutor();
     }
 
     GatewayIndexService(NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> indexNodeClientManager) {
         this.indexNodeClientManager = indexNodeClientManager;
         this.requestLimits = new AppConfig.RequestLimitsConfig();
+        this.replicaExecutor = newReplicaExecutor();
+    }
+
+    private static ThreadPoolExecutor newReplicaExecutor() {
+        AtomicInteger threadNumber = new AtomicInteger();
+        ThreadFactory threadFactory = runnable -> {
+            Thread thread = new Thread(runnable, "gateway-replica-" + threadNumber.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        };
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(
+                MAX_REPLICA_THREADS,
+                MAX_REPLICA_THREADS,
+                1,
+                TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(MAX_QUEUED_REPLICA_ATTEMPTS),
+                threadFactory,
+                new ThreadPoolExecutor.AbortPolicy());
+        executor.allowCoreThreadTimeOut(true);
+        return executor;
+    }
+
+    @PreDestroy
+    void shutdownReplication() {
+        if (!acceptingReplicaAttempts.compareAndSet(true, false)) {
+            return;
+        }
+        replicaAttempts.forEach(attempt -> attempt.cancel(true));
+        replicaExecutor.shutdownNow();
+        try {
+            replicaExecutor.awaitTermination(1, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     public IndexResponseDto index(IndexRequestDto requestDto) {
@@ -254,20 +315,9 @@ public class GatewayIndexService {
     private IndexResponseDto replicateIndex(
             String partitionId, Document document, String operationId, long operationGeneration) {
         var plan = indexNodeClientManager.replicaWritePlan(partitionId, document.getId());
-        long deadlineNanos = replicationDeadlineNanos();
-        long started = System.nanoTime();
-        int acknowledgements = 0;
-        long committedGeneration = operationGeneration;
-        RuntimeException lastFailure = null;
-        for (var target : plan.targets()) {
-            if (!target.active() || target.client() == null) {
-                lastFailure = new NodeUnavailableException(
-                        target.nodeId(),
-                        "Replica " + target.nodeId() + " is unavailable for logical shard "
-                                + plan.replicaSet().shardId());
-                continue;
-            }
-            try {
+        ReplicationResult result;
+        try {
+            result = replicateMutation(plan, operationGeneration, "index", (target, generation, deadlineNanos) -> {
                 IndexDocumentResponse response = target.client()
                         .getStub()
                         .withDeadlineAfter(remainingMillis(deadlineNanos), TimeUnit.MILLISECONDS)
@@ -279,7 +329,7 @@ public class GatewayIndexService {
                                         target.nodeId(),
                                         target.primary(),
                                         operationId,
-                                        target.primary() ? operationGeneration : committedGeneration,
+                                        generation,
                                         partitionId))
                                 .build());
                 if (!response.getSuccess()) {
@@ -287,86 +337,191 @@ public class GatewayIndexService {
                             .withDescription("replica returned an unsuccessful durable index response")
                             .asRuntimeException();
                 }
-                committedGeneration = confirmCommittedGeneration(
-                        target.primary(), operationGeneration, committedGeneration, response.getCommittedGeneration());
-                acknowledgements++;
-            } catch (RuntimeException e) {
-                lastFailure = e;
-                if (target.primary()) {
-                    recordAck(plan, acknowledgements, started, false);
-                    throw e;
-                }
-            }
+                return response.getCommittedGeneration();
+            });
+        } catch (ReplicationException e) {
+            throw e.failure();
         }
-        requireAcknowledgements(plan, acknowledgements, lastFailure, started);
         return new IndexResponseDto(
                 document.getId(),
                 true,
                 operationId,
-                committedGeneration,
-                acknowledgements,
+                result.committedGeneration(),
+                result.acknowledgements(),
                 plan.replicaSet().requiredAcknowledgements());
     }
 
     private IndexResponseDto replicateDelete(
             String partitionId, String documentId, String operationId, long operationGeneration) {
         var plan = indexNodeClientManager.replicaWritePlan(partitionId, documentId);
+        try {
+            ReplicationResult result =
+                    replicateMutation(plan, operationGeneration, "delete", (target, generation, deadlineNanos) -> {
+                        DeleteDocumentResponse response = target.client()
+                                .getStub()
+                                .withDeadlineAfter(remainingMillis(deadlineNanos), TimeUnit.MILLISECONDS)
+                                .deleteDocument(DeleteDocumentRequest.newBuilder()
+                                        .setPartitionId(target.storagePartitionId())
+                                        .setId(documentId)
+                                        .setMutation(mutationMetadata(
+                                                plan.replicaSet(),
+                                                target.nodeId(),
+                                                target.primary(),
+                                                operationId,
+                                                generation,
+                                                partitionId))
+                                        .build());
+                        if (!response.getSuccess()) {
+                            throw Status.INTERNAL
+                                    .withDescription("replica returned an unsuccessful durable delete response")
+                                    .asRuntimeException();
+                        }
+                        return response.getCommittedGeneration();
+                    });
+            return new IndexResponseDto(
+                    documentId,
+                    true,
+                    operationId,
+                    result.committedGeneration(),
+                    result.acknowledgements(),
+                    plan.replicaSet().requiredAcknowledgements());
+        } catch (RuntimeException e) {
+            if (e instanceof ReplicationException replicationException) {
+                throw new DeleteReplicationException(
+                        replicationException.failure(), operationId, replicationException.committedGeneration());
+            }
+            throw new DeleteReplicationException(e, operationId, operationGeneration);
+        }
+    }
+
+    private ReplicationResult replicateMutation(
+            NodeClientManager.ReplicaWritePlan<IndexServiceGrpc.IndexServiceBlockingStub> plan,
+            long operationGeneration,
+            String mutationType,
+            ReplicaCommit commit) {
         long deadlineNanos = replicationDeadlineNanos();
         long started = System.nanoTime();
-        int acknowledgements = 0;
-        long committedGeneration = operationGeneration;
-        RuntimeException lastFailure = null;
-        for (var target : plan.targets()) {
-            if (!target.active() || target.client() == null) {
-                lastFailure = new NodeUnavailableException(
-                        target.nodeId(),
-                        "Replica " + target.nodeId() + " is unavailable for logical shard "
-                                + plan.replicaSet().shardId());
+        long sequence = REPLICATION_SEQUENCE.incrementAndGet();
+        if (!acceptingReplicaAttempts.get()) {
+            throw Status.CANCELLED
+                    .withDescription("gateway is shutting down; replicated mutation was not admitted")
+                    .asRuntimeException();
+        }
+        var primary = plan.targets().getFirst();
+        long committedGeneration;
+        try {
+            long responseGeneration = commit.apply(primary, operationGeneration, deadlineNanos);
+            committedGeneration =
+                    confirmCommittedGeneration(true, operationGeneration, operationGeneration, responseGeneration);
+        } catch (RuntimeException e) {
+            recordAck(plan, 0, started, false, sequence);
+            throw e;
+        }
+
+        ReplicationState state = new ReplicationState(plan, mutationType, sequence);
+        List<TrackedReplicaAttempt> attempts = new ArrayList<>();
+        for (var follower : plan.targets().subList(1, plan.targets().size())) {
+            if (!follower.active() || follower.client() == null) {
+                state.complete(FollowerOutcome.failed(
+                        new NodeUnavailableException(
+                                follower.nodeId(),
+                                "Replica " + follower.nodeId() + " is unavailable for logical shard "
+                                        + plan.replicaSet().shardId()),
+                        "unavailable"));
                 continue;
             }
+            TrackedReplicaAttempt attempt = new TrackedReplicaAttempt(state, () -> {
+                try {
+                    long responseGeneration = commit.apply(follower, committedGeneration, deadlineNanos);
+                    confirmCommittedGeneration(false, operationGeneration, committedGeneration, responseGeneration);
+                    return FollowerOutcome.success();
+                } catch (RuntimeException e) {
+                    String outcome = Thread.currentThread().isInterrupted() ? "cancelled" : "retryable_failure";
+                    return FollowerOutcome.failed(e, outcome);
+                }
+            });
+            attempts.add(attempt);
+            submitReplicaAttempt(attempt);
+        }
+
+        int acknowledgements;
+        try {
+            awaitRequiredAcknowledgements(plan, state, deadlineNanos);
+            acknowledgements = completeAcknowledgement(plan, state, started);
+        } catch (RuntimeException e) {
+            attempts.forEach(attempt -> attempt.cancel(true));
+            int observedAcknowledgements = state.acknowledgements.get();
+            recordAck(plan, observedAcknowledgements, started, false, sequence);
+            throw new ReplicationException(e, committedGeneration);
+        }
+        return new ReplicationResult(committedGeneration, acknowledgements);
+    }
+
+    private void submitReplicaAttempt(TrackedReplicaAttempt attempt) {
+        if (!acceptingReplicaAttempts.get()) {
+            attempt.reject(Status.CANCELLED
+                    .withDescription("gateway is shutting down; follower replication was not admitted")
+                    .asRuntimeException());
+            return;
+        }
+        replicaAttempts.add(attempt);
+        try {
+            replicaExecutor.execute(attempt);
+        } catch (RejectedExecutionException e) {
+            replicaAttempts.remove(attempt);
+            attempt.reject(e);
+        }
+    }
+
+    private void awaitRequiredAcknowledgements(
+            NodeClientManager.ReplicaWritePlan<IndexServiceGrpc.IndexServiceBlockingStub> plan,
+            ReplicationState state,
+            long deadlineNanos) {
+        int required = plan.replicaSet().requiredAcknowledgements();
+        if (required == 1) {
+            return;
+        }
+        int completedFollowers = 0;
+        int followerCount = plan.targets().size() - 1;
+        while (state.acknowledgements.get() < required && completedFollowers < followerCount) {
             try {
-                DeleteDocumentResponse response = target.client()
-                        .getStub()
-                        .withDeadlineAfter(remainingMillis(deadlineNanos), TimeUnit.MILLISECONDS)
-                        .deleteDocument(DeleteDocumentRequest.newBuilder()
-                                .setPartitionId(target.storagePartitionId())
-                                .setId(documentId)
-                                .setMutation(mutationMetadata(
-                                        plan.replicaSet(),
-                                        target.nodeId(),
-                                        target.primary(),
-                                        operationId,
-                                        target.primary() ? operationGeneration : committedGeneration,
-                                        partitionId))
-                                .build());
-                if (!response.getSuccess()) {
-                    throw Status.INTERNAL
-                            .withDescription("replica returned an unsuccessful durable delete response")
+                if (state.completions.poll(remainingMillis(deadlineNanos), TimeUnit.MILLISECONDS) == null) {
+                    throw Status.DEADLINE_EXCEEDED
+                            .withDescription("replication acknowledgement deadline exhausted")
                             .asRuntimeException();
                 }
-                committedGeneration = confirmCommittedGeneration(
-                        target.primary(), operationGeneration, committedGeneration, response.getCommittedGeneration());
-                acknowledgements++;
-            } catch (RuntimeException e) {
-                lastFailure = e;
-                if (target.primary()) {
-                    recordAck(plan, acknowledgements, started, false);
-                    throw e;
-                }
+                completedFollowers++;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw Status.CANCELLED
+                        .withDescription("replication acknowledgement wait interrupted")
+                        .withCause(e)
+                        .asRuntimeException();
             }
         }
-        try {
-            requireAcknowledgements(plan, acknowledgements, lastFailure, started);
-        } catch (RuntimeException e) {
-            throw new DeleteReplicationException(e, operationId, committedGeneration);
+        int acknowledgements = state.acknowledgements.get();
+        if (acknowledgements < required) {
+            RuntimeException lastFailure = state.lastFailure.get();
+            throw Status.UNAVAILABLE
+                    .withDescription("replicated mutation reached " + acknowledgements + " acknowledgements but policy "
+                            + indexNodeClientManager
+                                    .getDurabilityPolicy()
+                                    .name()
+                                    .toLowerCase() + " requires " + required)
+                    .withCause(lastFailure)
+                    .asRuntimeException();
         }
-        return new IndexResponseDto(
-                documentId,
-                true,
-                operationId,
-                committedGeneration,
-                acknowledgements,
-                plan.replicaSet().requiredAcknowledgements());
+    }
+
+    private int completeAcknowledgement(
+            NodeClientManager.ReplicaWritePlan<IndexServiceGrpc.IndexServiceBlockingStub> plan,
+            ReplicationState state,
+            long started) {
+        int acknowledgements = state.acknowledgements.get();
+        recordAck(plan, acknowledgements, started, true, state.sequence);
+        state.clientCompleted.set(true);
+        state.updateLatestLag();
+        return acknowledgements;
     }
 
     private static long confirmCommittedGeneration(
@@ -426,35 +581,18 @@ public class GatewayIndexService {
                 .build();
     }
 
-    private void requireAcknowledgements(
-            NodeClientManager.ReplicaWritePlan<IndexServiceGrpc.IndexServiceBlockingStub> plan,
-            int acknowledgements,
-            RuntimeException lastFailure,
-            long started) {
-        boolean success = acknowledgements >= plan.replicaSet().requiredAcknowledgements();
-        recordAck(plan, acknowledgements, started, success);
-        if (!success) {
-            throw Status.UNAVAILABLE
-                    .withDescription("replicated mutation reached " + acknowledgements + " acknowledgements but policy "
-                            + indexNodeClientManager
-                                    .getDurabilityPolicy()
-                                    .name()
-                                    .toLowerCase() + " requires "
-                            + plan.replicaSet().requiredAcknowledgements())
-                    .withCause(lastFailure)
-                    .asRuntimeException();
-        }
-    }
-
     private void recordAck(
             NodeClientManager.ReplicaWritePlan<IndexServiceGrpc.IndexServiceBlockingStub> plan,
             int acknowledgements,
             long started,
-            boolean success) {
+            boolean success,
+            long sequence) {
         String policy = indexNodeClientManager.getDurabilityPolicy().name().toLowerCase();
         ACK_OUTCOMES.labels(policy, success ? "acknowledged" : "insufficient").inc();
         ACK_LATENCY.observe((System.nanoTime() - started) / 1_000_000_000.0);
-        REPLICA_LAG.set(Math.max(0, plan.targets().size() - acknowledgements));
+        if (LATEST_COMPLETED_SEQUENCE.accumulateAndGet(sequence, Math::max) == sequence) {
+            REPLICA_LAG.set(Math.max(0, plan.targets().size() - acknowledgements));
+        }
     }
 
     private long replicationDeadlineNanos() {
@@ -929,6 +1067,134 @@ public class GatewayIndexService {
 
     private static Long positiveGeneration(long generation) {
         return generation > 0 ? generation : null;
+    }
+
+    @FunctionalInterface
+    private interface ReplicaCommit {
+        long apply(
+                NodeClientManager.ReplicaTarget<IndexServiceGrpc.IndexServiceBlockingStub> target,
+                long operationGeneration,
+                long deadlineNanos);
+    }
+
+    private record ReplicationResult(long committedGeneration, int acknowledgements) {}
+
+    private record FollowerOutcome(boolean acknowledged, RuntimeException failure, String metricOutcome) {
+        private static FollowerOutcome success() {
+            return new FollowerOutcome(true, null, "acknowledged");
+        }
+
+        private static FollowerOutcome failed(RuntimeException failure, String metricOutcome) {
+            return new FollowerOutcome(false, failure, metricOutcome);
+        }
+    }
+
+    private final class ReplicationState {
+        private final NodeClientManager.ReplicaWritePlan<IndexServiceGrpc.IndexServiceBlockingStub> plan;
+        private final String mutationType;
+        private final long sequence;
+        private final AtomicInteger acknowledgements = new AtomicInteger(1);
+        private final AtomicReference<RuntimeException> lastFailure = new AtomicReference<>();
+        private final BlockingQueue<Boolean> completions = new java.util.concurrent.LinkedBlockingQueue<>();
+        private final AtomicBoolean clientCompleted = new AtomicBoolean();
+
+        private ReplicationState(
+                NodeClientManager.ReplicaWritePlan<IndexServiceGrpc.IndexServiceBlockingStub> plan,
+                String mutationType,
+                long sequence) {
+            this.plan = plan;
+            this.mutationType = mutationType;
+            this.sequence = sequence;
+        }
+
+        private void complete(FollowerOutcome outcome) {
+            if (outcome.acknowledged()) {
+                acknowledgements.incrementAndGet();
+            } else {
+                lastFailure.set(outcome.failure());
+            }
+            REPLICA_ATTEMPT_OUTCOMES
+                    .labels(mutationType, outcome.metricOutcome())
+                    .inc();
+            completions.offer(Boolean.TRUE);
+            if (clientCompleted.get()) {
+                updateLatestLag();
+            }
+        }
+
+        private void updateLatestLag() {
+            if (LATEST_COMPLETED_SEQUENCE.get() == sequence) {
+                REPLICA_LAG.set(Math.max(0, plan.targets().size() - acknowledgements.get()));
+            }
+        }
+    }
+
+    private final class TrackedReplicaAttempt extends FutureTask<FollowerOutcome> {
+        private final ReplicationState state;
+        private final AtomicBoolean outcomeRecorded = new AtomicBoolean();
+
+        private TrackedReplicaAttempt(ReplicationState state, java.util.concurrent.Callable<FollowerOutcome> call) {
+            super(call);
+            this.state = state;
+        }
+
+        private void reject(RuntimeException failure) {
+            recordOutcome(FollowerOutcome.failed(failure, "rejected"));
+            cancel(false);
+        }
+
+        @Override
+        protected void done() {
+            replicaAttempts.remove(this);
+            try {
+                recordOutcome(get());
+            } catch (CancellationException e) {
+                recordOutcome(FollowerOutcome.failed(
+                        Status.CANCELLED
+                                .withDescription("follower replication attempt cancelled")
+                                .withCause(e)
+                                .asRuntimeException(),
+                        "cancelled"));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                recordOutcome(FollowerOutcome.failed(
+                        Status.CANCELLED
+                                .withDescription("interrupted while collecting follower replication outcome")
+                                .withCause(e)
+                                .asRuntimeException(),
+                        "cancelled"));
+            } catch (ExecutionException e) {
+                RuntimeException failure = e.getCause() instanceof RuntimeException runtimeException
+                        ? runtimeException
+                        : new IllegalStateException("follower replication attempt failed", e.getCause());
+                recordOutcome(FollowerOutcome.failed(failure, "retryable_failure"));
+            }
+        }
+
+        private void recordOutcome(FollowerOutcome outcome) {
+            if (outcomeRecorded.compareAndSet(false, true)) {
+                state.complete(outcome);
+            }
+        }
+    }
+
+    private static final class ReplicationException extends RuntimeException {
+        private final RuntimeException failure;
+        private final long committedGeneration;
+
+        private ReplicationException(RuntimeException failure, long committedGeneration) {
+            super(failure);
+            this.failure = failure;
+            this.committedGeneration = committedGeneration;
+        }
+
+        private RuntimeException failure() {
+            return failure;
+        }
+
+        private long committedGeneration() {
+            return committedGeneration;
+        }
     }
 
     private static final class DeleteReplicationException extends RuntimeException {
