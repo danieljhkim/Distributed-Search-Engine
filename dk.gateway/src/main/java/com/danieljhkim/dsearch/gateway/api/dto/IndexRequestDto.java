@@ -13,7 +13,10 @@ public class IndexRequestDto {
     private Map<String, String> fields;
     /** Stable retry identity. Omitted values are generated for this request. */
     private String operationId;
-    /** Caller-monotonic document generation. Omitted values use the gateway's monotonic clock. */
+    /**
+     * Caller-monotonic document generation. When omitted, the authoritative shard primary
+     * durably allocates the next generation for this document.
+     */
     private Long generation;
 
     @Size(max = 64, message = "partitionId must be at most 64 characters") @Pattern(

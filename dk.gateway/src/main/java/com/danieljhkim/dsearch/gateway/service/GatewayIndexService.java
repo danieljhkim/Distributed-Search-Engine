@@ -41,7 +41,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -58,8 +57,9 @@ import org.springframework.web.server.ResponseStatusException;
 public class GatewayIndexService {
 
     private static final String DEFAULT_PARTITION_ID = "default";
-    private static final AtomicLong GENERATED_OPERATION_GENERATION =
-            new AtomicLong(System.currentTimeMillis() * 1_000L);
+    /** Protobuf sentinel asking the authoritative primary to allocate the next document generation. */
+    private static final long ALLOCATE_OPERATION_GENERATION = 0L;
+
     private static final Counter ACK_OUTCOMES = Counter.build()
             .name("dsearch_replication_acknowledgements_total")
             .help("Replicated mutation acknowledgement outcomes by bounded policy and outcome")
@@ -114,9 +114,7 @@ public class GatewayIndexService {
                         || requestDto.getOperationId().isBlank()
                 ? UUID.randomUUID().toString()
                 : requestDto.getOperationId();
-        long operationGeneration = requestDto.getGeneration() == null
-                ? GENERATED_OPERATION_GENERATION.incrementAndGet()
-                : requestDto.getGeneration();
+        long operationGeneration = resolveOperationGeneration(requestDto.getGeneration());
         if (indexNodeClientManager.getReplicationFactor() == 0) {
             return legacyIndexViaOwner(partitionId, docBuilder.build());
         }
@@ -133,11 +131,7 @@ public class GatewayIndexService {
         if (indexNodeClientManager.getReplicationFactor() == 0) {
             return legacyDeleteViaOwner(resolvedPartitionId, id);
         }
-        return replicateDelete(
-                resolvedPartitionId,
-                id,
-                UUID.randomUUID().toString(),
-                GENERATED_OPERATION_GENERATION.incrementAndGet());
+        return replicateDelete(resolvedPartitionId, id, UUID.randomUUID().toString(), ALLOCATE_OPERATION_GENERATION);
     }
 
     /** Compatibility seam for older injected manager doubles; constructed managers always report at least one. */
@@ -177,6 +171,7 @@ public class GatewayIndexService {
         long deadlineNanos = replicationDeadlineNanos();
         long started = System.nanoTime();
         int acknowledgements = 0;
+        long committedGeneration = operationGeneration;
         RuntimeException lastFailure = null;
         for (var target : plan.targets()) {
             if (!target.active() || target.client() == null) {
@@ -198,7 +193,7 @@ public class GatewayIndexService {
                                         target.nodeId(),
                                         target.primary(),
                                         operationId,
-                                        operationGeneration,
+                                        target.primary() ? operationGeneration : committedGeneration,
                                         partitionId))
                                 .build());
                 if (!response.getSuccess()) {
@@ -206,6 +201,8 @@ public class GatewayIndexService {
                             .withDescription("replica returned an unsuccessful durable index response")
                             .asRuntimeException();
                 }
+                committedGeneration = confirmCommittedGeneration(
+                        target.primary(), operationGeneration, committedGeneration, response.getCommittedGeneration());
                 acknowledgements++;
                 if (!response.getDuplicate()) {
                     target.client().incrementDocToShard(partitionId);
@@ -223,7 +220,7 @@ public class GatewayIndexService {
                 document.getId(),
                 true,
                 operationId,
-                operationGeneration,
+                committedGeneration,
                 acknowledgements,
                 plan.replicaSet().requiredAcknowledgements());
     }
@@ -234,6 +231,7 @@ public class GatewayIndexService {
         long deadlineNanos = replicationDeadlineNanos();
         long started = System.nanoTime();
         int acknowledgements = 0;
+        long committedGeneration = operationGeneration;
         RuntimeException lastFailure = null;
         for (var target : plan.targets()) {
             if (!target.active() || target.client() == null) {
@@ -255,7 +253,7 @@ public class GatewayIndexService {
                                         target.nodeId(),
                                         target.primary(),
                                         operationId,
-                                        operationGeneration,
+                                        target.primary() ? operationGeneration : committedGeneration,
                                         partitionId))
                                 .build());
                 if (!response.getSuccess()) {
@@ -263,6 +261,8 @@ public class GatewayIndexService {
                             .withDescription("replica returned an unsuccessful durable delete response")
                             .asRuntimeException();
                 }
+                committedGeneration = confirmCommittedGeneration(
+                        target.primary(), operationGeneration, committedGeneration, response.getCommittedGeneration());
                 acknowledgements++;
                 if (!response.getDuplicate()) {
                     target.client().decrementDocFromShard(partitionId);
@@ -280,9 +280,42 @@ public class GatewayIndexService {
                 documentId,
                 true,
                 operationId,
-                operationGeneration,
+                committedGeneration,
                 acknowledgements,
                 plan.replicaSet().requiredAcknowledgements());
+    }
+
+    private static long confirmCommittedGeneration(
+            boolean primary, long requestedGeneration, long committedGeneration, long responseGeneration) {
+        if (responseGeneration < 1) {
+            throw Status.INTERNAL
+                    .withDescription("replica returned an invalid committed operation generation")
+                    .asRuntimeException();
+        }
+        if (primary) {
+            if (requestedGeneration > 0 && responseGeneration != requestedGeneration) {
+                throw Status.INTERNAL
+                        .withDescription("primary changed an explicitly supplied operation generation")
+                        .asRuntimeException();
+            }
+            return responseGeneration;
+        }
+        if (responseGeneration != committedGeneration) {
+            throw Status.INTERNAL
+                    .withDescription("replica committed an unexpected operation generation")
+                    .asRuntimeException();
+        }
+        return committedGeneration;
+    }
+
+    private static long resolveOperationGeneration(Long callerGeneration) {
+        if (callerGeneration == null) {
+            return ALLOCATE_OPERATION_GENERATION;
+        }
+        if (callerGeneration < 1) {
+            throw new IllegalArgumentException("generation must be positive when supplied");
+        }
+        return callerGeneration;
     }
 
     private MutationMetadata mutationMetadata(
@@ -519,9 +552,7 @@ public class GatewayIndexService {
                         item.getOperationId() == null || item.getOperationId().isBlank()
                                 ? UUID.randomUUID().toString()
                                 : item.getOperationId();
-                long generation = item.getGeneration() == null
-                        ? GENERATED_OPERATION_GENERATION.incrementAndGet()
-                        : item.getGeneration();
+                long generation = resolveOperationGeneration(item.getGeneration());
                 replicateIndex(partitionId, toProtoDocument(item.getId(), item.getFields()), operationId, generation);
                 results.add(new BulkIndexItemResponseDto(requestIndex, item.getId(), "success", null));
             } catch (IllegalArgumentException e) {
@@ -544,11 +575,7 @@ public class GatewayIndexService {
             }
             try {
                 RequestLimitsValidator.validateDocumentId(id, requestLimits);
-                replicateDelete(
-                        partitionId,
-                        id,
-                        UUID.randomUUID().toString(),
-                        GENERATED_OPERATION_GENERATION.incrementAndGet());
+                replicateDelete(partitionId, id, UUID.randomUUID().toString(), ALLOCATE_OPERATION_GENERATION);
                 results.add(new BulkDeleteItemResponseDto(requestIndex, id, "success", null));
             } catch (IllegalArgumentException e) {
                 results.add(deleteValidationFailure(requestIndex, id, e.getMessage()));

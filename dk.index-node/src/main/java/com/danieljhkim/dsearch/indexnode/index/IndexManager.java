@@ -576,7 +576,31 @@ public class IndexManager implements Closeable {
                 logicalPartitionId,
                 primaryNodeId,
                 MutationType.INDEX,
-                BufferedOperation.index(doc));
+                BufferedOperation.index(doc),
+                false);
+    }
+
+    public MutationResult applyReplicatedIndex(
+            String partitionId,
+            SearchDocument doc,
+            String operationId,
+            long operationGeneration,
+            long placementGeneration,
+            String logicalPartitionId,
+            String primaryNodeId,
+            boolean allocateGeneration)
+            throws IOException {
+        return applyReplicatedMutation(
+                partitionId,
+                doc.getId(),
+                operationId,
+                operationGeneration,
+                placementGeneration,
+                logicalPartitionId,
+                primaryNodeId,
+                MutationType.INDEX,
+                BufferedOperation.index(doc),
+                allocateGeneration);
     }
 
     /** Applies a generation-fenced replicated delete; replay of the same identity is a no-op. */
@@ -605,7 +629,31 @@ public class IndexManager implements Closeable {
                 logicalPartitionId,
                 primaryNodeId,
                 MutationType.DELETE,
-                BufferedOperation.delete(docId));
+                BufferedOperation.delete(docId),
+                false);
+    }
+
+    public MutationResult applyReplicatedDelete(
+            String partitionId,
+            String docId,
+            String operationId,
+            long operationGeneration,
+            long placementGeneration,
+            String logicalPartitionId,
+            String primaryNodeId,
+            boolean allocateGeneration)
+            throws IOException {
+        return applyReplicatedMutation(
+                partitionId,
+                docId,
+                operationId,
+                operationGeneration,
+                placementGeneration,
+                logicalPartitionId,
+                primaryNodeId,
+                MutationType.DELETE,
+                BufferedOperation.delete(docId),
+                allocateGeneration);
     }
 
     private MutationResult applyReplicatedMutation(
@@ -617,13 +665,18 @@ public class IndexManager implements Closeable {
             String logicalPartitionId,
             String primaryNodeId,
             MutationType mutationType,
-            BufferedOperation mutation)
+            BufferedOperation mutation,
+            boolean allocateGeneration)
             throws IOException {
         if (operationId == null || operationId.isBlank()) {
             throw new IllegalArgumentException("replicated mutation operation_id must not be blank");
         }
-        if (operationGeneration < 1 || placementGeneration < 1) {
-            throw new IllegalArgumentException("replicated mutation generations must be positive");
+        if (operationGeneration < 0 || placementGeneration < 1) {
+            throw new IllegalArgumentException(
+                    "replicated mutation operation generation must be non-negative and placement generation positive");
+        }
+        if (operationGeneration == 0 && !allocateGeneration) {
+            throw new IllegalArgumentException("only a primary may allocate an operation generation");
         }
         String physicalIndex = resolvePhysicalIndex(partitionId);
         ensureNotRepairing(physicalIndex);
@@ -639,6 +692,16 @@ public class IndexManager implements Closeable {
                     throw new StaleMutationException("placement generation " + placementGeneration
                             + " is older than committed generation " + previous.placementGeneration());
                 }
+                if (operationGeneration == 0 && operationId.equals(previous.operationId())) {
+                    if (mutationType == previous.mutationType()) {
+                        return new MutationResult(true, previous.operationGeneration());
+                    }
+                    throw new StaleMutationException(
+                            "operation identity was already committed with a different mutation type");
+                }
+                if (operationGeneration == 0) {
+                    operationGeneration = Math.incrementExact(previous.operationGeneration());
+                }
                 if (operationGeneration < previous.operationGeneration()) {
                     throw new StaleMutationException("operation generation " + operationGeneration
                             + " is older than committed generation " + previous.operationGeneration());
@@ -650,6 +713,9 @@ public class IndexManager implements Closeable {
                     throw new StaleMutationException(
                             "operation generation was already committed with a different identity");
                 }
+            }
+            if (operationGeneration == 0) {
+                operationGeneration = 1L;
             }
 
             try {

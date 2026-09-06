@@ -47,10 +47,40 @@ class IndexManagerReplicationTest {
             assertThrows(
                     IndexManager.StaleMutationException.class,
                     () -> manager.applyReplicatedIndex("tenant_r1", document("doc-1", "old"), "op-9", 9, 4));
+            assertThrows(
+                    IndexManager.StaleMutationException.class,
+                    () -> manager.applyReplicatedIndex(
+                            "tenant_r1", document("doc-1", "conflict"), "different-op", 10, 4));
             assertEquals(
                     0,
                     manager.searchDocument("tenant_r1", "old", 10, 0, SearchType.BM25)
                             .getTotalHits());
+        }
+    }
+
+    @Test
+    void primaryAllocatedGenerationIsMonotonicIdempotentAndDurableAcrossRestart() throws Exception {
+        Path data = tempDir.resolve("primary-allocation");
+        try (IndexManager manager = manager(data)) {
+            var indexed = manager.applyReplicatedIndex(
+                    "tenant_r1", document("doc-1", "first"), "op-1", 0, 3, "tenant", "n0", true);
+            var deleted = manager.applyReplicatedDelete("tenant_r1", "doc-1", "op-2", 0, 3, "tenant", "n0", true);
+
+            assertEquals(1L, indexed.committedGeneration());
+            assertEquals(2L, deleted.committedGeneration());
+        }
+
+        try (IndexManager restarted = manager(data)) {
+            var duplicate = restarted.applyReplicatedDelete("tenant_r1", "doc-1", "op-2", 0, 3, "tenant", "n0", true);
+            var next = restarted.applyReplicatedIndex(
+                    "tenant_r1", document("doc-1", "after restart"), "op-3", 0, 3, "tenant", "n0", true);
+
+            assertTrue(duplicate.duplicate());
+            assertEquals(2L, duplicate.committedGeneration());
+            assertEquals(3L, next.committedGeneration());
+            assertThrows(
+                    IndexManager.StaleMutationException.class,
+                    () -> restarted.applyReplicatedIndex("tenant_r1", document("doc-1", "stale"), "op-stale", 2, 3));
         }
     }
 

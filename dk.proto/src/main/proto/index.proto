@@ -24,6 +24,9 @@ message Document {
 // and reject operations from older placement generations.
 message MutationMetadata {
   string operation_id = 1;
+  // Positive values are caller-owned and must remain unchanged on every copy. Zero asks
+  // the declared primary to durably allocate the next per-document generation; replicas
+  // reject zero and receive the positive committed_generation returned by the primary.
   uint64 operation_generation = 2;
   uint64 placement_generation = 3;
   string primary_node_id = 4;

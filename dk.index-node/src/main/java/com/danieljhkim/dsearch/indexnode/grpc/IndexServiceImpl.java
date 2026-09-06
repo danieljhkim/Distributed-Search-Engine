@@ -335,7 +335,8 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
                     mutation.getOperationGeneration(),
                     mutation.getPlacementGeneration(),
                     mutation.getLogicalPartitionId().isBlank() ? partitionId : mutation.getLogicalPartitionId(),
-                    mutation.getPrimaryNodeId());
+                    mutation.getPrimaryNodeId(),
+                    !mutation.getReplica());
             REPLICATION_OUTCOMES
                     .labels(role, result.duplicate() ? "duplicate" : "applied")
                     .inc();
@@ -363,7 +364,8 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
                     mutation.getOperationGeneration(),
                     mutation.getPlacementGeneration(),
                     mutation.getLogicalPartitionId().isBlank() ? partitionId : mutation.getLogicalPartitionId(),
-                    mutation.getPrimaryNodeId());
+                    mutation.getPrimaryNodeId(),
+                    !mutation.getReplica());
             REPLICATION_OUTCOMES
                     .labels(role, result.duplicate() ? "duplicate" : "applied")
                     .inc();
