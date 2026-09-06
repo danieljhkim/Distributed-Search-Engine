@@ -109,7 +109,9 @@ class CoordinatorProcessIntegrationTest {
             StatusRuntimeException stale = assertThrows(
                     StatusRuntimeException.class,
                     () -> client.getShardMap(GetShardMapRequest.newBuilder()
-                            .setMinTopologyVersion(afterControlledAdvance.getTopologyVersion() + 1)
+                            // The generated Java API represents uint64 as long; use its highest
+                            // non-negative value so live topology mutations cannot satisfy this request.
+                            .setMinTopologyVersion(Long.MAX_VALUE)
                             .build()));
             assertEquals(Status.Code.FAILED_PRECONDITION, stale.getStatus().getCode());
         } finally {
