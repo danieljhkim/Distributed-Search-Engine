@@ -23,6 +23,9 @@ indexNodes:
   # (partitionId, documentId); see docs/DOCUMENT_OWNERSHIP.md.
   routingStrategy: "LEAST_LOADED"
   componentLabel: "dsearch-index-node"
+  replicationFactor: 2
+  durabilityPolicy: "all"
+  readConsistency: "acknowledged"
   # This node list is the document ownership ring. Adding or removing an entry
   # reassigns part of the key space and requires a reindex: nothing moves documents.
   nodes:

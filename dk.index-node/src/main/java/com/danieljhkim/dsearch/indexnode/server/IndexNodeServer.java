@@ -29,6 +29,10 @@ public class IndexNodeServer {
     }
 
     public IndexNodeServer(int port, IndexManager indexManager, AppConfig appConfig) {
+        this(port, indexManager, appConfig, null);
+    }
+
+    public IndexNodeServer(int port, IndexManager indexManager, AppConfig appConfig, String localNodeId) {
         this(
                 port,
                 port + 4000,
@@ -36,7 +40,8 @@ public class IndexNodeServer {
                 appConfig,
                 appConfig.getRequestLimits() != null
                         ? appConfig.getRequestLimits()
-                        : new AppConfig.RequestLimitsConfig());
+                        : new AppConfig.RequestLimitsConfig(),
+                localNodeId);
     }
 
     IndexNodeServer(int port, int metricsPort, IndexManager indexManager) {
@@ -64,7 +69,17 @@ public class IndexNodeServer {
             IndexManager indexManager,
             AppConfig appConfig,
             AppConfig.RequestLimitsConfig requestLimits) {
-        IndexServiceImpl indexService = new IndexServiceImpl(indexManager, requestLimits);
+        this(port, metricsPort, indexManager, appConfig, requestLimits, null);
+    }
+
+    IndexNodeServer(
+            int port,
+            int metricsPort,
+            IndexManager indexManager,
+            AppConfig appConfig,
+            AppConfig.RequestLimitsConfig requestLimits,
+            String localNodeId) {
+        IndexServiceImpl indexService = new IndexServiceImpl(indexManager, requestLimits, localNodeId);
         ServerServiceDefinition interceptedService =
                 ServerInterceptors.intercept(indexService, new GlobalExceptionInterceptor());
 

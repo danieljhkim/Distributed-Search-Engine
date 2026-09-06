@@ -13,6 +13,7 @@ import com.danieljhkim.dsearch.common.grpc.NodeClient;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.common.model.SearchHit;
 import com.danieljhkim.dsearch.common.model.SearchResult;
+import com.danieljhkim.dsearch.common.shard.ReplicaPlacement;
 import com.danieljhkim.dsearch.common.validation.RequestAdmissionException;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import com.danieljhkim.dsearch.proto.common.FacetBucket;
@@ -113,6 +114,45 @@ class SearchExecutorTest {
         assertEquals(2, metadata.succeededNodes());
         assertEquals(0, metadata.failedNodes());
         assertEquals(0, metadata.timedOutNodes());
+    }
+
+    @Test
+    void replicatedFanoutSelectsOneLogicalCopyAfterPrimaryLoss() {
+        Map<String, NodeClient<IndexServiceGrpc.IndexServiceBlockingStub>> clients = new HashMap<>();
+        clients.put("n0", nodeClient("n0", true));
+        clients.put("n1", nodeClient("n1", true));
+        NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> manager = new NodeClientManager<>(
+                clients,
+                RoutingStrategy.ROUND_ROBIN,
+                NodeRole.NODE_ROLE_INDEX,
+                IndexServiceGrpc::newBlockingStub,
+                2,
+                ReplicaPlacement.DurabilityPolicy.ALL,
+                ReplicaPlacement.ReadConsistency.ACKNOWLEDGED);
+        clients.get("n0").setActive(false);
+        String n0Shard = ReplicaPlacement.storagePartitionId("tenant-a", "n0", 2);
+        String n1Shard = ReplicaPlacement.storagePartitionId("tenant-a", "n1", 2);
+        FacetResponse books = facet("category", bucket("books", 1));
+        RecordingIndexService indexService = new RecordingIndexService()
+                .successShard(n0Shard, result(List.of(hit("doc-a", 2.0f)), 1, List.of(books)))
+                .successShard(n1Shard, result(List.of(hit("doc-b", 1.0f)), 1, List.of(books)));
+        shardExecutor = Executors.newCachedThreadPool();
+        SearchExecutor executor = new SearchExecutor(shardExecutor, manager, TEST_TIMEOUT);
+
+        FacetRequest categoryFacet =
+                FacetRequest.newBuilder().setField("category").setSize(10).build();
+        SearchResult result = executor.search(
+                "coffee", "tenant-a", 0, 10, SearchType.BM25, indexService, null, false, List.of(categoryFacet));
+
+        assertEquals(2, result.getTotalHits());
+        assertEquals(Map.of("books", 2L), bucketCounts(result.getFacets().getFirst()));
+        assertEquals(
+                Set.of("doc-a", "doc-b"),
+                result.getHits().stream().map(SearchHit::getDocId).collect(java.util.stream.Collectors.toSet()));
+        assertEquals(List.of("n1", "n1"), indexService.calledNodes());
+        assertEquals(
+                Set.of(n0Shard, n1Shard),
+                indexService.calls().stream().map(SearchCall::shardId).collect(java.util.stream.Collectors.toSet()));
     }
 
     @Test
@@ -593,6 +633,11 @@ class SearchExecutorTest {
             List<String> nodeIds) {
         NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> manager = mock(NodeClientManager.class);
         when(manager.getActiveNodeIds()).thenReturn(nodeIds);
+        when(manager.replicaReadTargets(org.mockito.ArgumentMatchers.anyString()))
+                .thenAnswer(invocation -> nodeIds.stream()
+                        .map(nodeId -> new ReplicaPlacement.ReadTarget(
+                                "index/" + nodeId, nodeId, invocation.getArgument(0), false))
+                        .toList());
         return manager;
     }
 
@@ -757,6 +802,7 @@ class SearchExecutorTest {
     private static final class RecordingIndexService implements BaseIndexService {
         private final Map<String, NodeBehavior> nodeBehaviors = new ConcurrentHashMap<>();
         private final Map<RequestKey, NodeBehavior> typedBehaviors = new ConcurrentHashMap<>();
+        private final Map<String, NodeBehavior> shardBehaviors = new ConcurrentHashMap<>();
         private final List<String> calledNodes = Collections.synchronizedList(new ArrayList<>());
         private final List<Duration> deadlines = Collections.synchronizedList(new ArrayList<>());
         private final List<SearchCall> calls = Collections.synchronizedList(new ArrayList<>());
@@ -768,6 +814,11 @@ class SearchExecutorTest {
 
         RecordingIndexService success(String nodeId, SearchType searchType, SearchResult result) {
             typedBehaviors.put(new RequestKey(nodeId, searchType), () -> result);
+            return this;
+        }
+
+        RecordingIndexService successShard(String shardId, SearchResult result) {
+            shardBehaviors.put(shardId, () -> result);
             return this;
         }
 
@@ -839,7 +890,10 @@ class SearchExecutorTest {
             deadlines.add(deadline);
             calls.add(new SearchCall(
                     nodeId, shardId, topK, searchType, filters, highlight, facetRequests, deadline, storedFields));
-            NodeBehavior behavior = typedBehaviors.get(new RequestKey(nodeId, searchType));
+            NodeBehavior behavior = shardBehaviors.get(shardId);
+            if (behavior == null) {
+                behavior = typedBehaviors.get(new RequestKey(nodeId, searchType));
+            }
             if (behavior == null) {
                 behavior = nodeBehaviors.get(nodeId);
             }

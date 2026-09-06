@@ -1,6 +1,7 @@
 package com.danieljhkim.dsearch.coordinator.grpc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -67,7 +68,10 @@ class CoordinatorTopologyIntegrationTest {
         clock.advanceSeconds(6);
         assertEquals(List.of("NODE_ROLE_INDEX/index-0"), recoveredMembership.expireNodes());
         GetShardMapResponse afterExpiry = recoveredClient.getShardMap(GetShardMapRequest.getDefaultInstance());
-        assertEquals(0, afterExpiry.getShardLocationsCount());
+        assertEquals(1, afterExpiry.getShardLocationsCount());
+        assertFalse(afterExpiry.getShardLocations(0).getEligible());
+        assertEquals("unavailable", afterExpiry.getShardLocations(0).getState());
+        assertEquals(1, afterExpiry.getUnderReplicatedShards());
         assertTrue(afterExpiry.getTopologyVersion() > afterRestart.getTopologyVersion());
 
         long expiredVersion = afterExpiry.getTopologyVersion();

@@ -8,6 +8,7 @@ import com.danieljhkim.dsearch.common.enums.RoutingStrategy;
 import com.danieljhkim.dsearch.common.exception.NodeUnavailableException;
 import com.danieljhkim.dsearch.common.loadbalancer.RoundRobin;
 import com.danieljhkim.dsearch.common.routing.DocumentOwnership;
+import com.danieljhkim.dsearch.common.shard.ReplicaPlacement;
 import com.danieljhkim.dsearch.common.shard.ShardState;
 import com.danieljhkim.dsearch.common.shard.ShardStateStore;
 import com.danieljhkim.dsearch.common.tracing.CorrelationIdClientInterceptor;
@@ -56,14 +57,54 @@ public class NodeClientManager<T> {
      */
     private final List<String> ownershipNodeIds;
 
+    private final int replicationFactor;
+    private final ReplicaPlacement.DurabilityPolicy durabilityPolicy;
+    private final ReplicaPlacement.ReadConsistency readConsistency;
+    private volatile long topologyGeneration;
+
     public NodeClientManager(
             Map<String, NodeClient<T>> clientMap,
             RoutingStrategy routingStrategy,
             NodeRole nodeRole,
             Function<Channel, T> clientFactory) {
-        this(clientMap, routingStrategy, nodeRole, role -> null, null, node -> {
-            throw new IllegalStateException("No node client factory configured for service discovery refresh");
-        });
+        this(
+                clientMap,
+                routingStrategy,
+                nodeRole,
+                role -> null,
+                null,
+                node -> {
+                    throw new IllegalStateException("No node client factory configured for service discovery refresh");
+                },
+                clientMap != null ? clientMap.keySet() : null,
+                1,
+                ReplicaPlacement.DurabilityPolicy.ALL,
+                ReplicaPlacement.ReadConsistency.ACKNOWLEDGED,
+                1L);
+    }
+
+    public NodeClientManager(
+            Map<String, NodeClient<T>> clientMap,
+            RoutingStrategy routingStrategy,
+            NodeRole nodeRole,
+            Function<Channel, T> clientFactory,
+            int replicationFactor,
+            ReplicaPlacement.DurabilityPolicy durabilityPolicy,
+            ReplicaPlacement.ReadConsistency readConsistency) {
+        this(
+                clientMap,
+                routingStrategy,
+                nodeRole,
+                role -> null,
+                null,
+                node -> {
+                    throw new IllegalStateException("No node client factory configured for service discovery refresh");
+                },
+                clientMap != null ? clientMap.keySet() : null,
+                replicationFactor,
+                durabilityPolicy,
+                readConsistency,
+                1L);
     }
 
     NodeClientManager(
@@ -80,7 +121,11 @@ public class NodeClientManager<T> {
                 nodeGroupResolver,
                 serviceDiscoveryConfig,
                 nodeClientFactory,
-                clientMap != null ? clientMap.keySet() : null);
+                clientMap != null ? clientMap.keySet() : null,
+                1,
+                ReplicaPlacement.DurabilityPolicy.ALL,
+                ReplicaPlacement.ReadConsistency.ACKNOWLEDGED,
+                1L);
     }
 
     NodeClientManager(
@@ -91,6 +136,32 @@ public class NodeClientManager<T> {
             AppConfig.ServiceDiscoveryConfig serviceDiscoveryConfig,
             Function<NodeGroup.NodeInfo, NodeClient<T>> nodeClientFactory,
             Collection<String> ownershipNodeIds) {
+        this(
+                clientMap,
+                routingStrategy,
+                nodeRole,
+                nodeGroupResolver,
+                serviceDiscoveryConfig,
+                nodeClientFactory,
+                ownershipNodeIds,
+                1,
+                ReplicaPlacement.DurabilityPolicy.ALL,
+                ReplicaPlacement.ReadConsistency.ACKNOWLEDGED,
+                1L);
+    }
+
+    NodeClientManager(
+            Map<String, NodeClient<T>> clientMap,
+            RoutingStrategy routingStrategy,
+            NodeRole nodeRole,
+            Function<NodeRole, NodeGroup> nodeGroupResolver,
+            AppConfig.ServiceDiscoveryConfig serviceDiscoveryConfig,
+            Function<NodeGroup.NodeInfo, NodeClient<T>> nodeClientFactory,
+            Collection<String> ownershipNodeIds,
+            int replicationFactor,
+            ReplicaPlacement.DurabilityPolicy durabilityPolicy,
+            ReplicaPlacement.ReadConsistency readConsistency,
+            long topologyGeneration) {
         Objects.requireNonNull(clientMap, "clientMap must not be null");
         if (clientMap.isEmpty()) {
             throw new IllegalArgumentException("clientMap must not be empty");
@@ -100,6 +171,17 @@ public class NodeClientManager<T> {
             throw new IllegalArgumentException("ownershipNodeIds must not be empty");
         }
         this.ownershipNodeIds = ownershipNodeIds.stream().sorted().toList();
+        if (replicationFactor < 1 || replicationFactor > this.ownershipNodeIds.size()) {
+            throw new IllegalArgumentException("replicationFactor must be between 1 and the ownership node count");
+        }
+        this.replicationFactor = replicationFactor;
+        this.durabilityPolicy = Objects.requireNonNull(durabilityPolicy, "durabilityPolicy must not be null");
+        this.readConsistency = Objects.requireNonNull(readConsistency, "readConsistency must not be null");
+        if (readConsistency == ReplicaPlacement.ReadConsistency.ACKNOWLEDGED
+                && durabilityPolicy != ReplicaPlacement.DurabilityPolicy.ALL) {
+            throw new IllegalArgumentException("acknowledged reads require all-replica durability");
+        }
+        this.topologyGeneration = Math.max(1L, topologyGeneration);
         this.nodeRole = Objects.requireNonNull(nodeRole, "nodeRole must not be null");
         this.clientMap = new ConcurrentHashMap<>(clientMap);
         this.routingStrategy = Objects.requireNonNull(routingStrategy, "routingStrategy must not be null");
@@ -118,7 +200,9 @@ public class NodeClientManager<T> {
             LOGGER.info(() -> "Service discovery disabled for role " + nodeRole + "; using static node configuration");
         }
         LOGGER.info(() -> "Role " + nodeRole + " reads use routing strategy " + this.routingStrategy
-                + "; document mutations use ownership hashing over nodes " + this.ownershipNodeIds);
+                + "; document mutations use generation-fenced replica placement over nodes " + this.ownershipNodeIds
+                + " with replicationFactor=" + replicationFactor + ", durabilityPolicy=" + durabilityPolicy
+                + ", readConsistency=" + readConsistency);
     }
 
     public static <T> NodeClientManager<T> loadClientManager(NodeRole role, Function<Channel, T> clientFactory) {
@@ -215,7 +299,11 @@ public class NodeClientManager<T> {
                 nodeGroupManager::getNodeGroup,
                 serviceDiscoveryConfig,
                 node -> createNodeClient(node, clientFactory, metricsInterceptor, transportSecurity),
-                ownershipNodeIds);
+                ownershipNodeIds,
+                configuredNodeGroup.getReplicationFactor(),
+                configuredNodeGroup.getDurabilityPolicy(),
+                configuredNodeGroup.getReadConsistency(),
+                nodeGroup.getTopologyVersion());
     }
 
     private static String componentLabel(NodeGroup nodeGroup) {
@@ -245,6 +333,54 @@ public class NodeClientManager<T> {
      */
     public List<String> getOwnershipNodeIds() {
         return ownershipNodeIds;
+    }
+
+    public int getReplicationFactor() {
+        return replicationFactor;
+    }
+
+    public ReplicaPlacement.DurabilityPolicy getDurabilityPolicy() {
+        return durabilityPolicy;
+    }
+
+    public ReplicaPlacement.ReadConsistency getReadConsistency() {
+        return readConsistency;
+    }
+
+    public long getTopologyGeneration() {
+        return topologyGeneration;
+    }
+
+    public ReplicaWritePlan<T> replicaWritePlan(String partitionId, String documentId) {
+        ReplicaPlacement.ReplicaSet set = ReplicaPlacement.forDocument(
+                partitionId, documentId, ownershipNodeIds, replicationFactor, topologyGeneration, durabilityPolicy);
+        List<ReplicaTarget<T>> targets = set.nodeIds().stream()
+                .map(nodeId -> new ReplicaTarget<>(
+                        nodeId,
+                        clientMap.get(nodeId),
+                        ReplicaPlacement.storagePartitionId(partitionId, set.primaryNodeId(), replicationFactor),
+                        nodeId.equals(set.primaryNodeId()),
+                        clientMap.containsKey(nodeId) && clientMap.get(nodeId).isActive()))
+                .toList();
+        ReplicaTarget<T> primary = targets.get(0);
+        if (primary.client() == null || !primary.active()) {
+            throw new NodeUnavailableException(
+                    primary.nodeId(),
+                    "Primary node " + primary.nodeId() + " for logical shard " + set.shardId()
+                            + " is unavailable; writes are never promoted by a client");
+        }
+        return new ReplicaWritePlan<>(set, targets);
+    }
+
+    /** One active copy of every logical shard, primary preferred, so totals and facets count once. */
+    public List<ReplicaPlacement.ReadTarget> replicaReadTargets(String partitionId) {
+        return ReplicaPlacement.readTargets(
+                partitionId,
+                ownershipNodeIds,
+                getActiveNodeIds(),
+                replicationFactor,
+                topologyGeneration,
+                durabilityPolicy);
     }
 
     /**
@@ -329,6 +465,7 @@ public class NodeClientManager<T> {
         }
 
         List<NodeGroup.NodeInfo> discoveredNodes = cfg.getAllNodes();
+        topologyGeneration = Math.max(topologyGeneration, cfg.getTopologyVersion());
         Set<String> discoveredNodeIds = discoveredNodes.stream()
                 .map(NodeGroup.NodeInfo::getNodeId)
                 .collect(java.util.stream.Collectors.toSet());
@@ -346,8 +483,16 @@ public class NodeClientManager<T> {
         rebuildActiveClientSnapshot();
     }
 
+    public record ReplicaTarget<T>(
+            String nodeId, NodeClient<T> client, String storagePartitionId, boolean primary, boolean active) {}
+
+    public record ReplicaWritePlan<T>(ReplicaPlacement.ReplicaSet replicaSet, List<ReplicaTarget<T>> targets) {}
+
     public List<String> getActiveNodeIds() {
-        return activeClientsSnapshot().stream().map(NodeClient::getNodeId).toList();
+        return activeClientsSnapshot().stream()
+                .filter(NodeClient::isActive)
+                .map(NodeClient::getNodeId)
+                .toList();
     }
 
     List<NodeClient<T>> activeClientsSnapshot() {

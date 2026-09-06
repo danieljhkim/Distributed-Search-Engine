@@ -11,6 +11,10 @@ import lombok.Setter;
 public class IndexRequestDto {
     private String id; // optional; if absent, server generates
     private Map<String, String> fields;
+    /** Stable retry identity. Omitted values are generated for this request. */
+    private String operationId;
+    /** Caller-monotonic document generation. Omitted values use the gateway's monotonic clock. */
+    private Long generation;
 
     @Size(max = 64, message = "partitionId must be at most 64 characters") @Pattern(
             regexp = "[A-Za-z0-9_-]+",

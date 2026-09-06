@@ -12,15 +12,18 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.danieljhkim.dsearch.common.config.AppConfig;
+import com.danieljhkim.dsearch.common.enums.RoutingStrategy;
 import com.danieljhkim.dsearch.common.exception.NodeUnavailableException;
 import com.danieljhkim.dsearch.common.grpc.NodeClient;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
+import com.danieljhkim.dsearch.common.shard.ReplicaPlacement;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
+import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentResult;
@@ -526,6 +529,106 @@ class GatewayIndexServiceTest {
                 .hasMessageContaining("Bulk item count");
         verify(indexNodeClientManager, never()).ownerClient(any(), any());
     }
+
+    @Test
+    void allPolicyWritesPrimaryThenReplicaWithStableIdentity() {
+        ReplicatedFixture fixture = replicatedFixture();
+        IndexRequestDto request = indexRequest("doc-replicated", Map.of("title", "replicated"));
+        request.setPartitionId("tenant-a");
+        request.setOperationId("operation-42");
+        request.setGeneration(42L);
+
+        IndexResponseDto response = fixture.service().index(request);
+
+        assertThat(response.isSuccess()).isTrue();
+        assertThat(response.getAcknowledgements()).isEqualTo(2);
+        assertThat(response.getRequiredAcknowledgements()).isEqualTo(2);
+        assertThat(response.getOperationId()).isEqualTo("operation-42");
+        fixture.stubs().values().forEach(stub -> {
+            ArgumentCaptor<IndexDocumentRequest> captor = ArgumentCaptor.forClass(IndexDocumentRequest.class);
+            verify(stub).indexDocument(captor.capture());
+            assertThat(captor.getValue().getMutation().getOperationId()).isEqualTo("operation-42");
+            assertThat(captor.getValue().getMutation().getOperationGeneration()).isEqualTo(42L);
+        });
+    }
+
+    @Test
+    void allPolicyDoesNotAcknowledgeReplicaOutageAndRetryCanFinishTheSameOperation() {
+        ReplicatedFixture fixture = replicatedFixture();
+        var plan = fixture.manager().replicaWritePlan("tenant-a", "doc-replicated");
+        var follower = plan.targets().stream()
+                .filter(target -> !target.primary())
+                .findFirst()
+                .orElseThrow();
+        follower.client().setActive(false);
+        IndexRequestDto request = indexRequest("doc-replicated", Map.of("title", "replicated"));
+        request.setPartitionId("tenant-a");
+        request.setOperationId("operation-7");
+        request.setGeneration(7L);
+
+        assertThatThrownBy(() -> fixture.service().index(request))
+                .isInstanceOf(StatusRuntimeException.class)
+                .hasMessageContaining("requires 2");
+
+        follower.client().setActive(true);
+        IndexResponseDto retried = fixture.service().index(request);
+        assertThat(retried.isSuccess()).isTrue();
+        assertThat(retried.getAcknowledgements()).isEqualTo(2);
+    }
+
+    @Test
+    void primaryCrashRejectsWritesButReadPlanFailsOverWithoutDoubleCountingShard() {
+        ReplicatedFixture fixture = replicatedFixture();
+        var plan = fixture.manager().replicaWritePlan("tenant-a", "doc-replicated");
+        plan.targets().getFirst().client().setActive(false);
+        IndexRequestDto request = indexRequest("doc-replicated", Map.of("title", "x"));
+        request.setPartitionId("tenant-a");
+
+        assertThatThrownBy(() -> fixture.service().index(request))
+                .isInstanceOf(NodeUnavailableException.class)
+                .hasMessageContaining("writes are never promoted");
+
+        var readTargets = fixture.manager().replicaReadTargets("tenant-a");
+        assertThat(readTargets)
+                .extracting(ReplicaPlacement.ReadTarget::logicalShardId)
+                .doesNotHaveDuplicates();
+        assertThat(readTargets).anyMatch(ReplicaPlacement.ReadTarget::failover);
+    }
+
+    private static ReplicatedFixture replicatedFixture() {
+        Map<String, IndexServiceGrpc.IndexServiceBlockingStub> stubs = new LinkedHashMap<>();
+        Map<String, NodeClient<IndexServiceGrpc.IndexServiceBlockingStub>> clients = new LinkedHashMap<>();
+        for (String nodeId : List.of("n0", "n1")) {
+            IndexServiceGrpc.IndexServiceBlockingStub stub = mock(IndexServiceGrpc.IndexServiceBlockingStub.class);
+            lenient()
+                    .when(stub.withDeadlineAfter(anyLong(), any(TimeUnit.class)))
+                    .thenReturn(stub);
+            lenient().when(stub.indexDocument(any(IndexDocumentRequest.class))).thenAnswer(invocation -> {
+                IndexDocumentRequest request = invocation.getArgument(0);
+                return IndexDocumentResponse.newBuilder()
+                        .setId(request.getDocument().getId())
+                        .setSuccess(true)
+                        .setCommittedGeneration(request.getMutation().getOperationGeneration())
+                        .build();
+            });
+            stubs.put(nodeId, stub);
+            clients.put(nodeId, new NodeClient<>(nodeId, stub, mock(ManagedChannel.class), "localhost", 5100));
+        }
+        NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> manager = new NodeClientManager<>(
+                clients,
+                RoutingStrategy.ROUND_ROBIN,
+                NodeRole.NODE_ROLE_INDEX,
+                IndexServiceGrpc::newBlockingStub,
+                2,
+                ReplicaPlacement.DurabilityPolicy.ALL,
+                ReplicaPlacement.ReadConsistency.ACKNOWLEDGED);
+        return new ReplicatedFixture(manager, new GatewayIndexService(manager), stubs);
+    }
+
+    private record ReplicatedFixture(
+            NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> manager,
+            GatewayIndexService service,
+            Map<String, IndexServiceGrpc.IndexServiceBlockingStub> stubs) {}
 
     private static BulkDeleteRequestDto bulkDeleteRequest(String partitionId, String... ids) {
         BulkDeleteRequestDto request = new BulkDeleteRequestDto();

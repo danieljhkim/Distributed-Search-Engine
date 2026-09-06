@@ -19,20 +19,36 @@ message Document {
   repeated Field fields = 2;
 }
 
+// Stable identity and fencing carried by every replicated mutation. The
+// primary must be written first; replicas accept only their declared target
+// and reject operations from older placement generations.
+message MutationMetadata {
+  string operation_id = 1;
+  uint64 operation_generation = 2;
+  uint64 placement_generation = 3;
+  string primary_node_id = 4;
+  string target_node_id = 5;
+  bool replica = 6;
+}
+
 message IndexDocumentRequest {
   string partition_id = 1;
   Document document = 2;
+  MutationMetadata mutation = 3;
 }
 
 message IndexDocumentResponse {
   string id = 1;
   // True only after the document has been committed to the shard's Lucene index.
   bool success = 2;
+  bool duplicate = 3;
+  uint64 committed_generation = 4;
 }
 
 message BulkIndexDocumentRequest {
   string partition_id = 1;
   repeated Document documents = 2;
+  repeated MutationMetadata mutations = 3;
 }
 
 message BulkIndexDocumentResult {
@@ -59,10 +75,13 @@ message BulkIndexDocumentResponse {
 message DeleteDocumentRequest {
   string partition_id = 1;
   string id = 2;
+  MutationMetadata mutation = 3;
 }
 
 message DeleteDocumentResponse {
   bool success = 1;
+  bool duplicate = 2;
+  uint64 committed_generation = 3;
 }
 
 message BulkDeleteDocumentRequest {
@@ -70,6 +89,7 @@ message BulkDeleteDocumentRequest {
   // Explicit ids to delete, in caller order. Duplicates are preserved positionally rather
   // than collapsed, since deleting the same id twice is a harmless idempotent no-op.
   repeated string ids = 2;
+  repeated MutationMetadata mutations = 3;
 }
 
 message BulkDeleteDocumentResult {

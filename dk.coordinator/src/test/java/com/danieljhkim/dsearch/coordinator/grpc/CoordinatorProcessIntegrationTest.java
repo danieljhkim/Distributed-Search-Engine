@@ -71,7 +71,9 @@ class CoordinatorProcessIntegrationTest {
             recovered = startCoordinator(grpcPort, healthPort, stateFile, logFile);
             GetShardMapResponse afterExpiry = waitFor(
                     client,
-                    response -> response.getShardLocationsCount() == 0
+                    response -> response.getShardLocationsCount() == 1
+                            && !response.getShardLocations(0).getEligible()
+                            && response.getUnderReplicatedShards() == 1
                             && response.getTopologyVersion() > beforeRestart.getTopologyVersion(),
                     Duration.ofSeconds(10));
             assertEquals(beforeRestart.getTopologyEpoch(), afterExpiry.getTopologyEpoch());

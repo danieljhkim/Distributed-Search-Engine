@@ -21,7 +21,8 @@ import lombok.Setter;
 /** Resolves node groups from either explicit static mode or authoritative coordinator topology. */
 public class NodeGroupManager {
     private static final Logger LOGGER = Logger.getLogger(NodeGroupManager.class.getName());
-    private static final int SUPPORTED_CONTRACT_VERSION = 1;
+    private static final int MIN_SUPPORTED_CONTRACT_VERSION = 1;
+    private static final int MAX_SUPPORTED_CONTRACT_VERSION = 2;
 
     private final AppConfig defaultConfig;
     private final Clock clock;
@@ -137,7 +138,8 @@ public class NodeGroupManager {
     }
 
     private synchronized void acceptResponse(NodeRole role, GetClusterInfoResponse response) {
-        if (response.getContractVersion() != SUPPORTED_CONTRACT_VERSION) {
+        if (response.getContractVersion() < MIN_SUPPORTED_CONTRACT_VERSION
+                || response.getContractVersion() > MAX_SUPPORTED_CONTRACT_VERSION) {
             throw new IllegalStateException("Unsupported coordinator topology contract version "
                     + response.getContractVersion() + " for role " + role);
         }

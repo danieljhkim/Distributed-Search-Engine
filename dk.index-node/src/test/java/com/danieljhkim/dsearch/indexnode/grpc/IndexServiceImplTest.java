@@ -30,6 +30,7 @@ import com.danieljhkim.dsearch.proto.index.IndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexSearchRequest;
 import com.danieljhkim.dsearch.proto.index.IndexSearchResponse;
+import com.danieljhkim.dsearch.proto.index.MutationMetadata;
 import com.danieljhkim.dsearch.proto.index.StoredFieldSelection;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
@@ -578,6 +579,46 @@ class IndexServiceImplTest {
     }
 
     @Test
+    void replicaRejectsWrongTargetAndStalePlacementGeneration() throws IOException {
+        try (IndexManager manager = manager("replica-fencing")) {
+            IndexServiceImpl service = new IndexServiceImpl(manager, new AppConfig.RequestLimitsConfig(), "n1");
+            RecordingObserver<IndexDocumentResponse> wrongTarget = new RecordingObserver<>();
+            service.indexDocument(
+                    IndexDocumentRequest.newBuilder()
+                            .setPartitionId("tenant_r1")
+                            .setDocument(document("doc-1", "wrong target"))
+                            .setMutation(mutation("op-1", 1, 5, "n0", "n2", true))
+                            .build(),
+                    wrongTarget);
+            assertEquals(
+                    Status.Code.FAILED_PRECONDITION,
+                    status(wrongTarget.error).getStatus().getCode());
+
+            RecordingObserver<IndexDocumentResponse> current = new RecordingObserver<>();
+            service.indexDocument(
+                    IndexDocumentRequest.newBuilder()
+                            .setPartitionId("tenant_r1")
+                            .setDocument(document("doc-1", "current"))
+                            .setMutation(mutation("op-2", 2, 5, "n0", "n1", true))
+                            .build(),
+                    current);
+            assertTrue(current.value.getSuccess());
+
+            RecordingObserver<IndexDocumentResponse> stale = new RecordingObserver<>();
+            service.indexDocument(
+                    IndexDocumentRequest.newBuilder()
+                            .setPartitionId("tenant_r1")
+                            .setDocument(document("doc-2", "stale"))
+                            .setMutation(mutation("op-3", 3, 4, "n0", "n1", true))
+                            .build(),
+                    stale);
+            assertEquals(
+                    Status.Code.FAILED_PRECONDITION,
+                    status(stale.error).getStatus().getCode());
+        }
+    }
+
+    @Test
     void analyzeIndexReturnsAnalyzerIdentityTokensPositionsAndOffsets() throws IOException {
         try (IndexManager manager = manager("analyze")) {
             IndexServiceImpl service = new IndexServiceImpl(manager);
@@ -643,6 +684,23 @@ class IndexServiceImplTest {
         return Document.newBuilder()
                 .setId(id)
                 .addFields(Field.newBuilder().setName(ShardIndex.FIELD_CONTENT).setValue(content))
+                .build();
+    }
+
+    private static MutationMetadata mutation(
+            String operationId,
+            long operationGeneration,
+            long placementGeneration,
+            String primaryNodeId,
+            String targetNodeId,
+            boolean replica) {
+        return MutationMetadata.newBuilder()
+                .setOperationId(operationId)
+                .setOperationGeneration(operationGeneration)
+                .setPlacementGeneration(placementGeneration)
+                .setPrimaryNodeId(primaryNodeId)
+                .setTargetNodeId(targetNodeId)
+                .setReplica(replica)
                 .build();
     }
 

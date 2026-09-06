@@ -3,8 +3,10 @@ package com.danieljhkim.dsearch.gateway.api;
 import com.danieljhkim.dsearch.common.cluster.NodeGroup;
 import com.danieljhkim.dsearch.common.cluster.NodeGroupManager;
 import com.danieljhkim.dsearch.common.enums.HealthStatus;
+import com.danieljhkim.dsearch.common.shard.ReplicaPlacement;
 import com.danieljhkim.dsearch.gateway.api.dto.ClusterHealthResponse;
 import com.danieljhkim.dsearch.gateway.api.dto.ClusterHealthResponse.NodeHealthStatus;
+import com.danieljhkim.dsearch.gateway.api.dto.ClusterHealthResponse.ReplicationHealth;
 import com.danieljhkim.dsearch.gateway.api.dto.ClusterHealthResponse.ServiceHealth;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import java.time.Instant;
@@ -81,12 +83,53 @@ public class HealthController {
                     && coordinatorNodeHealth.stream().allMatch(this::isUp);
             String reason = allNodesReady ? null : missingTopology != null ? missingTopology : "downstream_not_ready";
             String status = allNodesReady ? HealthStatus.UP.name() : HealthStatus.DEGRADED.name();
+            NodeGroup configuredIndexNodes = nodeGroupManager.getConfiguredNodeGroup(NodeRole.NODE_ROLE_INDEX);
+            if (configuredIndexNodes == null) {
+                // Test doubles and legacy embedders may expose only the authoritative view.
+                configuredIndexNodes = indexNodes;
+            }
+            List<String> configuredNodeIds = configuredIndexNodes.getAllNodes().stream()
+                    .map(NodeGroup.NodeInfo::getNodeId)
+                    .sorted()
+                    .toList();
+            List<String> activeNodeIds = indexNodes.getAllNodes().stream()
+                    .map(NodeGroup.NodeInfo::getNodeId)
+                    .toList();
+            int underReplicated = 0;
+            int failedOver = 0;
+            for (String primary : configuredNodeIds) {
+                var replicaSet = ReplicaPlacement.forPrimary(
+                        "topology",
+                        primary,
+                        configuredNodeIds,
+                        indexNodes.getReplicationFactor(),
+                        indexNodes.getTopologyVersion(),
+                        indexNodes.getDurabilityPolicy());
+                long eligible = replicaSet.nodeIds().stream()
+                        .filter(activeNodeIds::contains)
+                        .count();
+                if (eligible < indexNodes.getReplicationFactor()) {
+                    underReplicated++;
+                }
+                if (!activeNodeIds.contains(primary) && eligible > 0) {
+                    failedOver++;
+                }
+            }
+            ReplicationHealth replication = new ReplicationHealth(
+                    indexNodes.getTopologyVersion(),
+                    indexNodes.getReplicationFactor(),
+                    indexNodes.getDurabilityPolicy().name().toLowerCase(),
+                    indexNodes.getReadConsistency().name().toLowerCase(),
+                    configuredNodeIds.size(),
+                    underReplicated,
+                    failedOver);
             ClusterHealthResponse response = new ClusterHealthResponse(
                     status,
                     new ServiceHealth(HealthStatus.UP.name(), reason),
                     indexNodeHealth,
                     queryNodeHealth,
                     coordinatorNodeHealth,
+                    replication,
                     Instant.now());
             return new HealthAssessment(allNodesReady, reason, response);
         } catch (RuntimeException e) {

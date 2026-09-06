@@ -47,7 +47,11 @@ public class IndexNodeApplication {
         });
         IndexManager indexManager =
                 waitForIndexManager(baseDir, indexingConfig, fieldConfigs, indexManagerReference, startupReadiness);
-        IndexNodeServer indexNodeServer = new IndexNodeServer(grpcPort, indexManager, appConfig);
+        String localNodeId = System.getenv("INDEX_NODE_ID");
+        if (localNodeId == null || localNodeId.isBlank()) {
+            localNodeId = System.getenv("NODE_ID");
+        }
+        IndexNodeServer indexNodeServer = new IndexNodeServer(grpcPort, indexManager, appConfig, localNodeId);
         NodeMembershipAgent membershipAgent = createMembershipAgent(appConfig, System.getenv(), grpcPort, healthPort);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
