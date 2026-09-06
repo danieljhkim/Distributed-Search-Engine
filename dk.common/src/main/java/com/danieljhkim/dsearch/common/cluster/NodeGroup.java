@@ -2,6 +2,7 @@ package com.danieljhkim.dsearch.common.cluster;
 
 import com.danieljhkim.dsearch.common.config.AppConfig;
 import com.danieljhkim.dsearch.common.enums.RoutingStrategy;
+import com.danieljhkim.dsearch.common.shard.ReplicaPlacement;
 import com.danieljhkim.dsearch.proto.cluster.GetClusterInfoResponse;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import java.util.List;
@@ -19,12 +20,30 @@ public class NodeGroup {
     private final NodeRole role;
     private final String componentLabel;
     private final RoutingStrategy routingStrategy;
+    private final int replicationFactor;
+    private final ReplicaPlacement.DurabilityPolicy durabilityPolicy;
+    private final ReplicaPlacement.ReadConsistency readConsistency;
+    private final String topologyEpoch;
+    private final long topologyVersion;
     private final Map<String, NodeInfo> nodes = new ConcurrentHashMap<>();
 
-    private NodeGroup(NodeRole role, String componentLabel, RoutingStrategy routingStrategy) {
+    private NodeGroup(
+            NodeRole role,
+            String componentLabel,
+            RoutingStrategy routingStrategy,
+            int replicationFactor,
+            ReplicaPlacement.DurabilityPolicy durabilityPolicy,
+            ReplicaPlacement.ReadConsistency readConsistency,
+            String topologyEpoch,
+            long topologyVersion) {
         this.role = Objects.requireNonNull(role, "role must not be null");
         this.componentLabel = componentLabel;
         this.routingStrategy = routingStrategy;
+        this.replicationFactor = replicationFactor;
+        this.durabilityPolicy = durabilityPolicy;
+        this.readConsistency = readConsistency;
+        this.topologyEpoch = topologyEpoch;
+        this.topologyVersion = Math.max(1L, topologyVersion);
     }
 
     /**
@@ -32,7 +51,15 @@ public class NodeGroup {
      */
     public static NodeGroup fromConfig(NodeRole role, AppConfig.NodeGroupConfig config) {
         Objects.requireNonNull(config, "config must not be null");
-        NodeGroup group = new NodeGroup(role, config.getComponentLabel(), config.getRoutingStrategy());
+        NodeGroup group = new NodeGroup(
+                role,
+                config.getComponentLabel(),
+                config.getRoutingStrategy(),
+                Math.max(1, config.getReplicationFactor()),
+                ReplicaPlacement.DurabilityPolicy.parse(config.getDurabilityPolicy()),
+                ReplicaPlacement.ReadConsistency.parse(config.getReadConsistency()),
+                "static",
+                1L);
         if (config.getNodes() != null) {
             for (AppConfig.NodeConfig nodeConfig : config.getNodes()) {
                 NodeInfo nodeInfo = new NodeInfo(
@@ -50,8 +77,15 @@ public class NodeGroup {
 
     public static NodeGroup fromResponse(GetClusterInfoResponse resp, NodeRole role) {
         Objects.requireNonNull(resp, "resp must not be null");
-        NodeGroup group =
-                new NodeGroup(role, resp.getComponentLabel(), RoutingStrategy.valueOf(resp.getRoutingStrategy()));
+        NodeGroup group = new NodeGroup(
+                role,
+                resp.getComponentLabel(),
+                RoutingStrategy.valueOf(resp.getRoutingStrategy()),
+                Math.max(1, resp.getReplicationFactor()),
+                ReplicaPlacement.DurabilityPolicy.parse(resp.getDurabilityPolicy()),
+                ReplicaPlacement.ReadConsistency.parse(resp.getReadConsistency()),
+                resp.getTopologyEpoch(),
+                resp.getTopologyVersion());
         for (com.danieljhkim.dsearch.proto.cluster.NodeInfo nodeProto : resp.getNodesList()) {
             NodeInfo nodeInfo = new NodeInfo(
                     nodeProto.getNodeId(),
@@ -88,6 +122,9 @@ public class NodeGroup {
         AppConfig.NodeGroupConfig clone = new AppConfig.NodeGroupConfig();
         clone.setComponentLabel(componentLabel);
         clone.setRoutingStrategy(routingStrategy);
+        clone.setReplicationFactor(replicationFactor);
+        clone.setDurabilityPolicy(durabilityPolicy.name().toLowerCase());
+        clone.setReadConsistency(readConsistency.name().toLowerCase());
 
         List<AppConfig.NodeConfig> nodeConfigs = getAllNodes().stream()
                 .map(nodeInfo -> {

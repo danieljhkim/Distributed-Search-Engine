@@ -175,7 +175,7 @@ class NodeMembershipAgentTest {
         when(client.deregisterNode(any(DeregisterNodeRequest.class)))
                 .thenReturn(DeregisterNodeResponse.newBuilder()
                         .setSuccess(true)
-                        .setContractVersion(1)
+                        .setContractVersion(2)
                         .setTopologyEpoch("epoch-a")
                         .setTopologyVersion(3)
                         .build());
@@ -200,7 +200,7 @@ class NodeMembershipAgentTest {
     private static RegisterNodeResponse registration(String epoch, long version) {
         return RegisterNodeResponse.newBuilder()
                 .setSuccess(true)
-                .setContractVersion(1)
+                .setContractVersion(2)
                 .setTopologyEpoch(epoch)
                 .setTopologyVersion(version)
                 .setLeaseDurationMillis(30)

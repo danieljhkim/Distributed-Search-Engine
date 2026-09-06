@@ -50,29 +50,31 @@ The system is composed of three primary components:
 ### Sharding & Load Balancing
 
 - Shards represent **logical partitions** of your data (e.g., by domain or category).
-- Each shard exists **once per cluster** (no replicas yet).
-- Shards are distributed across index nodes.
-- Every document has **exactly one owning index node**, derived from the document key:
+- Each logical primary range has a configurable, explicit replica set.
+- Every document has **exactly one primary index node**, derived from the document key:
   - For a given `(partitionId, documentId)` write/delete, the Gateway routes to
     `owner = argmax hash(nodeId, partitionId, documentId)` over the configured index nodes
     (rendezvous hashing). A Lucene upsert is local to one node, so sending an update anywhere
     else would leave the cluster holding two copies of the same document.
   - The mapping is a pure function of the key and `app-config.yaml`, so it is identical in
     every Gateway process and across restarts, and it does not move when nodes go unhealthy.
-  - If the owner is unavailable the mutation fails with `503` instead of being rerouted.
+  - If the primary is unavailable the mutation fails with `503`; clients never promote a replica for writes.
   - Hashing also spreads documents evenly across nodes without a coordinator.
   - The Gateway still keeps **per‑shard, per‑node document counts**, updated only after a
     node confirms a mutation and snapshotted to disk, but they are now an observability
     signal rather than a routing input.
   - See [Document Ownership](./docs/DOCUMENT_OWNERSHIP.md) for restart and topology‑change behavior.
 
-There is **no replication layer** yet. If an index node goes down, documents stored on that node’s shards are temporarily unavailable until the node comes back up and reloads its Lucene indices.
+The Gateway writes the primary first and then its deterministic followers. `one`, `quorum`,
+and `all` acknowledgement policies are supported; acknowledged-consistency failover requires
+`all`. Query fanout selects exactly one eligible copy of each logical range, so replicas do
+not multiply hits, totals, or facets.
 
 The coordinator exposes a versioned, health-aware node registry. `RegisterNode` creates or updates
 membership, `Heartbeat` renews a previously registered node's lease without creating membership,
-and `GetShardMap` returns one logical `index/<nodeId>` placement for each active index node. Those
+and `GetShardMap` returns the generation-fenced primary and replicas for each logical `index/<nodeId>` range. Those
 RPCs return the durable topology epoch and monotonic version so clients can reject stale state;
-they do not provide replication, automatic rebalancing, or document movement.
+they do not provide automatic repair, rebalancing, or document movement.
 
 This design intentionally keeps the system:
 - **Simple to operate** (few moving parts)
@@ -450,8 +452,9 @@ serviceDiscovery:
 indexNodes:
   routingStrategy: "LEAST_LOADED"
   componentLabel: "dsearch-index-node"
-  # Current runtime has no replication layer; this is documented for future work.
-  replicationFactor: 1
+  replicationFactor: 2
+  durabilityPolicy: "all"          # one | quorum | all
+  readConsistency: "acknowledged" # available | acknowledged
   nodes:
     - id: "0"
       host: "localhost"
@@ -499,8 +502,8 @@ pagination:
   `maxStalenessSeconds`; they do not silently return to the configured static node list.
 - The coordinator persists its membership/topology state at `coordinatorStateFile` (or the
   `COORDINATOR_STATE_FILE` override), supports registration, lease heartbeats, health checks,
-  expiry, discovery, and the logical shard-map RPC. The shard map is metadata only: it does not
-  rebalance Lucene data or add replication.
+  expiry, discovery, and the replicated logical shard-map RPC. It exposes placement and failover
+  state but does not run background repair or rebalance Lucene data.
 
 ---
 
@@ -508,12 +511,12 @@ pagination:
 
 This project is intentionally minimal and educational. Some trade‑offs and potential future work:
 
-- **No replication layer (yet)**
-  - A shard lives on exactly one node; if that node goes down, its data is unavailable until restart.
-  - Future direction: coordinator‑driven replication / Raft‑based shard groups.
+- **Replica repair is a separate workflow**
+  - Writes use explicit synchronous placement and acknowledgement, while a lagging or restored
+    replica remains under-replicated until the repair workflow verifies its committed position.
 - **Coordinator membership is not a data rebalancer**
   - Heartbeat and shard-map RPCs are implemented for durable, versioned membership and logical
-    index-node placement; they do not move or replicate Lucene documents.
+    index-node placement; they do not perform background copy or repair.
   - Expired node leases are removed from coordinator discovery. Node removal, shard relocation,
     and data rebalancing remain manual operational work.
 - **Indexes created before field sorting need a reindex**

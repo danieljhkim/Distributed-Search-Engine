@@ -36,7 +36,8 @@ import java.util.logging.Logger;
 public final class NodeMembershipAgent implements AutoCloseable {
 
     private static final Logger LOGGER = Logger.getLogger(NodeMembershipAgent.class.getName());
-    private static final int SUPPORTED_CONTRACT_VERSION = 1;
+    private static final int MIN_SUPPORTED_CONTRACT_VERSION = 1;
+    private static final int MAX_SUPPORTED_CONTRACT_VERSION = 2;
 
     private final NodeIdentity identity;
     private final Settings settings;
@@ -269,7 +270,7 @@ public final class NodeMembershipAgent implements AutoCloseable {
         if (!success) {
             throw new IllegalStateException("Coordinator rejected membership " + operation);
         }
-        if (contractVersion != SUPPORTED_CONTRACT_VERSION) {
+        if (contractVersion < MIN_SUPPORTED_CONTRACT_VERSION || contractVersion > MAX_SUPPORTED_CONTRACT_VERSION) {
             throw new IllegalStateException("Unsupported coordinator membership contract version: " + contractVersion);
         }
     }

@@ -173,15 +173,33 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
                 GetShardMapResponse.Builder builder = GetShardMapResponse.newBuilder()
                         .setContractVersion(ClusterMembershipService.CONTRACT_VERSION)
                         .setTopologyEpoch(membershipService.getTopologyEpoch())
-                        .setTopologyVersion(membershipService.getTopologyVersion());
-                for (NodeGroup.NodeInfo node : membershipService.healthyNodes(NodeRole.NODE_ROLE_INDEX)) {
-                    builder.addShardLocations(ShardLocation.newBuilder()
-                            .setShardId("index/" + node.getNodeId())
-                            .setNodeId(node.getNodeId())
-                            .setHost(node.getHost())
-                            .setPort(node.getPort())
-                            .setRole(NodeRole.NODE_ROLE_INDEX)
-                            .build());
+                        .setTopologyVersion(membershipService.getTopologyVersion())
+                        .setReplicationFactor(membershipService.getReplicationFactor())
+                        .setDurabilityPolicy(
+                                membershipService.getDurabilityPolicy().name().toLowerCase())
+                        .setReadConsistency(
+                                membershipService.getReadConsistency().name().toLowerCase())
+                        .setUnderReplicatedShards(membershipService.underReplicatedShardCount());
+                for (var replicaSet : membershipService.replicaSets()) {
+                    for (String nodeId : replicaSet.nodeIds()) {
+                        NodeGroup.NodeInfo node = membershipService.configuredPlacementNode(nodeId);
+                        boolean eligible = membershipService.isReplicaEligible(nodeId);
+                        builder.addShardLocations(ShardLocation.newBuilder()
+                                .setShardId(replicaSet.shardId())
+                                .setNodeId(node.getNodeId())
+                                .setHost(node.getHost())
+                                .setPort(node.getPort())
+                                .setRole(NodeRole.NODE_ROLE_INDEX)
+                                .setPrimaryNodeId(replicaSet.primaryNodeId())
+                                .setGeneration(replicaSet.generation())
+                                .setPrimary(nodeId.equals(replicaSet.primaryNodeId()))
+                                .setEligible(eligible)
+                                .setState(
+                                        eligible
+                                                ? nodeId.equals(replicaSet.primaryNodeId()) ? "primary" : "replica"
+                                                : "unavailable")
+                                .build());
+                    }
                 }
                 response = builder.build();
             }
@@ -213,10 +231,12 @@ public class ClusterServiceImpl extends ClusterServiceGrpc.ClusterServiceImplBas
                 GetClusterInfoResponse.Builder builder = GetClusterInfoResponse.newBuilder()
                         .setComponentLabel(group.getComponentLabel())
                         .setRoutingStrategy(group.getRoutingStrategy().name())
-                        .setReplicationFactor(1)
+                        .setReplicationFactor(group.getReplicationFactor())
                         .setContractVersion(ClusterMembershipService.CONTRACT_VERSION)
                         .setTopologyEpoch(membershipService.getTopologyEpoch())
-                        .setTopologyVersion(membershipService.getTopologyVersion());
+                        .setTopologyVersion(membershipService.getTopologyVersion())
+                        .setDurabilityPolicy(group.getDurabilityPolicy().name().toLowerCase())
+                        .setReadConsistency(group.getReadConsistency().name().toLowerCase());
 
                 for (NodeGroup.NodeInfo ni : membershipService.healthyNodes(role)) {
                     builder.addNodes(NodeInfo.newBuilder()

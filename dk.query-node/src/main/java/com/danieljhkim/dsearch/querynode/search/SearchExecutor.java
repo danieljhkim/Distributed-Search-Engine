@@ -327,8 +327,8 @@ public class SearchExecutor implements Closeable {
 
         // Fan out
         List<NodeSearchTask> futures = new ArrayList<>();
-        List<String> activeNodeIds = nodeClientManager.getActiveNodeIds();
-        int acquiredPermits = activeNodeIds.size();
+        var replicaTargets = nodeClientManager.replicaReadTargets(shardId);
+        int acquiredPermits = replicaTargets.size();
         if (acquiredPermits > 0 && !fanoutAdmission.tryAcquire(acquiredPermits)) {
             FANOUT_OUTCOMES.labels("rejected").inc();
             throw new RequestAdmissionException("search fan-out", retryAfterMillis);
@@ -336,14 +336,15 @@ public class SearchExecutor implements Closeable {
         FANOUT_ADMISSION_AVAILABLE.set(fanoutAdmission.availablePermits());
         int submitted = 0;
         try {
-            for (String nodeId : activeNodeIds) {
+            for (var target : replicaTargets) {
+                String nodeId = target.nodeId();
                 futures.add(new NodeSearchTask(
                         nodeId,
                         submitNodeSearch(
                                 requestContext,
                                 requestId,
                                 nodeId,
-                                shardId,
+                                target.storagePartitionId(),
                                 queryString,
                                 perShardLimit,
                                 searchType,

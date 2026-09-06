@@ -44,11 +44,13 @@ message GetClusterInfoResponse {
     repeated NodeInfo nodes = 1;
     string routingStrategy = 2;
     string componentLabel = 3;
-    // Current runtime has no replication layer; coordinator returns 1.
     int32 replicationFactor = 4;
     uint32 contract_version = 5;
     string topology_epoch = 6;
     uint64 topology_version = 7;
+    // Bounded policy names: one, quorum, or all; available or acknowledged.
+    string durability_policy = 8;
+    string read_consistency = 9;
 }
 
 // Renews a registered node's lease. A heartbeat never creates membership;
@@ -88,9 +90,8 @@ message DeregisterNodeResponse {
   uint64 topology_version = 4;
 }
 
-// Returns the authoritative logical index-shard placement. Each active index
-// node owns one logical shard slot named "index/<node_id>". This contract does
-// not claim replication or automatic movement of existing Lucene data.
+// Returns the authoritative logical index-shard placement. A logical shard has
+// exactly one generation-fenced primary and zero or more distinct replicas.
 message GetShardMapRequest {
   uint64 min_topology_version = 1;
 }
@@ -101,6 +102,11 @@ message ShardLocation {
   string host = 3;
   int32 port = 4;
   NodeRole role = 5;
+  string primary_node_id = 6;
+  uint64 generation = 7;
+  bool primary = 8;
+  bool eligible = 9;
+  string state = 10;
 }
 
 message NodeInfo {
@@ -117,6 +123,10 @@ message GetShardMapResponse {
   uint32 contract_version = 2;
   string topology_epoch = 3;
   uint64 topology_version = 4;
+  int32 replication_factor = 5;
+  string durability_policy = 6;
+  string read_consistency = 7;
+  int32 under_replicated_shards = 8;
 }
 
 service ClusterService {

@@ -26,8 +26,12 @@ import com.danieljhkim.dsearch.proto.index.Field;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.IndexDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
+import com.danieljhkim.dsearch.proto.index.MutationMetadata;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
+import io.prometheus.client.Counter;
+import io.prometheus.client.Gauge;
+import io.prometheus.client.Histogram;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -37,6 +41,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -53,6 +58,21 @@ import org.springframework.web.server.ResponseStatusException;
 public class GatewayIndexService {
 
     private static final String DEFAULT_PARTITION_ID = "default";
+    private static final AtomicLong GENERATED_OPERATION_GENERATION =
+            new AtomicLong(System.currentTimeMillis() * 1_000L);
+    private static final Counter ACK_OUTCOMES = Counter.build()
+            .name("dsearch_replication_acknowledgements_total")
+            .help("Replicated mutation acknowledgement outcomes by bounded policy and outcome")
+            .labelNames("policy", "outcome")
+            .register();
+    private static final Histogram ACK_LATENCY = Histogram.build()
+            .name("dsearch_replication_ack_latency_seconds")
+            .help("Latency until a replicated mutation reaches its configured acknowledgement policy")
+            .register();
+    private static final Gauge REPLICA_LAG = Gauge.build()
+            .name("dsearch_replication_unacknowledged_replicas")
+            .help("Replica attempts missing from the most recently completed mutation")
+            .register();
 
     private final NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> indexNodeClientManager;
     private final AppConfig.RequestLimitsConfig requestLimits;
@@ -78,9 +98,6 @@ public class GatewayIndexService {
                 : UUID.randomUUID().toString();
         RequestLimitsValidator.validateDocument(documentId, requestDto.getFields(), requestLimits);
 
-        NodeClient<IndexServiceGrpc.IndexServiceBlockingStub> owner =
-                indexNodeClientManager.ownerClient(partitionId, documentId);
-
         Document.Builder docBuilder = Document.newBuilder().setId(documentId);
         Map<String, String> fields = requestDto.getFields();
         if (fields != null) {
@@ -93,17 +110,17 @@ public class GatewayIndexService {
             }
         }
 
-        IndexDocumentRequest grpcReq = IndexDocumentRequest.newBuilder()
-                .setPartitionId(partitionId)
-                .setDocument(docBuilder.build())
-                .build();
-        IndexDocumentResponse resp = owner.getStub()
-                .withDeadlineAfter(Math.max(1, requestLimits.getRequestTimeoutMillis()), TimeUnit.MILLISECONDS)
-                .indexDocument(grpcReq);
-        if (resp.getSuccess()) {
-            owner.incrementDocToShard(partitionId);
+        String operationId = requestDto.getOperationId() == null
+                        || requestDto.getOperationId().isBlank()
+                ? UUID.randomUUID().toString()
+                : requestDto.getOperationId();
+        long operationGeneration = requestDto.getGeneration() == null
+                ? GENERATED_OPERATION_GENERATION.incrementAndGet()
+                : requestDto.getGeneration();
+        if (indexNodeClientManager.getReplicationFactor() == 0) {
+            return legacyIndexViaOwner(partitionId, docBuilder.build());
         }
-        return new IndexResponseDto(resp.getId(), resp.getSuccess());
+        return replicateIndex(partitionId, docBuilder.build(), operationId, operationGeneration);
     }
 
     public IndexResponseDto delete(String id, String partitionId) {
@@ -113,20 +130,218 @@ public class GatewayIndexService {
         RequestLimitsValidator.validateDocument(id, Map.of(), requestLimits);
 
         String resolvedPartitionId = resolvePartitionId(partitionId);
-        NodeClient<IndexServiceGrpc.IndexServiceBlockingStub> owner =
-                indexNodeClientManager.ownerClient(resolvedPartitionId, id);
-
-        DeleteDocumentRequest grpcReq = DeleteDocumentRequest.newBuilder()
-                .setPartitionId(resolvedPartitionId)
-                .setId(id)
-                .build();
-        DeleteDocumentResponse resp = owner.getStub()
-                .withDeadlineAfter(Math.max(1, requestLimits.getRequestTimeoutMillis()), TimeUnit.MILLISECONDS)
-                .deleteDocument(grpcReq);
-        if (resp.getSuccess()) {
-            owner.decrementDocFromShard(resolvedPartitionId);
+        if (indexNodeClientManager.getReplicationFactor() == 0) {
+            return legacyDeleteViaOwner(resolvedPartitionId, id);
         }
-        return new IndexResponseDto(id, resp.getSuccess());
+        return replicateDelete(
+                resolvedPartitionId,
+                id,
+                UUID.randomUUID().toString(),
+                GENERATED_OPERATION_GENERATION.incrementAndGet());
+    }
+
+    /** Compatibility seam for older injected manager doubles; constructed managers always report at least one. */
+    private IndexResponseDto legacyIndexViaOwner(String partitionId, Document document) {
+        NodeClient<IndexServiceGrpc.IndexServiceBlockingStub> owner =
+                indexNodeClientManager.ownerClient(partitionId, document.getId());
+        IndexDocumentResponse response = owner.getStub()
+                .withDeadlineAfter(Math.max(1, requestLimits.getRequestTimeoutMillis()), TimeUnit.MILLISECONDS)
+                .indexDocument(IndexDocumentRequest.newBuilder()
+                        .setPartitionId(partitionId)
+                        .setDocument(document)
+                        .build());
+        if (response.getSuccess()) {
+            owner.incrementDocToShard(partitionId);
+        }
+        return new IndexResponseDto(response.getId(), response.getSuccess());
+    }
+
+    private IndexResponseDto legacyDeleteViaOwner(String partitionId, String documentId) {
+        NodeClient<IndexServiceGrpc.IndexServiceBlockingStub> owner =
+                indexNodeClientManager.ownerClient(partitionId, documentId);
+        DeleteDocumentResponse response = owner.getStub()
+                .withDeadlineAfter(Math.max(1, requestLimits.getRequestTimeoutMillis()), TimeUnit.MILLISECONDS)
+                .deleteDocument(DeleteDocumentRequest.newBuilder()
+                        .setPartitionId(partitionId)
+                        .setId(documentId)
+                        .build());
+        if (response.getSuccess()) {
+            owner.decrementDocFromShard(partitionId);
+        }
+        return new IndexResponseDto(documentId, response.getSuccess());
+    }
+
+    private IndexResponseDto replicateIndex(
+            String partitionId, Document document, String operationId, long operationGeneration) {
+        var plan = indexNodeClientManager.replicaWritePlan(partitionId, document.getId());
+        long deadlineNanos = replicationDeadlineNanos();
+        long started = System.nanoTime();
+        int acknowledgements = 0;
+        RuntimeException lastFailure = null;
+        for (var target : plan.targets()) {
+            if (!target.active() || target.client() == null) {
+                lastFailure = new NodeUnavailableException(
+                        target.nodeId(),
+                        "Replica " + target.nodeId() + " is unavailable for logical shard "
+                                + plan.replicaSet().shardId());
+                continue;
+            }
+            try {
+                IndexDocumentResponse response = target.client()
+                        .getStub()
+                        .withDeadlineAfter(remainingMillis(deadlineNanos), TimeUnit.MILLISECONDS)
+                        .indexDocument(IndexDocumentRequest.newBuilder()
+                                .setPartitionId(target.storagePartitionId())
+                                .setDocument(document)
+                                .setMutation(mutationMetadata(
+                                        plan.replicaSet(),
+                                        target.nodeId(),
+                                        target.primary(),
+                                        operationId,
+                                        operationGeneration))
+                                .build());
+                if (!response.getSuccess()) {
+                    throw Status.INTERNAL
+                            .withDescription("replica returned an unsuccessful durable index response")
+                            .asRuntimeException();
+                }
+                acknowledgements++;
+                if (!response.getDuplicate()) {
+                    target.client().incrementDocToShard(partitionId);
+                }
+            } catch (RuntimeException e) {
+                lastFailure = e;
+                if (target.primary()) {
+                    recordAck(plan, acknowledgements, started, false);
+                    throw e;
+                }
+            }
+        }
+        requireAcknowledgements(plan, acknowledgements, lastFailure, started);
+        return new IndexResponseDto(
+                document.getId(),
+                true,
+                operationId,
+                operationGeneration,
+                acknowledgements,
+                plan.replicaSet().requiredAcknowledgements());
+    }
+
+    private IndexResponseDto replicateDelete(
+            String partitionId, String documentId, String operationId, long operationGeneration) {
+        var plan = indexNodeClientManager.replicaWritePlan(partitionId, documentId);
+        long deadlineNanos = replicationDeadlineNanos();
+        long started = System.nanoTime();
+        int acknowledgements = 0;
+        RuntimeException lastFailure = null;
+        for (var target : plan.targets()) {
+            if (!target.active() || target.client() == null) {
+                lastFailure = new NodeUnavailableException(
+                        target.nodeId(),
+                        "Replica " + target.nodeId() + " is unavailable for logical shard "
+                                + plan.replicaSet().shardId());
+                continue;
+            }
+            try {
+                DeleteDocumentResponse response = target.client()
+                        .getStub()
+                        .withDeadlineAfter(remainingMillis(deadlineNanos), TimeUnit.MILLISECONDS)
+                        .deleteDocument(DeleteDocumentRequest.newBuilder()
+                                .setPartitionId(target.storagePartitionId())
+                                .setId(documentId)
+                                .setMutation(mutationMetadata(
+                                        plan.replicaSet(),
+                                        target.nodeId(),
+                                        target.primary(),
+                                        operationId,
+                                        operationGeneration))
+                                .build());
+                if (!response.getSuccess()) {
+                    throw Status.INTERNAL
+                            .withDescription("replica returned an unsuccessful durable delete response")
+                            .asRuntimeException();
+                }
+                acknowledgements++;
+                if (!response.getDuplicate()) {
+                    target.client().decrementDocFromShard(partitionId);
+                }
+            } catch (RuntimeException e) {
+                lastFailure = e;
+                if (target.primary()) {
+                    recordAck(plan, acknowledgements, started, false);
+                    throw e;
+                }
+            }
+        }
+        requireAcknowledgements(plan, acknowledgements, lastFailure, started);
+        return new IndexResponseDto(
+                documentId,
+                true,
+                operationId,
+                operationGeneration,
+                acknowledgements,
+                plan.replicaSet().requiredAcknowledgements());
+    }
+
+    private MutationMetadata mutationMetadata(
+            com.danieljhkim.dsearch.common.shard.ReplicaPlacement.ReplicaSet replicaSet,
+            String targetNodeId,
+            boolean primary,
+            String operationId,
+            long operationGeneration) {
+        return MutationMetadata.newBuilder()
+                .setOperationId(operationId)
+                .setOperationGeneration(operationGeneration)
+                .setPlacementGeneration(replicaSet.generation())
+                .setPrimaryNodeId(replicaSet.primaryNodeId())
+                .setTargetNodeId(targetNodeId)
+                .setReplica(!primary)
+                .build();
+    }
+
+    private void requireAcknowledgements(
+            NodeClientManager.ReplicaWritePlan<IndexServiceGrpc.IndexServiceBlockingStub> plan,
+            int acknowledgements,
+            RuntimeException lastFailure,
+            long started) {
+        boolean success = acknowledgements >= plan.replicaSet().requiredAcknowledgements();
+        recordAck(plan, acknowledgements, started, success);
+        if (!success) {
+            throw Status.UNAVAILABLE
+                    .withDescription("replicated mutation reached " + acknowledgements + " acknowledgements but policy "
+                            + indexNodeClientManager
+                                    .getDurabilityPolicy()
+                                    .name()
+                                    .toLowerCase() + " requires "
+                            + plan.replicaSet().requiredAcknowledgements())
+                    .withCause(lastFailure)
+                    .asRuntimeException();
+        }
+    }
+
+    private void recordAck(
+            NodeClientManager.ReplicaWritePlan<IndexServiceGrpc.IndexServiceBlockingStub> plan,
+            int acknowledgements,
+            long started,
+            boolean success) {
+        String policy = indexNodeClientManager.getDurabilityPolicy().name().toLowerCase();
+        ACK_OUTCOMES.labels(policy, success ? "acknowledged" : "insufficient").inc();
+        ACK_LATENCY.observe((System.nanoTime() - started) / 1_000_000_000.0);
+        REPLICA_LAG.set(Math.max(0, plan.targets().size() - acknowledgements));
+    }
+
+    private long replicationDeadlineNanos() {
+        return System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(1, requestLimits.getRequestTimeoutMillis()));
+    }
+
+    private static long remainingMillis(long deadlineNanos) {
+        long remainingNanos = deadlineNanos - System.nanoTime();
+        if (remainingNanos <= 0) {
+            throw Status.DEADLINE_EXCEEDED
+                    .withDescription("replication acknowledgement deadline exhausted")
+                    .asRuntimeException();
+        }
+        return Math.max(1, TimeUnit.NANOSECONDS.toMillis(remainingNanos));
     }
 
     /**
@@ -141,6 +356,9 @@ public class GatewayIndexService {
         ensureBulkItemCount(items.size());
 
         String partitionId = resolvePartitionId(requestDto.getPartitionId());
+        if (indexNodeClientManager.getReplicationFactor() > 1) {
+            return bulkIndexReplicated(partitionId, items);
+        }
         List<BulkIndexItemResponseDto> results = new ArrayList<>(items.size());
         for (int index = 0; index < items.size(); index++) {
             results.add(null);
@@ -205,6 +423,9 @@ public class GatewayIndexService {
         ensureBulkItemCount(ids.size());
 
         String partitionId = resolvePartitionId(requestDto.getPartitionId());
+        if (indexNodeClientManager.getReplicationFactor() > 1) {
+            return bulkDeleteReplicated(partitionId, ids);
+        }
         List<BulkDeleteItemResponseDto> results = new ArrayList<>(ids.size());
         for (int index = 0; index < ids.size(); index++) {
             results.add(null);
@@ -270,6 +491,69 @@ public class GatewayIndexService {
                 results.set(item.requestIndex(), deleteTransportFailure(item.requestIndex(), item.id(), e));
             }
         }
+    }
+
+    private BulkIndexResponseDto bulkIndexReplicated(String partitionId, List<IndexRequestDto> items) {
+        List<BulkIndexItemResponseDto> results = new ArrayList<>(items.size());
+        Set<String> seenIds = new HashSet<>();
+        long embeddingBytes = 0;
+        for (int requestIndex = 0; requestIndex < items.size(); requestIndex++) {
+            IndexRequestDto item = items.get(requestIndex);
+            if (item == null || item.getId() == null || item.getId().isBlank()) {
+                results.add(validationFailure(requestIndex, item == null ? null : item.getId(), "id is required"));
+                continue;
+            }
+            if (!seenIds.add(item.getId())) {
+                results.add(validationFailure(requestIndex, item.getId(), "duplicate id in bulk request"));
+                continue;
+            }
+            try {
+                RequestLimitsValidator.validateDocument(item.getId(), item.getFields(), requestLimits);
+                embeddingBytes = Math.addExact(embeddingBytes, embeddingWorkBytes(item.getFields()));
+                ensureBulkEmbeddingBytes(embeddingBytes);
+                String operationId =
+                        item.getOperationId() == null || item.getOperationId().isBlank()
+                                ? UUID.randomUUID().toString()
+                                : item.getOperationId();
+                long generation = item.getGeneration() == null
+                        ? GENERATED_OPERATION_GENERATION.incrementAndGet()
+                        : item.getGeneration();
+                replicateIndex(partitionId, toProtoDocument(item.getId(), item.getFields()), operationId, generation);
+                results.add(new BulkIndexItemResponseDto(requestIndex, item.getId(), "success", null));
+            } catch (IllegalArgumentException e) {
+                results.add(validationFailure(requestIndex, item.getId(), e.getMessage()));
+            } catch (RuntimeException e) {
+                results.add(transportFailure(requestIndex, item.getId(), e));
+            }
+        }
+        return new BulkIndexResponseDto(
+                results.stream().allMatch(result -> "success".equals(result.getStatus())), results);
+    }
+
+    private BulkDeleteResponseDto bulkDeleteReplicated(String partitionId, List<String> ids) {
+        List<BulkDeleteItemResponseDto> results = new ArrayList<>(ids.size());
+        for (int requestIndex = 0; requestIndex < ids.size(); requestIndex++) {
+            String id = ids.get(requestIndex);
+            if (id == null || id.isBlank()) {
+                results.add(deleteValidationFailure(requestIndex, id, "id must not be blank"));
+                continue;
+            }
+            try {
+                RequestLimitsValidator.validateDocumentId(id, requestLimits);
+                replicateDelete(
+                        partitionId,
+                        id,
+                        UUID.randomUUID().toString(),
+                        GENERATED_OPERATION_GENERATION.incrementAndGet());
+                results.add(new BulkDeleteItemResponseDto(requestIndex, id, "success", null));
+            } catch (IllegalArgumentException e) {
+                results.add(deleteValidationFailure(requestIndex, id, e.getMessage()));
+            } catch (RuntimeException e) {
+                results.add(deleteTransportFailure(requestIndex, id, e));
+            }
+        }
+        return new BulkDeleteResponseDto(
+                results.stream().allMatch(result -> "success".equals(result.getStatus())), results);
     }
 
     private static void applyOwnerDeleteResults(

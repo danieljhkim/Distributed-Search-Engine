@@ -63,13 +63,18 @@ public class AppConfig {
         private RoutingStrategy routingStrategy;
         private String componentLabel;
         private int replicationFactor = 1;
+        private String durabilityPolicy = "all";
+        private String readConsistency = "acknowledged";
 
         @Override
         public String toString() {
             return "NodeGroupConfig{" + "nodes="
                     + nodes + ", routingStrategy="
                     + routingStrategy + ", componentLabel='"
-                    + componentLabel + '}';
+                    + componentLabel + "', replicationFactor="
+                    + replicationFactor + ", durabilityPolicy='"
+                    + durabilityPolicy + "', readConsistency='"
+                    + readConsistency + "'}";
         }
     }
 

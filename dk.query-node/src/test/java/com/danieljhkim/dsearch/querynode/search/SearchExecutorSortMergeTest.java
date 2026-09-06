@@ -11,6 +11,7 @@ import com.danieljhkim.dsearch.common.model.SearchResult;
 import com.danieljhkim.dsearch.common.pagination.SortOptions;
 import com.danieljhkim.dsearch.common.pagination.SortSpec;
 import com.danieljhkim.dsearch.common.pagination.SortValues;
+import com.danieljhkim.dsearch.common.shard.ReplicaPlacement;
 import com.danieljhkim.dsearch.proto.common.FacetRequest;
 import com.danieljhkim.dsearch.proto.common.Filter;
 import com.danieljhkim.dsearch.proto.common.SearchType;
@@ -193,6 +194,11 @@ class SearchExecutorSortMergeTest {
             List<String> nodeIds) {
         NodeClientManager<IndexServiceGrpc.IndexServiceBlockingStub> manager = mock(NodeClientManager.class);
         when(manager.getActiveNodeIds()).thenReturn(nodeIds);
+        when(manager.replicaReadTargets(org.mockito.ArgumentMatchers.anyString()))
+                .thenAnswer(invocation -> nodeIds.stream()
+                        .map(nodeId -> new ReplicaPlacement.ReadTarget(
+                                "index/" + nodeId, nodeId, invocation.getArgument(0), false))
+                        .toList());
         return manager;
     }
 

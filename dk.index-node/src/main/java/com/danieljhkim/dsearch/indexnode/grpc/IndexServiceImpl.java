@@ -43,6 +43,7 @@ import com.danieljhkim.dsearch.proto.index.IndexSearchResponse;
 import com.danieljhkim.dsearch.proto.index.IndexServiceGrpc;
 import com.danieljhkim.dsearch.proto.index.InspectSchemaRequest;
 import com.danieljhkim.dsearch.proto.index.InspectSchemaResponse;
+import com.danieljhkim.dsearch.proto.index.MutationMetadata;
 import com.danieljhkim.dsearch.proto.index.ReindexRequest;
 import com.danieljhkim.dsearch.proto.index.ReindexResponse;
 import com.danieljhkim.dsearch.proto.index.RollbackAliasRequest;
@@ -51,28 +52,48 @@ import com.danieljhkim.dsearch.proto.index.SwapAliasRequest;
 import com.danieljhkim.dsearch.proto.index.SwapAliasResponse;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
+import io.prometheus.client.Counter;
+import io.prometheus.client.Histogram;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
 
     private static final Logger LOGGER = Logger.getLogger(IndexServiceImpl.class.getName());
+    private static final Counter REPLICATION_OUTCOMES = Counter.build()
+            .name("dsearch_replication_operations_total")
+            .help("Replicated index operations by bounded role and outcome")
+            .labelNames("role", "outcome")
+            .register();
+    private static final Histogram REPLICATION_APPLY_DURATION = Histogram.build()
+            .name("dsearch_replication_apply_duration_seconds")
+            .help("Replica mutation apply latency")
+            .register();
 
     private final IndexManager indexManager;
     private final AppConfig.RequestLimitsConfig requestLimits;
+    private final String localNodeId;
+    private final AtomicLong latestPlacementGeneration = new AtomicLong();
 
     public IndexServiceImpl(IndexManager indexManager) {
-        this(indexManager, new AppConfig.RequestLimitsConfig());
+        this(indexManager, new AppConfig.RequestLimitsConfig(), null);
     }
 
     public IndexServiceImpl(IndexManager indexManager, AppConfig.RequestLimitsConfig requestLimits) {
+        this(indexManager, requestLimits, null);
+    }
+
+    public IndexServiceImpl(
+            IndexManager indexManager, AppConfig.RequestLimitsConfig requestLimits, String localNodeId) {
         this.indexManager = indexManager;
         this.requestLimits = RequestLimitsValidator.limitsOrDefaults(requestLimits);
+        this.localNodeId = localNodeId;
     }
 
     @Override
@@ -88,17 +109,21 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
             RequestLimitsValidator.validateDocument(
                     protoDoc.toBuilder().setId(docId).build(), requestLimits);
             SearchDocument searchDoc = toSearchDocument(docId, protoDoc);
-            indexManager.indexDocumentDurably(partitionId, searchDoc);
+            IndexManager.MutationResult mutationResult = request.hasMutation()
+                    ? applyReplicatedIndex(partitionId, searchDoc, request.getMutation())
+                    : legacyIndex(partitionId, searchDoc);
 
             IndexDocumentResponse response = IndexDocumentResponse.newBuilder()
                     .setId(docId)
                     .setSuccess(true)
+                    .setDuplicate(mutationResult.duplicate())
+                    .setCommittedGeneration(mutationResult.committedGeneration())
                     .build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
         } catch (IllegalArgumentException e) {
             invalidArgument(responseObserver, e);
-        } catch (SchemaMismatchException e) {
+        } catch (SchemaMismatchException | IndexManager.StaleMutationException e) {
             failedPrecondition(responseObserver, e);
         } catch (RequestAdmissionException e) {
             resourceExhausted(responseObserver, e);
@@ -120,6 +145,9 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
         }
         try {
             RequestLimitsValidator.validateBulkIndexRequest(request, requestLimits);
+            if (request.getMutationsCount() != 0 && request.getMutationsCount() != request.getDocumentsCount()) {
+                throw new IllegalArgumentException("bulk mutations must be absent or positionally match documents");
+            }
         } catch (IllegalArgumentException e) {
             invalidArgument(responseObserver, e);
             return;
@@ -134,13 +162,17 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
                     .setId(docId);
             try {
                 SearchDocument searchDoc = toSearchDocument(docId, protoDoc);
-                indexManager.indexDocumentDurably(partitionId, searchDoc);
+                if (request.getMutationsCount() == 0) {
+                    indexManager.indexDocumentDurably(partitionId, searchDoc);
+                } else {
+                    applyReplicatedIndex(partitionId, searchDoc, request.getMutations(requestIndex));
+                }
                 respBuilder.addIds(docId);
                 result.setSuccess(true);
             } catch (RequestAdmissionException e) {
                 success = false;
                 result.setSuccess(false).setError("request admission exhausted; retry with the returned id");
-            } catch (SchemaMismatchException e) {
+            } catch (SchemaMismatchException | IndexManager.StaleMutationException e) {
                 success = false;
                 result.setSuccess(false).setError(e.getMessage());
             } catch (IOException | RuntimeException e) {
@@ -165,14 +197,19 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
         String docId = request.getId();
         try {
             RequestLimitsValidator.validateDocumentId(docId, requestLimits);
-            indexManager.deleteDocumentDurably(partitionId, docId);
-            DeleteDocumentResponse response =
-                    DeleteDocumentResponse.newBuilder().setSuccess(true).build();
+            IndexManager.MutationResult mutationResult = request.hasMutation()
+                    ? applyReplicatedDelete(partitionId, docId, request.getMutation())
+                    : legacyDelete(partitionId, docId);
+            DeleteDocumentResponse response = DeleteDocumentResponse.newBuilder()
+                    .setSuccess(true)
+                    .setDuplicate(mutationResult.duplicate())
+                    .setCommittedGeneration(mutationResult.committedGeneration())
+                    .build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
         } catch (IllegalArgumentException e) {
             invalidArgument(responseObserver, e);
-        } catch (SchemaMismatchException e) {
+        } catch (SchemaMismatchException | IndexManager.StaleMutationException e) {
             failedPrecondition(responseObserver, e);
         } catch (IOException e) {
             LOGGER.log(Level.SEVERE, "DeleteDocument failed", e);
@@ -199,6 +236,9 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
         }
         try {
             RequestLimitsValidator.validateBulkItemCount(request.getIdsCount(), requestLimits);
+            if (request.getMutationsCount() != 0 && request.getMutationsCount() != request.getIdsCount()) {
+                throw new IllegalArgumentException("bulk mutations must be absent or positionally match ids");
+            }
         } catch (IllegalArgumentException e) {
             invalidArgument(responseObserver, e);
             return;
@@ -212,7 +252,11 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
                     .setId(docId);
             try {
                 RequestLimitsValidator.validateDocumentId(docId, requestLimits);
-                indexManager.deleteDocumentDurably(partitionId, docId);
+                if (request.getMutationsCount() == 0) {
+                    indexManager.deleteDocumentDurably(partitionId, docId);
+                } else {
+                    applyReplicatedDelete(partitionId, docId, request.getMutations(requestIndex));
+                }
                 result.setSuccess(true);
             } catch (IllegalArgumentException e) {
                 success = false;
@@ -220,7 +264,7 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
             } catch (RequestAdmissionException e) {
                 success = false;
                 result.setSuccess(false).setError("request admission exhausted; retry with the same id");
-            } catch (SchemaMismatchException e) {
+            } catch (SchemaMismatchException | IndexManager.StaleMutationException e) {
                 success = false;
                 result.setSuccess(false).setError(e.getMessage());
             } catch (IOException | RuntimeException e) {
@@ -235,6 +279,89 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
         respBuilder.setSuccess(success);
         responseObserver.onNext(respBuilder.build());
         responseObserver.onCompleted();
+    }
+
+    private IndexManager.MutationResult legacyIndex(String partitionId, SearchDocument document) throws IOException {
+        indexManager.indexDocumentDurably(partitionId, document);
+        return new IndexManager.MutationResult(false, 0L);
+    }
+
+    private IndexManager.MutationResult legacyDelete(String partitionId, String documentId) throws IOException {
+        indexManager.deleteDocumentDurably(partitionId, documentId);
+        return new IndexManager.MutationResult(false, 0L);
+    }
+
+    private IndexManager.MutationResult applyReplicatedIndex(
+            String partitionId, SearchDocument document, MutationMetadata mutation) throws IOException {
+        validateMutationTarget(mutation);
+        long started = System.nanoTime();
+        String role = mutation.getReplica() ? "replica" : "primary";
+        try {
+            IndexManager.MutationResult result = indexManager.applyReplicatedIndex(
+                    partitionId,
+                    document,
+                    mutation.getOperationId(),
+                    mutation.getOperationGeneration(),
+                    mutation.getPlacementGeneration());
+            REPLICATION_OUTCOMES
+                    .labels(role, result.duplicate() ? "duplicate" : "applied")
+                    .inc();
+            return result;
+        } catch (RuntimeException | IOException e) {
+            REPLICATION_OUTCOMES
+                    .labels(role, e instanceof IndexManager.StaleMutationException ? "stale" : "failed")
+                    .inc();
+            throw e;
+        } finally {
+            REPLICATION_APPLY_DURATION.observe((System.nanoTime() - started) / 1_000_000_000.0);
+        }
+    }
+
+    private IndexManager.MutationResult applyReplicatedDelete(
+            String partitionId, String documentId, MutationMetadata mutation) throws IOException {
+        validateMutationTarget(mutation);
+        long started = System.nanoTime();
+        String role = mutation.getReplica() ? "replica" : "primary";
+        try {
+            IndexManager.MutationResult result = indexManager.applyReplicatedDelete(
+                    partitionId,
+                    documentId,
+                    mutation.getOperationId(),
+                    mutation.getOperationGeneration(),
+                    mutation.getPlacementGeneration());
+            REPLICATION_OUTCOMES
+                    .labels(role, result.duplicate() ? "duplicate" : "applied")
+                    .inc();
+            return result;
+        } catch (RuntimeException | IOException e) {
+            REPLICATION_OUTCOMES
+                    .labels(role, e instanceof IndexManager.StaleMutationException ? "stale" : "failed")
+                    .inc();
+            throw e;
+        } finally {
+            REPLICATION_APPLY_DURATION.observe((System.nanoTime() - started) / 1_000_000_000.0);
+        }
+    }
+
+    private void validateMutationTarget(MutationMetadata mutation) {
+        if (mutation.getPrimaryNodeId().isBlank() || mutation.getTargetNodeId().isBlank()) {
+            throw new IllegalArgumentException("replicated mutation must declare primary_node_id and target_node_id");
+        }
+        if (localNodeId != null && !localNodeId.isBlank() && !localNodeId.equals(mutation.getTargetNodeId())) {
+            throw new IndexManager.StaleMutationException(
+                    "mutation target " + mutation.getTargetNodeId() + " does not match local node " + localNodeId);
+        }
+        if (mutation.getReplica() == mutation.getPrimaryNodeId().equals(mutation.getTargetNodeId())) {
+            throw new IndexManager.StaleMutationException(
+                    mutation.getReplica()
+                            ? "primary cannot accept a replica-role mutation"
+                            : "non-primary node cannot accept a primary-role mutation");
+        }
+        long observed = latestPlacementGeneration.accumulateAndGet(mutation.getPlacementGeneration(), Math::max);
+        if (mutation.getPlacementGeneration() < observed) {
+            throw new IndexManager.StaleMutationException("placement generation " + mutation.getPlacementGeneration()
+                    + " is older than node generation " + observed);
+        }
     }
 
     @Override
@@ -542,7 +669,7 @@ public class IndexServiceImpl extends IndexServiceGrpc.IndexServiceImplBase {
                 .asRuntimeException());
     }
 
-    private static void failedPrecondition(StreamObserver<?> responseObserver, SchemaMismatchException error) {
+    private static void failedPrecondition(StreamObserver<?> responseObserver, RuntimeException error) {
         responseObserver.onError(Status.FAILED_PRECONDITION
                 .withDescription(error.getMessage())
                 .withCause(error)

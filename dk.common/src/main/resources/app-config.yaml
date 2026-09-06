@@ -23,8 +23,11 @@ indexNodes:
   # (partitionId, documentId); see docs/DOCUMENT_OWNERSHIP.md.
   routingStrategy: "LEAST_LOADED"
   componentLabel: "dsearch-index-node"
-  # Current runtime has no replication layer; keep this at 1 until replication is implemented.
+  # 1 preserves the historical single-copy on-disk layout. Increase only after reindexing into
+  # logical replica shards as described in docs/DOCUMENT_OWNERSHIP.md.
   replicationFactor: 1
+  durabilityPolicy: "all"
+  readConsistency: "acknowledged"
   # This node list is the document ownership ring. Adding or removing an entry
   # reassigns part of the key space and requires a reindex: nothing moves documents.
   nodes:

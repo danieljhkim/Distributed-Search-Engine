@@ -1,110 +1,110 @@
-# Document Ownership
+# Document Ownership and Replication
 
-Every document has exactly one authoritative index node. This page defines that
-contract, what happens when the cluster changes shape, and what the gateway's
-document counters do and do not mean.
+Every document has one authoritative primary range and a configurable set of replica
+copies. This page defines placement, acknowledgement, failover, migration, and what the
+gateway's document counters do and do not mean.
 
-## Why ownership exists
+## Placement rule
 
-Indexing a document is a Lucene upsert (`IndexWriter.updateDocument` on the `id`
-term). That upsert only replaces the document on the node that performs it. If
-two nodes both accept a write for the same `id`, the cluster ends up holding two
-copies of one logical document: the search fan-out returns both, hit counts are
-inflated, and a delete that reaches only one of them appears to succeed while the
-document is still searchable.
-
-The gateway therefore never picks a node for a mutation based on load. It
-computes the owner from the document key.
-
-## The rule
+Lucene upserts are local, so uncoordinated copies would make updates ambiguous and
+inflate hits, document totals, and facets. Replication therefore creates explicit copies
+of a logical primary range; it is never inferred from duplicate requests.
 
 ```
-owner(partitionId, documentId) = argmax over configured index nodes of
-                                 hash64(nodeId, partitionId, documentId)
+primary(partitionId, documentId) = argmax over configured index nodes of
+                                   hash64(nodeId, partitionId, documentId)
 ```
 
-- Implemented by `DocumentOwnership` (`dk.common`), used through
-  `NodeClientManager.ownerClient(partitionId, documentId)`.
-- Rendezvous (highest-random-weight) hashing, FNV-1a 64 with a SplitMix64
-  finalizer, ties broken by the lexicographically smallest node id.
-- The result depends only on its inputs, so every gateway process reaches the
-  same answer without coordinating and without keeping an assignment map.
+`DocumentOwnership` implements this rendezvous-hash rule. `ReplicaPlacement` chooses
+`replicationFactor - 1` distinct followers deterministically from the same configured
+node set. Every range is named `index/<primaryNodeId>`, carries the coordinator topology
+generation, and lists the primary first. Ties use the lexicographically smallest node id,
+so every process computes the same result independent of input iteration order.
 
-### The ring is the configured node set
+The candidate set is `indexNodes.nodes[].id` from configuration, captured when a client
+manager is built. Health is volatile; placement is not. A runtime-discovered node outside
+that configured set cannot accept replicated traffic until an explicit rebalance changes
+the placement contract.
 
-The candidate set is `indexNodes.nodes[].id` from `app-config.yaml`, captured
-when the client manager is built. It is **not** the set of nodes that service
-discovery currently reports as healthy.
+## Writes, idempotency, and fencing
 
-This is the point of the design. Health is volatile; document placement is not.
-If ownership tracked liveness, a node blipping out of the health registry would
-hand its keys to a peer, the peer would accept an update for a document it does
-not have, and the cluster would then hold two copies.
+Every replicated upsert and delete carries an `operation_id`, monotonic
+`operation_generation`, placement generation, primary id, target id, and explicit
+primary/replica role. The gateway commits the primary first and then its followers. Index
+nodes durably retain the latest identity and generation per document:
 
-## Behavior
+- duplicate delivery of the same identity is an idempotent success;
+- reordered operations and stale placement generations are rejected;
+- a target mismatch is rejected, and a follower cannot accept a primary-role write;
+- a primary outage rejects writes instead of allowing a client-side promotion;
+- retrying the same operation after an uncertain response safely completes missing copies.
 
-### Gateway restart
+`indexNodes.durabilityPolicy` selects when the gateway may acknowledge:
 
-Ownership is recomputed from the config file and the document key, so it is
-identical before and after a restart. Nothing about ownership is persisted,
-because nothing needs to be.
+- `one`: the primary commit. Followers may lag, so only `readConsistency: available` is
+  valid.
+- `quorum`: a majority of the configured replica set. A minority may lag, so only
+  `readConsistency: available` is valid.
+- `all`: every configured copy. This is required by `readConsistency: acknowledged`; any
+  eligible failover copy then contains every acknowledged write.
 
-Covered by `NodeClientManagerTest.ownershipSurvivesRebuildingTheManagerAsAfterAGatewayRestart`
-and `DocumentOwnershipRoutingIntegrationTest.ownershipIsUnchangedWhenTheClusterIsRebuiltAsAfterARestart`.
-`DocumentOwnershipTest.ownerIsPinnedToKnownValuesSoRestartsAndUpgradesKeepTheSameOwner`
-pins concrete owners so a future change to the hash cannot silently strand
-documents on their previous node.
+The runtime rejects `readConsistency: acknowledged` with `one` or `quorum`, and rejects a
+replication factor larger than the configured eligible-node set. A failure after the
+primary commit but before the selected threshold produces no successful client
+acknowledgement. A network partition therefore cannot create a writable second primary.
 
-### Node becomes unhealthy, or joins and leaves discovery
+The mutation ledger and Lucene data survive restart. Automatic snapshot transfer,
+checksum comparison, and convergence of a restored or lagging replica belong to the
+separate replica-repair workflow.
 
-Ownership does not move. A node that is not currently active keeps its
-documents, and mutations for those documents fail with
-`NodeUnavailableException` (HTTP 503) rather than being rerouted. Reads are
-unaffected: the search fan-out still uses only the active nodes.
+## Reads and failover
 
-A node discovered at runtime that is not in the configuration participates in
-reads but never owns documents.
+Query fanout selects the first eligible copy of each logical range, preferring its primary
+and then deterministic followers. Exactly one copy of every range is queried, even when
+several ranges fail over to the same physical node. Hits, total counts, and facets are
+therefore aggregated once per logical shard rather than once per copy.
 
-Covered by `NodeClientManagerTest.ownershipRingIsFixedAtConstructionSoDiscoveryChurnCannotMoveDocuments`
-and `DocumentOwnershipRoutingIntegrationTest.mutationsForAnUnavailableOwnerAreRejectedRatherThanSentToThePeer`.
+With `readConsistency: acknowledged` and `durabilityPolicy: all`, losing a primary does
+not lose acknowledged writes. With `available`, a selected replica may omit writes that
+were acknowledged under `one` or `quorum`; this is the declared consistency tradeoff.
+Stale-generation replicas remain fenced from writes in either mode.
 
-### Adding or removing an index node in configuration
+## Topology and observability
 
-Editing `indexNodes` changes the ring, and rendezvous hashing then reassigns
-roughly `1/N` of the key space to or away from the changed node. Documents are
-**not** moved by this change: a document whose owner changed stays physically on
-its old node, where it remains searchable but is no longer updatable or
-deletable through the gateway.
+`GetShardMap` exposes placement generation, primary/replica role, eligibility,
+acknowledgement policy, read consistency, and under-replicated count. `GET /cluster/health`
+includes the bounded replication summary and failover count. Prometheus metrics cover
+under-replication, failover, apply outcomes, missing acknowledgements, and
+acknowledgement/apply latency without document- or shard-id labels.
 
-**Changing the configured index-node set requires a reindex.** There is no
-rebalancing or handoff in the current runtime (the config already notes that
-`replicationFactor` must stay at 1 for the same reason). `DocumentOwnershipTest`
-pins the minimal-disruption property so the eventual rebalancer only has to move
-that fraction of documents.
+Coordinator topology mutations increment the durable topology version. Restart accepts
+the previous version-1 state format and rewrites it in version 2, retaining the existing
+epoch/version monotonicity and node-lease fencing.
 
-### Deleting a document that does not exist
+## Migration and cluster changes
 
-Lucene delete-by-term is a no-op when nothing matches, and deletes are buffered,
-so the owner cannot report whether anything was removed. A delete for an unknown
-id is routed to the owner, returns success, and is idempotent.
+`replicationFactor: 1` preserves the historical on-disk partition names and single-copy
+behavior. For a factor above one, each logical primary range uses a distinct deterministic
+physical partition on every replica. That isolation is what lets query fanout select one
+copy without mixing ranges.
 
-### Document ids
+Existing single-copy partitions are not silently relabelled. Before increasing the
+factor, reindex or restore every partition into the replicated layout, verify the admin
+topology reports zero under-replicated ranges, and then switch clients. Rolling back to
+factor one likewise requires reindexing into the historical layout.
 
-The gateway mints the id when the client does not supply one. An id assigned
-further downstream would be unknown to the ownership function, so a later update
-of that document could be routed to a different node.
+Adding or removing an index node changes some primary ranges and follower sets. Use the
+online handoff/rebalance workflow; editing configuration alone never moves Lucene data.
+An unavailable follower remains explicitly under-replicated until repair completes.
 
-## Shard document counts
+## Restarts, deletes, ids, and counters
 
-`NodeClient` keeps a per-`(node, partition)` counter, snapshotted to disk by the
-gateway. It is now an approximate load and observability signal only - routing
-no longer reads it.
+Placement is recomputed from configuration and the document key, so it is identical across
+gateway restarts. A delete for a missing id is an idempotent success. The gateway mints a
+document id before placement when the client omits one, ensuring later updates use the same
+key.
 
-- It is adjusted only after the owner confirms a mutation. A failed or rejected
-  index/delete never changes it.
-- Re-indexing an existing id increments it, so it overcounts updates: the owner
-  cannot cheaply distinguish an insert from a replace under buffered writes.
-- Deletes clamp at zero.
-
-Sourcing these counts from each node's real Lucene document count would make
-them exact; that is deferred.
+`NodeClient` keeps approximate per-node, per-partition counters for observability. They are
+adjusted only after a newly applied mutation is confirmed. An update can still overcount
+because a remote node does not cheaply distinguish insert from replace; source exact counts
+from Lucene when exact load telemetry is required.

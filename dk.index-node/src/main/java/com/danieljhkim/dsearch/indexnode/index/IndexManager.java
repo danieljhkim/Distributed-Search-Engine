@@ -27,11 +27,13 @@ import java.io.IOException;
 import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -95,6 +97,8 @@ public class IndexManager implements Closeable {
     private final IndexSchema expectedSchema;
     private final IndexAliasStore aliasStore;
     private final Map<String, SchemaMismatchException> unservableIndexes = new ConcurrentHashMap<>();
+    private final Map<String, AppliedMutation> appliedMutations = new ConcurrentHashMap<>();
+    private final Path mutationStateFile;
     private volatile boolean closed;
 
     public IndexManager(Path baseDir) {
@@ -217,6 +221,7 @@ public class IndexManager implements Closeable {
             throw new IllegalArgumentException("minimumFreeDiskBytes must not be negative");
         }
         this.baseDir = baseDir;
+        this.mutationStateFile = baseDir.resolve("replication-mutations.properties");
         this.maxBufferedOpsPerShard = maxBufferedOpsPerShard;
         this.maxFlushInterval = maxFlushInterval;
         this.minimumFreeDiskBytes = minimumFreeDiskBytes;
@@ -245,6 +250,7 @@ public class IndexManager implements Closeable {
         ScheduledExecutorService scheduler = null;
         try {
             this.aliasStore.load();
+            loadMutationState();
             loadExistingShards();
 
             scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -499,6 +505,160 @@ public class IndexManager implements Closeable {
         } finally {
             buffer.lock.unlock();
         }
+    }
+
+    /** Applies a generation-fenced replicated upsert and durably records its idempotency identity. */
+    public MutationResult applyReplicatedIndex(
+            String partitionId,
+            SearchDocument doc,
+            String operationId,
+            long operationGeneration,
+            long placementGeneration)
+            throws IOException {
+        return applyReplicatedMutation(
+                partitionId,
+                doc.getId(),
+                operationId,
+                operationGeneration,
+                placementGeneration,
+                MutationType.INDEX,
+                () -> indexDocumentDurably(partitionId, doc));
+    }
+
+    /** Applies a generation-fenced replicated delete; replay of the same identity is a no-op. */
+    public MutationResult applyReplicatedDelete(
+            String partitionId, String docId, String operationId, long operationGeneration, long placementGeneration)
+            throws IOException {
+        return applyReplicatedMutation(
+                partitionId,
+                docId,
+                operationId,
+                operationGeneration,
+                placementGeneration,
+                MutationType.DELETE,
+                () -> deleteDocumentDurably(partitionId, docId));
+    }
+
+    private MutationResult applyReplicatedMutation(
+            String partitionId,
+            String docId,
+            String operationId,
+            long operationGeneration,
+            long placementGeneration,
+            MutationType mutationType,
+            IoMutation mutation)
+            throws IOException {
+        if (operationId == null || operationId.isBlank()) {
+            throw new IllegalArgumentException("replicated mutation operation_id must not be blank");
+        }
+        if (operationGeneration < 1 || placementGeneration < 1) {
+            throw new IllegalArgumentException("replicated mutation generations must be positive");
+        }
+        String physicalIndex = resolvePhysicalIndex(partitionId);
+        ShardBuffer buffer = getBuffer(physicalIndex);
+        String mutationKey = physicalIndex + '\0' + docId;
+        buffer.lock.lock();
+        try {
+            AppliedMutation previous = appliedMutations.get(mutationKey);
+            if (previous != null) {
+                if (placementGeneration < previous.placementGeneration()) {
+                    throw new StaleMutationException("placement generation " + placementGeneration
+                            + " is older than committed generation " + previous.placementGeneration());
+                }
+                if (operationGeneration < previous.operationGeneration()) {
+                    throw new StaleMutationException("operation generation " + operationGeneration
+                            + " is older than committed generation " + previous.operationGeneration());
+                }
+                if (operationGeneration == previous.operationGeneration()) {
+                    if (operationId.equals(previous.operationId()) && mutationType == previous.mutationType()) {
+                        return new MutationResult(true, previous.operationGeneration());
+                    }
+                    throw new StaleMutationException(
+                            "operation generation was already committed with a different identity");
+                }
+            }
+
+            mutation.apply();
+            AppliedMutation applied =
+                    new AppliedMutation(operationId, operationGeneration, placementGeneration, mutationType);
+            appliedMutations.put(mutationKey, applied);
+            try {
+                persistMutationState();
+            } catch (IOException e) {
+                if (previous == null) {
+                    appliedMutations.remove(mutationKey, applied);
+                } else {
+                    appliedMutations.put(mutationKey, previous);
+                }
+                throw e;
+            }
+            return new MutationResult(false, operationGeneration);
+        } finally {
+            buffer.lock.unlock();
+        }
+    }
+
+    private void loadMutationState() throws IOException {
+        if (!Files.exists(mutationStateFile)) {
+            return;
+        }
+        Properties properties = new Properties();
+        try (var input = Files.newInputStream(mutationStateFile)) {
+            properties.load(input);
+        }
+        int count = Integer.parseInt(properties.getProperty("mutation.count", "0"));
+        for (int index = 0; index < count; index++) {
+            String prefix = "mutation." + index + ".";
+            String key = requiredMutationProperty(properties, prefix + "key");
+            appliedMutations.put(
+                    key,
+                    new AppliedMutation(
+                            requiredMutationProperty(properties, prefix + "operationId"),
+                            Long.parseLong(requiredMutationProperty(properties, prefix + "operationGeneration")),
+                            Long.parseLong(requiredMutationProperty(properties, prefix + "placementGeneration")),
+                            MutationType.valueOf(requiredMutationProperty(properties, prefix + "type"))));
+        }
+    }
+
+    private void persistMutationState() throws IOException {
+        Files.createDirectories(baseDir);
+        Properties properties = new Properties();
+        List<Map.Entry<String, AppliedMutation>> mutations = appliedMutations.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .toList();
+        properties.setProperty("mutation.count", Integer.toString(mutations.size()));
+        for (int index = 0; index < mutations.size(); index++) {
+            Map.Entry<String, AppliedMutation> entry = mutations.get(index);
+            String prefix = "mutation." + index + ".";
+            properties.setProperty(prefix + "key", entry.getKey());
+            properties.setProperty(prefix + "operationId", entry.getValue().operationId());
+            properties.setProperty(
+                    prefix + "operationGeneration",
+                    Long.toString(entry.getValue().operationGeneration()));
+            properties.setProperty(
+                    prefix + "placementGeneration",
+                    Long.toString(entry.getValue().placementGeneration()));
+            properties.setProperty(
+                    prefix + "type", entry.getValue().mutationType().name());
+        }
+        Path temporary = Files.createTempFile(baseDir, "replication-mutations-", ".tmp");
+        try {
+            try (var output = Files.newOutputStream(temporary)) {
+                properties.store(output, "dsearch replicated mutation ledger");
+            }
+            Files.move(
+                    temporary, mutationStateFile, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
+    }
+
+    private static String requiredMutationProperty(Properties properties, String name) {
+        String value = properties.getProperty(name);
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException("Replicated mutation ledger is missing " + name);
+        }
+        return value;
     }
 
     /**
@@ -970,6 +1130,27 @@ public class IndexManager implements Closeable {
             }
             pendingOperations.add(operation);
         }
+    }
+
+    public record MutationResult(boolean duplicate, long committedGeneration) {}
+
+    public static final class StaleMutationException extends IllegalStateException {
+        public StaleMutationException(String message) {
+            super(message);
+        }
+    }
+
+    private record AppliedMutation(
+            String operationId, long operationGeneration, long placementGeneration, MutationType mutationType) {}
+
+    @FunctionalInterface
+    private interface IoMutation {
+        void apply() throws IOException;
+    }
+
+    private enum MutationType {
+        INDEX,
+        DELETE
     }
 
     private record BufferedOperation(OperationType type, SearchDocument document, String docId) {

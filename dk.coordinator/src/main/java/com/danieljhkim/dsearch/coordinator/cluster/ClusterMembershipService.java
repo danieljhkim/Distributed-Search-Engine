@@ -2,6 +2,7 @@ package com.danieljhkim.dsearch.coordinator.cluster;
 
 import com.danieljhkim.dsearch.common.cluster.NodeGroup;
 import com.danieljhkim.dsearch.common.config.AppConfig;
+import com.danieljhkim.dsearch.common.shard.ReplicaPlacement;
 import com.danieljhkim.dsearch.proto.cluster.NodeRole;
 import io.prometheus.client.Counter;
 import io.prometheus.client.Gauge;
@@ -26,6 +27,7 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Properties;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Authoritative, versioned coordinator membership.
@@ -37,7 +39,7 @@ import java.util.UUID;
  */
 public class ClusterMembershipService {
 
-    public static final int CONTRACT_VERSION = 1;
+    public static final int CONTRACT_VERSION = 2;
 
     private static final int LEGACY_STATE_FORMAT_VERSION = 1;
     private static final String STATE_FORMAT_VERSION_KEY = "state.format.version";
@@ -52,6 +54,14 @@ public class ClusterMembershipService {
             .help("Coordinator topology members by role and health state")
             .labelNames("role", "state")
             .register();
+    private static final Gauge UNDER_REPLICATED = Gauge.build()
+            .name("dsearch_replication_under_replicated_shards")
+            .help("Logical shards with fewer eligible replicas than configured")
+            .register();
+    private static final Gauge FAILOVER = Gauge.build()
+            .name("dsearch_replication_failover_shards")
+            .help("Logical shards whose primary is currently ineligible")
+            .register();
 
     private final NodeGroup indexGroup;
     private final NodeGroup queryGroup;
@@ -60,6 +70,10 @@ public class ClusterMembershipService {
     private final Path stateFile;
     private final Clock clock;
     private final Map<MemberKey, Long> lastSeenMillis = new HashMap<>();
+    private final Map<String, NodeGroup.NodeInfo> placementNodes;
+    private final int replicationFactor;
+    private final ReplicaPlacement.DurabilityPolicy durabilityPolicy;
+    private final ReplicaPlacement.ReadConsistency readConsistency;
 
     private String topologyEpoch;
     private long topologyVersion;
@@ -74,6 +88,28 @@ public class ClusterMembershipService {
         Objects.requireNonNull(appConfig.getQueryNodes(), "appConfig.queryNodes must not be null");
         this.clock = Objects.requireNonNull(clock, "clock must not be null");
         this.stateFile = stateFile;
+        AppConfig.NodeGroupConfig configuredIndexNodes = appConfig.getIndexNodes();
+        this.placementNodes = configuredIndexNodes.getNodes().stream()
+                .map(node -> new NodeGroup.NodeInfo(
+                        node.getId(),
+                        node.getHost(),
+                        node.getPort(),
+                        node.getHealthPort(),
+                        NodeRole.NODE_ROLE_INDEX.name(),
+                        true))
+                .collect(Collectors.toMap(NodeGroup.NodeInfo::getNodeId, node -> node));
+        this.replicationFactor = Math.max(1, configuredIndexNodes.getReplicationFactor());
+        if (!placementNodes.isEmpty() && replicationFactor > placementNodes.size()) {
+            throw new IllegalArgumentException("indexNodes.replicationFactor " + replicationFactor
+                    + " exceeds the configured eligible node count " + placementNodes.size());
+        }
+        this.durabilityPolicy = ReplicaPlacement.DurabilityPolicy.parse(configuredIndexNodes.getDurabilityPolicy());
+        this.readConsistency = ReplicaPlacement.ReadConsistency.parse(configuredIndexNodes.getReadConsistency());
+        if (readConsistency == ReplicaPlacement.ReadConsistency.ACKNOWLEDGED
+                && durabilityPolicy != ReplicaPlacement.DurabilityPolicy.ALL) {
+            throw new IllegalArgumentException(
+                    "readConsistency=acknowledged requires durabilityPolicy=all so every failover target has every acknowledged write");
+        }
         AppConfig.ServiceDiscoveryConfig discovery = appConfig.getServiceDiscovery();
         int expirySeconds = discovery == null ? 30 : Math.max(1, discovery.getNodeExpirySeconds());
         this.leaseDuration = Duration.ofSeconds(expirySeconds);
@@ -89,6 +125,9 @@ public class ClusterMembershipService {
 
         if (recover) {
             loadState();
+            if (placementNodes.isEmpty()) {
+                indexGroup.getAllNodes().forEach(node -> placementNodes.put(node.getNodeId(), node));
+            }
         } else {
             this.topologyEpoch = UUID.randomUUID().toString();
             this.topologyVersion = 1;
@@ -107,6 +146,9 @@ public class ClusterMembershipService {
         NodeGroup group = requireGroup(role);
         NodeGroup.NodeInfo existing = group.getNode(nodeInfo.getNodeId());
         NodeGroup.NodeInfo healthyNode = copyWithHealth(nodeInfo, true);
+        if (role == NodeRole.NODE_ROLE_INDEX) {
+            placementNodes.putIfAbsent(nodeInfo.getNodeId(), healthyNode);
+        }
         boolean topologyChanged = existing == null || !sameMember(existing, healthyNode) || !existing.isHealthy();
         group.addOrUpdateNode(healthyNode);
         lastSeenMillis.put(new MemberKey(role, nodeInfo.getNodeId()), clock.millis());
@@ -275,6 +317,42 @@ public class ClusterMembershipService {
         return leaseDuration.toMillis();
     }
 
+    public int getReplicationFactor() {
+        return replicationFactor;
+    }
+
+    public ReplicaPlacement.DurabilityPolicy getDurabilityPolicy() {
+        return durabilityPolicy;
+    }
+
+    public ReplicaPlacement.ReadConsistency getReadConsistency() {
+        return readConsistency;
+    }
+
+    public synchronized List<ReplicaPlacement.ReplicaSet> replicaSets() {
+        List<String> eligibleNodeIds = placementNodes.keySet().stream().sorted().toList();
+        return eligibleNodeIds.stream()
+                .map(primary -> ReplicaPlacement.forPrimary(
+                        "topology", primary, eligibleNodeIds, replicationFactor, topologyVersion, durabilityPolicy))
+                .toList();
+    }
+
+    public synchronized boolean isReplicaEligible(String nodeId) {
+        NodeGroup.NodeInfo node = indexGroup.getNode(nodeId);
+        return node != null && node.isHealthy();
+    }
+
+    public NodeGroup.NodeInfo configuredPlacementNode(String nodeId) {
+        return placementNodes.get(nodeId);
+    }
+
+    public synchronized int underReplicatedShardCount() {
+        return (int) replicaSets().stream()
+                .filter(set ->
+                        set.nodeIds().stream().filter(this::isReplicaEligible).count() < replicationFactor)
+                .count();
+    }
+
     private NodeGroup requireGroup(NodeRole role) {
         NodeGroup group = resolveGroup(role);
         if (group == null) {
@@ -294,6 +372,12 @@ public class ClusterMembershipService {
         updateMembershipMetrics("index", indexGroup);
         updateMembershipMetrics("query", queryGroup);
         updateMembershipMetrics("coordinator", coordinatorGroup);
+        if (!placementNodes.isEmpty()) {
+            UNDER_REPLICATED.set(underReplicatedShardCount());
+            FAILOVER.set(replicaSets().stream()
+                    .filter(set -> !isReplicaEligible(set.primaryNodeId()))
+                    .count());
+        }
     }
 
     private static void updateMembershipMetrics(String role, NodeGroup group) {
@@ -436,6 +520,8 @@ public class ClusterMembershipService {
             empty.setComponentLabel(source.getComponentLabel());
             empty.setRoutingStrategy(source.getRoutingStrategy());
             empty.setReplicationFactor(source.getReplicationFactor());
+            empty.setDurabilityPolicy(source.getDurabilityPolicy());
+            empty.setReadConsistency(source.getReadConsistency());
         }
         empty.setNodes(List.of());
         return empty;
@@ -460,9 +546,10 @@ public class ClusterMembershipService {
                         "Coordinator state has an invalid format version: " + serializedVersion, e);
             }
         }
-        if (stateFormatVersion != CONTRACT_VERSION) {
+        if (stateFormatVersion != LEGACY_STATE_FORMAT_VERSION && stateFormatVersion != CONTRACT_VERSION) {
             throw new IllegalStateException("Coordinator state format version " + stateFormatVersion
-                    + " is incompatible with supported version " + CONTRACT_VERSION);
+                    + " is incompatible with supported versions " + LEGACY_STATE_FORMAT_VERSION + " and "
+                    + CONTRACT_VERSION);
         }
     }
 
