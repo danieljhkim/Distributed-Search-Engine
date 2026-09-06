@@ -418,12 +418,12 @@ This lets you compare **client‑side** vs **server‑side** latency per RPC met
 - **Query Nodes / Index Nodes** – each exposes a lightweight HTTP health check endpoint
   - `GET /health` – Node health
 
-### Resilience gate
+### Manual resilience exercise
 
 Behaviour under overload, exhausted admission capacity, slow or lost downstreams, index disk-full
 and read-only storage, coordinator restart, and rolling node replacement is exercised by
 `make resilience`. See [Operability](./docs/OPERABILITY.md) for the scenarios, the evidence it
-records, and its CI profile.
+records, and its manual run instructions.
 
 ---
 

@@ -132,9 +132,9 @@ DSEARCH_TLS_DIR=/etc/dsearch/tls \
 Do not add `--volumes` when removing the source project unless the snapshot has been restored and
 verified elsewhere.
 
-## Automated drill and failure cases
+## Recovery drill and failure cases
 
-`scripts/docker-cluster-e2e.sh` is the CI recovery drill. It indexes a five-document dataset and
+`scripts/docker-cluster-e2e.sh` is a manual recovery drill. It indexes a five-document dataset and
 then performs all of these checks against real Compose volumes and the public gateway:
 
 1. An interruption immediately after quiescence cannot publish a valid snapshot and the source
@@ -153,16 +153,16 @@ scripts/docker-cluster-e2e.sh
 ```
 
 On failure, preserve `DSEARCH_E2E_DIAGNOSTICS`; it contains service state and logs. The recovery
-artifact and report are intentionally temporary in CI because they contain the full index and model
-caches. For an operational drill, place both on the approved backup target.
+artifact and report contain the full index and model caches, so place both on the approved backup
+target for an operational drill.
 
 ## Measured test-environment drill record
 
-Every test run produces the measured record rather than relying on a stale number in this runbook.
-The `docker-e2e` CI job uploads `docker-cluster-diagnostics/recovery-drill-record.md`,
-`recovery-manifest.json`, and `recovery-report.json`. The record states the exact checked-out commit,
+Every manual drill produces the measured record rather than relying on a stale number in this runbook.
+Retain `recovery-drill-record.md`, `recovery-manifest.json`, and `recovery-report.json` from
+`DSEARCH_E2E_DIAGNOSTICS`. The record states the exact checked-out commit,
 the fixed `docker-e2e-recovery-v1` five-document dataset, the generated artifact ID, the measured
-recovery point in seconds, and the measured recovery time in seconds. The job also prints the three
+recovery point in seconds, and the measured recovery time in seconds. The script also prints the three
 most operationally important values in one line:
 
 ```text

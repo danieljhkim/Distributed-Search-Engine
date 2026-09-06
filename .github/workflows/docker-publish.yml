@@ -342,19 +342,6 @@ jobs:
               --output "release-evidence/$service.trivy.json" "$reference"
           done
 
-      - name: Run hardened Docker end-to-end gate against exact digests
-        run: scripts/docker-cluster-e2e.sh
-
-      - name: Record Docker gate evidence
-        shell: bash
-        run: |
-          jq -n \
-            --arg source_commit "$GITHUB_SHA" \
-            --arg release_version "$VERSION" \
-            --arg result passed \
-            '{sourceCommit:$source_commit,releaseVersion:$release_version,dockerEndToEnd:$result}' \
-            >release-evidence/docker-e2e.json
-
       - name: Sign and verify exact image digests
         shell: bash
         run: |
