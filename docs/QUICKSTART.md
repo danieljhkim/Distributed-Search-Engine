@@ -124,17 +124,36 @@ order, `totalHits`, and cursor traversal therefore do not change when fields are
 caller may change `storedFields` between cursor pages; the query, filters, sort, search type,
 fusion strategy, page size, schema, and index generation remain cursor-bound.
 
+### Delete one document with a retry identity
+
+Replicated deletes accept the same stable identity and generation contract as upserts:
+
+```bash
+curl -X DELETE \
+  'http://localhost:8080/api/v1/index/doc-1?partitionId=0&operationId=delete-doc-1-v4&generation=4'
+```
+
+Reuse both values when retrying an uncertain response. Omitting them creates a new operation, which is
+appropriate for an ordinary one-off delete but not for replaying a timed-out operation after another
+client may have written a newer version. The successful response returns the effective `operationId`
+and `generation`. A caller that permits concurrent writes should allocate its positive monotonic
+generation before the first attempt.
+
 ### Delete documents in bulk
 
-`POST /api/v1/index/bulk-delete` accepts a bounded list of explicit document ids and returns one
-ordered outcome per id, including duplicates:
+`POST /api/v1/index/bulk-delete` accepts identity-bearing delete items and returns one ordered outcome
+per item, including duplicate document ids:
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/index/bulk-delete \
   -H "Content-Type: application/json" \
   -d '{
     "partitionId": "0",
-    "ids": ["doc-1", "doc-2", "doc-1"]
+    "items": [
+      {"id": "doc-1", "operationId": "delete-1", "generation": 4},
+      {"id": "doc-2", "operationId": "delete-2", "generation": 9},
+      {"id": "doc-1", "operationId": "delete-3", "generation": 5}
+    ]
   }'
 ```
 
@@ -142,23 +161,31 @@ curl -X POST http://localhost:8080/api/v1/index/bulk-delete \
 {
   "success": true,
   "items": [
-    { "requestIndex": 0, "id": "doc-1", "status": "success", "error": null },
-    { "requestIndex": 1, "id": "doc-2", "status": "success", "error": null },
-    { "requestIndex": 2, "id": "doc-1", "status": "success", "error": null }
+    { "requestIndex": 0, "id": "doc-1", "status": "success", "error": null,
+      "operationId": "delete-1", "generation": 4 },
+    { "requestIndex": 1, "id": "doc-2", "status": "success", "error": null,
+      "operationId": "delete-2", "generation": 9 },
+    { "requestIndex": 2, "id": "doc-1", "status": "success", "error": null,
+      "operationId": "delete-3", "generation": 5 }
   ]
 }
 ```
 
-Deletion is idempotent, exactly like `DELETE /api/v1/index/{id}`: a missing document deletes as a
-`success`, a duplicate id is never rejected as a conflict, and each occurrence is reported
-independently. A durably deleted document is immediately absent from subsequent search.
+The legacy `"ids": ["doc-1", ...]` request remains accepted. Under replication, the gateway generates
+an operation identity and primary generation for each such item and includes known values in its item
+response. Prefer `items` with caller-assigned values when a whole HTTP response could be lost.
+
+A missing document deletes as a `success`, a duplicate id is never rejected as a conflict, and each
+occurrence is reported independently. A durably deleted document is immediately absent from subsequent
+search. These document-level semantics do not make a newly generated delete equivalent to retrying an
+older operation after an intervening upsert.
 
 The list is bounded by `requestLimits.maxBulkItems` (100 by default, shared with
 `/api/v1/index/bulk`); an over-budget request returns HTTP 413 before any document is deleted. A
 blank or oversized id is reported per item as `validation_failure` without blocking the rest of the
 batch. An item whose owning node is unavailable, or whose delete outcome is unknown because of a
-timeout, is reported `retryable_failure` — retry it with the same id: deletion is idempotent, so a
-retry after a timeout or an already-deleted id never fails or double-deletes. Reaching the shared
+timeout, is reported `retryable_failure` — resend its `operationId` and `generation`, when present,
+instead of creating a new delete. Reaching the shared
 request deadline (`requestLimits.requestTimeoutMillis`) marks every unattempted item
 `retryable_failure` too, while items already durably committed keep their `success` outcome.
 

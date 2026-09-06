@@ -17,4 +17,10 @@ public class BulkDeleteRequestDto {
     private String partitionId;
 
     private List<String> ids;
+
+    /**
+     * Identity-bearing deletes. Mutually exclusive with {@link #ids}; use these items when an
+     * operation may need to be retried after an uncertain replicated outcome.
+     */
+    private List<BulkDeleteItemRequestDto> items;
 }

@@ -5,9 +5,9 @@ import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexResponseDto;
+import com.danieljhkim.dsearch.gateway.api.dto.GetDocumentResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
-import com.danieljhkim.dsearch.gateway.api.dto.GetDocumentResponseDto;
 import com.danieljhkim.dsearch.gateway.service.GatewayIndexService;
 import io.micrometer.core.annotation.Timed;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -71,11 +71,13 @@ public class IndexController {
     @DeleteMapping(value = "/{id}", produces = "application/json")
     public IndexResponseDto deleteDocument(
             @PathVariable("id") String id,
-            @RequestParam(name = "partitionId", defaultValue = "default") String partitionId) {
+            @RequestParam(name = "partitionId", defaultValue = "default") String partitionId,
+            @RequestParam(name = "operationId", required = false) String operationId,
+            @RequestParam(name = "generation", required = false) Long generation) {
         PartitionIdValidator.validate(partitionId);
         Timer.Sample sample = Timer.start(meterRegistry);
         try {
-            return indexService.delete(id, partitionId);
+            return indexService.delete(id, partitionId, operationId, generation);
         } finally {
             sample.stop(Timer.builder("dsearch.gateway.delete.latency")
                     .tag("partitionId", partitionId != null ? partitionId : "UNKNOWN")
@@ -83,7 +85,9 @@ public class IndexController {
         }
     }
 
-    @Timed(value = "dsearch.get_document.http", extraTags = {"endpoint", "/api/v1/index/{id}"})
+    @Timed(
+            value = "dsearch.get_document.http",
+            extraTags = {"endpoint", "/api/v1/index/{id}"})
     @GetMapping(value = "/{id}", produces = "application/json")
     public GetDocumentResponseDto getDocument(
             @PathVariable("id") String id,
@@ -95,10 +99,10 @@ public class IndexController {
     /**
      * Applies bounded, ordered document deletions by explicit id.
      *
-     * <p>Every item is an id to remove from the partition. Deletion is idempotent, so a missing
-     * document, a duplicate id, or a retried {@code retryable_failure} item (including a timeout or
-     * disconnect whose commit outcome is unknown) all resolve to the same durable {@code success}
-     * outcome without side effects on already-deleted documents.
+     * <p>Identity-bearing items distinguish retrying one delete operation from issuing a newer
+     * delete for the same id. Retryable outcomes return the identity and allocated generation so
+     * callers can resend them without deleting a later document version. The legacy {@code ids}
+     * form remains accepted for non-replicated and compatibility clients.
      */
     @Timed(
             value = "dsearch.bulk_delete.http",

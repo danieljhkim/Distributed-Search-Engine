@@ -6,15 +6,16 @@ import com.danieljhkim.dsearch.common.grpc.NodeClient;
 import com.danieljhkim.dsearch.common.grpc.NodeClientManager;
 import com.danieljhkim.dsearch.common.shard.ReplicaPlacement;
 import com.danieljhkim.dsearch.common.validation.RequestLimitsValidator;
+import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteItemRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteItemResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexItemResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexResponseDto;
+import com.danieljhkim.dsearch.gateway.api.dto.GetDocumentResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
-import com.danieljhkim.dsearch.gateway.api.dto.GetDocumentResponseDto;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentRequest;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentResponse;
 import com.danieljhkim.dsearch.proto.index.BulkDeleteDocumentResult;
@@ -126,16 +127,26 @@ public class GatewayIndexService {
     }
 
     public IndexResponseDto delete(String id, String partitionId) {
+        return delete(id, partitionId, null, null);
+    }
+
+    public IndexResponseDto delete(String id, String partitionId, String callerOperationId, Long callerGeneration) {
         if (id == null || id.isBlank()) {
             throw new IllegalArgumentException("id must not be blank");
         }
         RequestLimitsValidator.validateDocument(id, Map.of(), requestLimits);
 
         String resolvedPartitionId = resolvePartitionId(partitionId);
+        String operationId = resolveOperationId(callerOperationId);
+        long operationGeneration = resolveOperationGeneration(callerGeneration);
         if (indexNodeClientManager.getReplicationFactor() == 0) {
             return legacyDeleteViaOwner(resolvedPartitionId, id);
         }
-        return replicateDelete(resolvedPartitionId, id, UUID.randomUUID().toString(), ALLOCATE_OPERATION_GENERATION);
+        try {
+            return replicateDelete(resolvedPartitionId, id, operationId, operationGeneration);
+        } catch (DeleteReplicationException e) {
+            throw e.failure();
+        }
     }
 
     /**
@@ -154,18 +165,21 @@ public class GatewayIndexService {
         ReplicaPlacement.ReadPlan readPlan = indexNodeClientManager.replicaReadPlan(resolvedPartitionId);
         if (readPlan.unavailableLogicalShardIds().contains(logicalShardId)) {
             throw new NodeUnavailableException(
-                    ownerNodeId, "No eligible replica for logical shard " + logicalShardId + "; exact lookup is unavailable");
+                    ownerNodeId,
+                    "No eligible replica for logical shard " + logicalShardId + "; exact lookup is unavailable");
         }
         ReplicaPlacement.ReadTarget target = readPlan.targets().stream()
                 .filter(candidate -> logicalShardId.equals(candidate.logicalShardId()))
                 .findFirst()
                 .orElseThrow(() -> new NodeUnavailableException(
-                        ownerNodeId, "No read target for logical shard " + logicalShardId + "; exact lookup is unavailable"));
+                        ownerNodeId,
+                        "No read target for logical shard " + logicalShardId + "; exact lookup is unavailable"));
         NodeClient<IndexServiceGrpc.IndexServiceBlockingStub> client =
                 indexNodeClientManager.getClientMap().get(target.nodeId());
         if (client == null || !client.isActive()) {
             throw new NodeUnavailableException(
-                    target.nodeId(), "Selected read replica " + target.nodeId() + " is unavailable for " + logicalShardId);
+                    target.nodeId(),
+                    "Selected read replica " + target.nodeId() + " is unavailable for " + logicalShardId);
         }
         GetDocumentResponse response = client.getStub()
                 .withDeadlineAfter(Math.max(1, requestLimits.getRequestTimeoutMillis()), TimeUnit.MILLISECONDS)
@@ -175,7 +189,8 @@ public class GatewayIndexService {
                         .build());
         Map<String, String> fields = new LinkedHashMap<>();
         response.getDocument().getFieldsList().forEach(field -> fields.put(field.getName(), field.getValue()));
-        return new GetDocumentResponseDto(resolvedPartitionId, response.getDocument().getId(), fields);
+        return new GetDocumentResponseDto(
+                resolvedPartitionId, response.getDocument().getId(), fields);
     }
 
     /** Compatibility seam for older injected manager doubles; constructed managers always report at least one. */
@@ -319,7 +334,11 @@ public class GatewayIndexService {
                 }
             }
         }
-        requireAcknowledgements(plan, acknowledgements, lastFailure, started);
+        try {
+            requireAcknowledgements(plan, acknowledgements, lastFailure, started);
+        } catch (RuntimeException e) {
+            throw new DeleteReplicationException(e, operationId, committedGeneration);
+        }
         return new IndexResponseDto(
                 documentId,
                 true,
@@ -360,6 +379,12 @@ public class GatewayIndexService {
             throw new IllegalArgumentException("generation must be positive when supplied");
         }
         return callerGeneration;
+    }
+
+    private static String resolveOperationId(String callerOperationId) {
+        return callerOperationId == null || callerOperationId.isBlank()
+                ? UUID.randomUUID().toString()
+                : callerOperationId;
     }
 
     private MutationMetadata mutationMetadata(
@@ -500,22 +525,23 @@ public class GatewayIndexService {
      * is; each occurrence is routed and reported independently.
      */
     public BulkDeleteResponseDto bulkDelete(BulkDeleteRequestDto requestDto) {
-        List<String> ids = requestDto.getIds() == null ? List.of() : requestDto.getIds();
-        ensureBulkItemCount(ids.size());
+        List<BulkDeleteItemRequestDto> items = resolveBulkDeleteItems(requestDto);
+        ensureBulkItemCount(items.size());
 
         String partitionId = resolvePartitionId(requestDto.getPartitionId());
-        if (indexNodeClientManager.getReplicationFactor() > 1) {
-            return bulkDeleteReplicated(partitionId, ids);
+        if (indexNodeClientManager.getReplicationFactor() > 0) {
+            return bulkDeleteReplicated(partitionId, items);
         }
-        List<BulkDeleteItemResponseDto> results = new ArrayList<>(ids.size());
-        for (int index = 0; index < ids.size(); index++) {
+        List<BulkDeleteItemResponseDto> results = new ArrayList<>(items.size());
+        for (int index = 0; index < items.size(); index++) {
             results.add(null);
         }
 
         Map<NodeClient<IndexServiceGrpc.IndexServiceBlockingStub>, List<PreparedBulkDeleteItem>> byOwner =
                 new LinkedHashMap<>();
-        for (int requestIndex = 0; requestIndex < ids.size(); requestIndex++) {
-            String id = ids.get(requestIndex);
+        for (int requestIndex = 0; requestIndex < items.size(); requestIndex++) {
+            BulkDeleteItemRequestDto item = items.get(requestIndex);
+            String id = item == null ? null : item.getId();
             if (id == null || id.isBlank()) {
                 results.set(requestIndex, deleteValidationFailure(requestIndex, id, "id must not be blank"));
                 continue;
@@ -609,22 +635,31 @@ public class GatewayIndexService {
                 results.stream().allMatch(result -> "success".equals(result.getStatus())), results);
     }
 
-    private BulkDeleteResponseDto bulkDeleteReplicated(String partitionId, List<String> ids) {
-        List<BulkDeleteItemResponseDto> results = new ArrayList<>(ids.size());
-        for (int requestIndex = 0; requestIndex < ids.size(); requestIndex++) {
-            String id = ids.get(requestIndex);
+    private BulkDeleteResponseDto bulkDeleteReplicated(String partitionId, List<BulkDeleteItemRequestDto> items) {
+        List<BulkDeleteItemResponseDto> results = new ArrayList<>(items.size());
+        for (int requestIndex = 0; requestIndex < items.size(); requestIndex++) {
+            BulkDeleteItemRequestDto item = items.get(requestIndex);
+            String id = item == null ? null : item.getId();
             if (id == null || id.isBlank()) {
                 results.add(deleteValidationFailure(requestIndex, id, "id must not be blank"));
                 continue;
             }
+            String operationId = null;
+            long generation = ALLOCATE_OPERATION_GENERATION;
             try {
                 RequestLimitsValidator.validateDocumentId(id, requestLimits);
-                replicateDelete(partitionId, id, UUID.randomUUID().toString(), ALLOCATE_OPERATION_GENERATION);
-                results.add(new BulkDeleteItemResponseDto(requestIndex, id, "success", null));
+                operationId = resolveOperationId(item.getOperationId());
+                generation = resolveOperationGeneration(item.getGeneration());
+                IndexResponseDto response = replicateDelete(partitionId, id, operationId, generation);
+                results.add(new BulkDeleteItemResponseDto(
+                        requestIndex, id, "success", null, response.getOperationId(), response.getGeneration()));
             } catch (IllegalArgumentException e) {
                 results.add(deleteValidationFailure(requestIndex, id, e.getMessage()));
+            } catch (DeleteReplicationException e) {
+                results.add(deleteTransportFailure(
+                        requestIndex, id, e.failure(), e.operationId(), positiveGeneration(e.generation())));
             } catch (RuntimeException e) {
-                results.add(deleteTransportFailure(requestIndex, id, e));
+                results.add(deleteTransportFailure(requestIndex, id, e, operationId, positiveGeneration(generation)));
             }
         }
         return new BulkDeleteResponseDto(
@@ -815,27 +850,91 @@ public class GatewayIndexService {
     }
 
     private static BulkDeleteItemResponseDto deleteRetryableFailure(int requestIndex, String id, String error) {
+        return deleteRetryableFailure(requestIndex, id, error, null, null);
+    }
+
+    private static BulkDeleteItemResponseDto deleteRetryableFailure(
+            int requestIndex, String id, String error, String operationId, Long generation) {
         return new BulkDeleteItemResponseDto(
                 requestIndex,
                 id,
                 "retryable_failure",
-                error + "; retry with the same id because deletion is idempotent");
+                error
+                        + "; retry with the same operationId and generation because repeating that operation is idempotent",
+                operationId,
+                generation);
     }
 
     private static BulkDeleteItemResponseDto deletePermanentFailure(int requestIndex, String id, String error) {
-        return new BulkDeleteItemResponseDto(requestIndex, id, "permanent_failure", error);
+        return deletePermanentFailure(requestIndex, id, error, null, null);
+    }
+
+    private static BulkDeleteItemResponseDto deletePermanentFailure(
+            int requestIndex, String id, String error, String operationId, Long generation) {
+        return new BulkDeleteItemResponseDto(requestIndex, id, "permanent_failure", error, operationId, generation);
     }
 
     private static BulkDeleteItemResponseDto deleteTransportFailure(
             int requestIndex, String id, RuntimeException exception) {
+        return deleteTransportFailure(requestIndex, id, exception, null, null);
+    }
+
+    private static BulkDeleteItemResponseDto deleteTransportFailure(
+            int requestIndex, String id, RuntimeException exception, String operationId, Long generation) {
         if (exception instanceof StatusRuntimeException statusException
                 && switch (statusException.getStatus().getCode()) {
                     case INVALID_ARGUMENT, ALREADY_EXISTS, FAILED_PRECONDITION, PERMISSION_DENIED -> true;
                     default -> false;
                 }) {
-            return deletePermanentFailure(requestIndex, id, retryMessage(exception));
+            return deletePermanentFailure(requestIndex, id, retryMessage(exception), operationId, generation);
         }
-        return deleteRetryableFailure(requestIndex, id, retryMessage(exception));
+        return deleteRetryableFailure(requestIndex, id, retryMessage(exception), operationId, generation);
+    }
+
+    private static List<BulkDeleteItemRequestDto> resolveBulkDeleteItems(BulkDeleteRequestDto request) {
+        List<String> ids = request.getIds();
+        List<BulkDeleteItemRequestDto> items = request.getItems();
+        if (ids != null && items != null) {
+            throw new IllegalArgumentException("ids and items are mutually exclusive");
+        }
+        if (items != null) {
+            return items;
+        }
+        if (ids == null) {
+            return List.of();
+        }
+        return ids.stream()
+                .map(id -> new BulkDeleteItemRequestDto(id, null, null))
+                .toList();
+    }
+
+    private static Long positiveGeneration(long generation) {
+        return generation > 0 ? generation : null;
+    }
+
+    private static final class DeleteReplicationException extends RuntimeException {
+        private final RuntimeException failure;
+        private final String operationId;
+        private final long generation;
+
+        private DeleteReplicationException(RuntimeException failure, String operationId, long generation) {
+            super(failure);
+            this.failure = failure;
+            this.operationId = operationId;
+            this.generation = generation;
+        }
+
+        private RuntimeException failure() {
+            return failure;
+        }
+
+        private String operationId() {
+            return operationId;
+        }
+
+        private long generation() {
+            return generation;
+        }
     }
 
     private static String resolvePartitionId(String partitionId) {

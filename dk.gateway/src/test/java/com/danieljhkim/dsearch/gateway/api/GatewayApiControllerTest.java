@@ -21,9 +21,9 @@ import com.danieljhkim.dsearch.gateway.api.dto.BulkDeleteResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexItemResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.BulkIndexResponseDto;
+import com.danieljhkim.dsearch.gateway.api.dto.GetDocumentResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.IndexResponseDto;
-import com.danieljhkim.dsearch.gateway.api.dto.GetDocumentResponseDto;
 import com.danieljhkim.dsearch.gateway.api.dto.SearchRequestDto;
 import com.danieljhkim.dsearch.gateway.api.dto.SearchResponseDto;
 import com.danieljhkim.dsearch.gateway.config.MetricsConfig;
@@ -203,18 +203,54 @@ class GatewayApiControllerTest {
     }
 
     @Test
+    void bulkDeleteAcceptsAndReturnsStableOperationIdentity() throws Exception {
+        when(indexService.bulkDelete(any(BulkDeleteRequestDto.class)))
+                .thenReturn(new BulkDeleteResponseDto(
+                        false,
+                        List.of(new BulkDeleteItemResponseDto(
+                                0, "doc-1", "retryable_failure", "follower unavailable", "delete-1", 4L))));
+
+        mockMvc.perform(post("/api/v1/index/bulk-delete")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "partitionId": "tenant-a",
+                                  "items": [
+                                    {"id": "doc-1", "operationId": "delete-1", "generation": 4}
+                                  ]
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].operationId").value("delete-1"))
+                .andExpect(jsonPath("$.items[0].generation").value(4));
+
+        ArgumentCaptor<BulkDeleteRequestDto> requestCaptor = ArgumentCaptor.forClass(BulkDeleteRequestDto.class);
+        verify(indexService).bulkDelete(requestCaptor.capture());
+        assertThat(requestCaptor.getValue().getItems().getFirst().getId()).isEqualTo("doc-1");
+        assertThat(requestCaptor.getValue().getItems().getFirst().getOperationId())
+                .isEqualTo("delete-1");
+        assertThat(requestCaptor.getValue().getItems().getFirst().getGeneration())
+                .isEqualTo(4L);
+    }
+
+    @Test
     void deleteDocumentReturnsSuccessAndMapsPathAndPartition() throws Exception {
-        when(indexService.delete("doc-7", "tenant-a")).thenReturn(new IndexResponseDto("doc-7", true));
+        when(indexService.delete("doc-7", "tenant-a", "delete-7", 7L))
+                .thenReturn(new IndexResponseDto("doc-7", true, "delete-7", 7L, 2, 2));
 
         mockMvc.perform(delete("/api/v1/index/{id}", "doc-7")
                         .param("partitionId", "tenant-a")
+                        .param("operationId", "delete-7")
+                        .param("generation", "7")
                         .header(REQUEST_ID_HEADER, "client-request-7"))
                 .andExpect(status().isOk())
                 .andExpect(header().string(REQUEST_ID_HEADER, "client-request-7"))
                 .andExpect(jsonPath("$.id").value("doc-7"))
-                .andExpect(jsonPath("$.success").value(true));
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.operationId").value("delete-7"))
+                .andExpect(jsonPath("$.generation").value(7));
 
-        verify(indexService).delete("doc-7", "tenant-a");
+        verify(indexService).delete("doc-7", "tenant-a", "delete-7", 7L);
     }
 
     @Test
@@ -235,7 +271,8 @@ class GatewayApiControllerTest {
                 .andExpect(status().isNotFound());
 
         when(indexService.get("unavailable", "tenant-a"))
-                .thenThrow(new com.danieljhkim.dsearch.common.exception.NodeUnavailableException("n0", "no eligible replica"));
+                .thenThrow(new com.danieljhkim.dsearch.common.exception.NodeUnavailableException(
+                        "n0", "no eligible replica"));
         mockMvc.perform(get("/api/v1/index/{id}", "unavailable").param("partitionId", "tenant-a"))
                 .andExpect(status().isServiceUnavailable());
     }

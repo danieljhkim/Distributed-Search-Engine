@@ -36,8 +36,8 @@ ownership is explicit:
 - when an HTTP index request supplies `generation`, the caller owns ordering and must provide a
   positive, monotonically increasing value for that document; the primary and every replica use
   that exact value;
-- when `generation` is omitted (and for HTTP delete, which currently has no generation field), the
-  gateway sends protobuf `operation_generation = 0` only to the declared primary. Under the same
+- when `generation` is omitted, the gateway sends protobuf `operation_generation = 0` only to the
+  declared primary. Under the same
   per-shard commit lock used for the mutation, the primary allocates one plus that document's last
   committed generation, commits the mutation and fence together, and returns the positive value in
   `committed_generation`;
@@ -46,10 +46,19 @@ ownership is explicit:
   history therefore never participate in generated ordering.
 
 Concurrent gateways share the same primary allocation point for a document. Retrying an omitted-
-generation request with the same `operation_id` returns the already committed generation, so an
-uncertain primary response can be retried without allocating another operation. Reusing a committed
-generation with another identity or mutation type remains a conflict, and explicitly supplied values
-below the committed generation remain stale.
+generation request with the same `operation_id` while it is still the latest document operation
+returns the already committed generation, so an uncertain primary response can be retried without
+allocating another operation. Reusing a committed generation with another identity or mutation type
+remains a conflict, and explicitly supplied values below the committed generation remain stale.
+
+HTTP upserts and deletes both accept `operationId` and `generation`. Bulk delete accepts
+identity-bearing `items` as well as the legacy `ids` form, and returns the effective identity and
+generation for every replicated success or retryable item whose primary generation is known. A retry
+means resending those same values. Omitting them creates a new delete operation; doing that after a
+timeout can legitimately delete a newer document version. Clients that coordinate concurrent
+mutations must assign positive monotonic generations before the first attempt. An old explicit
+generation is rejected after a newer mutation, preserving the newer document; it is not silently
+promoted into a new delete.
 
 Index nodes durably retain the latest identity and generation per document:
 
@@ -57,7 +66,9 @@ Index nodes durably retain the latest identity and generation per document:
 - reordered operations and stale placement generations are rejected;
 - a target mismatch is rejected, and a follower cannot accept a primary-role write;
 - a primary outage rejects writes instead of allowing a client-side promotion;
-- retrying the same operation after an uncertain response safely completes missing copies.
+- retrying the same operation after an uncertain response either completes missing copies or is
+  rejected as stale once a newer operation has already made those copies converge; it never becomes a
+  newer mutation.
 
 `indexNodes.durabilityPolicy` selects when the gateway may acknowledge:
 
