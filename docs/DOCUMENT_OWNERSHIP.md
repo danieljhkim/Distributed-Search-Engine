@@ -53,9 +53,21 @@ replication factor larger than the configured eligible-node set. A failure after
 primary commit but before the selected threshold produces no successful client
 acknowledgement. A network partition therefore cannot create a writable second primary.
 
-The mutation ledger and Lucene data survive restart. Automatic snapshot transfer,
-checksum comparison, and convergence of a restored or lagging replica belong to the
-separate replica-repair workflow.
+The mutation fence is stored per physical shard in Lucene commit user data. Lucene publishes
+the document changes and the complete per-document identity/generation map through the same
+checksummed `segments_N` commit point and durably syncs that commit before returning. A restart
+therefore observes both the mutation and its fence or neither; there is no separately replaced
+process-wide ledger that can lose another shard's update. Metadata format, entry count, encoded
+identities, positive generations, and mutation types are validated at startup. Missing,
+incomplete, conflicting, or unknown replication metadata prevents the index manager from
+starting rather than serving without a fence. The former `replication-mutations.properties`
+ledger is accepted only as a strictly validated upgrade source, committed into each shard, and
+then removed.
+
+If a replicated commit returns an uncertain failure, that shard is write-fenced for the lifetime
+of the manager and its uncommitted writer state is rolled back on close. Restart resolves the
+outcome from the latest valid Lucene commit. Automatic snapshot transfer, checksum comparison,
+and convergence of a restored or lagging replica belong to the separate replica-repair workflow.
 
 ## Reads and failover
 
